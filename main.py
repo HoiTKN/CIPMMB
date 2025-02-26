@@ -83,7 +83,6 @@ gc = authenticate()
 sheet_id = '1j8il_-mIGczDX-3eRYNP3jB2Jjo7FLH0DwyaJN6zia0'
 spreadsheet = gc.open_by_key(sheet_id)
 
-
 # Get or create necessary worksheets - simplified to only 2 sheets
 def get_or_create_sheet(name, rows=100, cols=20):
     try:
