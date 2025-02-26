@@ -14,6 +14,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email import encoders
 import sys
+import json
 
 # 1. Authentication setup
 SCOPES = [
@@ -24,24 +25,36 @@ SCOPES = [
 # Detect if running in GitHub Actions or similar CI environment
 IN_CI_ENVIRONMENT = os.environ.get('CI') or os.environ.get('GITHUB_ACTIONS')
 
+# User to impersonate (your company email)
+USER_EMAIL = os.environ.get('GOOGLE_USER_EMAIL', 'hoitkn@msc.masangroup.com')
+
 # Authentication logic with CI environment detection
 def authenticate():
     creds = None
     
-    # If in CI environment, use service account
+    # If in CI environment, use service account with domain-wide delegation
     if IN_CI_ENVIRONMENT:
-        print("Running in CI environment, using service account authentication...")
+        print("Running in CI environment, using service account with delegation...")
         try:
             # Check if the service account json was provided as an environment variable
             if os.environ.get('GOOGLE_SERVICE_ACCOUNT'):
-                import json
                 service_account_info = json.loads(os.environ.get('GOOGLE_SERVICE_ACCOUNT'))
                 with open('service_account.json', 'w') as f:
                     json.dump(service_account_info, f)
-                creds = service_account.Credentials.from_service_account_file('service_account.json', scopes=SCOPES)
+                
+                # Create credentials with delegation
+                creds = service_account.Credentials.from_service_account_file(
+                    'service_account.json', 
+                    scopes=SCOPES,
+                    subject=USER_EMAIL  # This is the key part - impersonating a user
+                )
             # Otherwise use the file directly
             elif os.path.exists('service_account.json'):
-                creds = service_account.Credentials.from_service_account_file('service_account.json', scopes=SCOPES)
+                creds = service_account.Credentials.from_service_account_file(
+                    'service_account.json', 
+                    scopes=SCOPES,
+                    subject=USER_EMAIL  # Impersonating a user
+                )
             else:
                 print("Error: No service account credentials found.")
                 sys.exit(1)
