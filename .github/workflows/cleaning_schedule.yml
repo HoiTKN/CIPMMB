@@ -26,7 +26,7 @@ jobs:
         
     - name: Set up authentication
       run: |
-        echo '${{ secrets.GOOGLE_SERVICE_ACCOUNT }}' > service_account.json
+        echo '${{ secrets.GOOGLE_TOKEN_JSON }}' > token.json
       
     - name: Run update script
       run: python main.py
@@ -34,5 +34,4 @@ jobs:
         CI: true
         GITHUB_ACTIONS: true
         EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
-        GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
-        GOOGLE_USER_EMAIL: ${{ secrets.GOOGLE_USER_EMAIL || 'hoitkn@msc.masangroup.com' }}
+        GOOGLE_TOKEN_JSON: ${{ secrets.GOOGLE_TOKEN_JSON }}
