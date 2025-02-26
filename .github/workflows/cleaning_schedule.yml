@@ -26,12 +26,12 @@ jobs:
         
     - name: Set up authentication
       run: |
-        echo '${{ secrets.CLIENT_SECRET_JSON }}' > client_secret.json
-        if [ "${{ secrets.TOKEN_JSON }}" != "" ]; then
-          echo '${{ secrets.TOKEN_JSON }}' > token.json
+        echo '${{ secrets.GOOGLE_CLIENT_SECRET }}' > client_secret.json
+        if [ "${{ secrets.GOOGLE_TOKEN }}" != "" ]; then
+          echo '${{ secrets.GOOGLE_TOKEN }}' > token.json
         fi
       
     - name: Run update script
-      run: python cleaning_schedule.py
+      run: python main.py
       env:
         EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
