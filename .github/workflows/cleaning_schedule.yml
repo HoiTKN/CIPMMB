@@ -1,0 +1,37 @@
+name: Run Cleaning Schedule Update
+
+on:
+  schedule:
+    # Run daily at 8:00 AM UTC (adjust the time as needed)
+    - cron: '0 8 * * *'
+  workflow_dispatch:  # Allows manual triggering
+
+jobs:
+  update-cleaning-schedule:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install gspread pandas matplotlib google-auth google-auth-oauthlib google-auth-httplib2
+        
+    - name: Set up authentication
+      run: |
+        echo '${{ secrets.CLIENT_SECRET_JSON }}' > client_secret.json
+        if [ "${{ secrets.TOKEN_JSON }}" != "" ]; then
+          echo '${{ secrets.TOKEN_JSON }}' > token.json
+        fi
+      
+    - name: Run update script
+      run: python cleaning_schedule.py
+      env:
+        EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
