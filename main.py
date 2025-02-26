@@ -405,12 +405,11 @@ def send_email_report(updated_values):
                 part.add_header('Content-Disposition', 'attachment; filename="cleaning_status.png"')
                 msg.attach(part)
             
-            # Send email
+            # Send email using environment variable for password
             with smtplib.SMTP('smtp.gmail.com', 587) as server:
                 server.starttls()
-               import os
-email_password = os.environ.get('EMAIL_PASSWORD')
-server.login("hoitkn@msc.masangroup.com", email_password)
+                email_password = os.environ.get('EMAIL_PASSWORD')
+                server.login("hoitkn@msc.masangroup.com", email_password)
                 server.send_message(msg)
                 
             print("Email đã được gửi kèm bảng HTML và biểu đồ.")
