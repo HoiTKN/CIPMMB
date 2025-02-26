@@ -26,12 +26,12 @@ jobs:
         
     - name: Set up authentication
       run: |
-        echo '${{ secrets.GOOGLE_CLIENT_SECRET }}' > client_secret.json
-        if [ "${{ secrets.GOOGLE_TOKEN }}" != "" ]; then
-          echo '${{ secrets.GOOGLE_TOKEN }}' > token.json
-        fi
+        echo '${{ secrets.GOOGLE_SERVICE_ACCOUNT }}' > service_account.json
       
     - name: Run update script
       run: python main.py
       env:
+        CI: true
+        GITHUB_ACTIONS: true
         EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+        GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
