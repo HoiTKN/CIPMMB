@@ -1,6 +1,6 @@
 import gspread
 import os
-from google.oauth2 import service_account
+import json
 from google.auth.transport.requests import Request
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.oauth2.credentials import Credentials
@@ -14,7 +14,6 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email import encoders
 import sys
-import json
 
 # 1. Authentication setup
 SCOPES = [
@@ -25,40 +24,34 @@ SCOPES = [
 # Detect if running in GitHub Actions or similar CI environment
 IN_CI_ENVIRONMENT = os.environ.get('CI') or os.environ.get('GITHUB_ACTIONS')
 
-# User to impersonate (your company email)
-USER_EMAIL = os.environ.get('GOOGLE_USER_EMAIL', 'hoitkn@msc.masangroup.com')
-
 # Authentication logic with CI environment detection
 def authenticate():
     creds = None
     
-    # If in CI environment, use service account with domain-wide delegation
+    # If in CI environment, use saved token or environment variable
     if IN_CI_ENVIRONMENT:
-        print("Running in CI environment, using service account with delegation...")
+        print("Running in CI environment, using saved token...")
         try:
-            # Check if the service account json was provided as an environment variable
-            if os.environ.get('GOOGLE_SERVICE_ACCOUNT'):
-                service_account_info = json.loads(os.environ.get('GOOGLE_SERVICE_ACCOUNT'))
-                with open('service_account.json', 'w') as f:
-                    json.dump(service_account_info, f)
-                
-                # Create credentials with delegation
-                creds = service_account.Credentials.from_service_account_file(
-                    'service_account.json', 
-                    scopes=SCOPES,
-                    subject=USER_EMAIL  # This is the key part - impersonating a user
-                )
-            # Otherwise use the file directly
-            elif os.path.exists('service_account.json'):
-                creds = service_account.Credentials.from_service_account_file(
-                    'service_account.json', 
-                    scopes=SCOPES,
-                    subject=USER_EMAIL  # Impersonating a user
-                )
+            # First try using the token from environment variable
+            if os.environ.get('GOOGLE_TOKEN_JSON'):
+                token_json = os.environ.get('GOOGLE_TOKEN_JSON')
+                with open('token.json', 'w') as f:
+                    f.write(token_json)
+                creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+            # Then try using the token file directly 
+            elif os.path.exists('token.json'):
+                creds = Credentials.from_authorized_user_file('token.json', SCOPES)
             else:
-                print("Error: No service account credentials found.")
+                print("Error: No authentication token found.")
                 sys.exit(1)
                 
+            # Refresh the token if necessary
+            if creds and creds.expired and creds.refresh_token:
+                creds.refresh(Request())
+                # Save the refreshed token
+                with open('token.json', 'w') as token:
+                    token.write(creds.to_json())
+                    
             return gspread.authorize(creds)
         except Exception as e:
             print(f"Authentication error: {str(e)}")
@@ -89,6 +82,7 @@ gc = authenticate()
 # 2. Open Google Sheet with simplified structure (just 2 sheets)
 sheet_id = '1j8il_-mIGczDX-3eRYNP3jB2Jjo7FLH0DwyaJN6zia0'
 spreadsheet = gc.open_by_key(sheet_id)
+
 
 # Get or create necessary worksheets - simplified to only 2 sheets
 def get_or_create_sheet(name, rows=100, cols=20):
