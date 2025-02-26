@@ -1,5 +1,6 @@
 import gspread
 import os
+from google.oauth2 import service_account
 from google.auth.transport.requests import Request
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.oauth2.credentials import Credentials
@@ -12,28 +13,65 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email import encoders
+import sys
 
 # 1. Authentication setup
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive"
 ]
-creds = None
-creds_file = 'client_secret.json'
 
-if os.path.exists('token.json'):
-    creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+# Detect if running in GitHub Actions or similar CI environment
+IN_CI_ENVIRONMENT = os.environ.get('CI') or os.environ.get('GITHUB_ACTIONS')
 
-if not creds or not creds.valid:
-    if creds and creds.expired and creds.refresh_token:
-        creds.refresh(Request())
+# Authentication logic with CI environment detection
+def authenticate():
+    creds = None
+    
+    # If in CI environment, use service account
+    if IN_CI_ENVIRONMENT:
+        print("Running in CI environment, using service account authentication...")
+        try:
+            # Check if the service account json was provided as an environment variable
+            if os.environ.get('GOOGLE_SERVICE_ACCOUNT'):
+                import json
+                service_account_info = json.loads(os.environ.get('GOOGLE_SERVICE_ACCOUNT'))
+                with open('service_account.json', 'w') as f:
+                    json.dump(service_account_info, f)
+                creds = service_account.Credentials.from_service_account_file('service_account.json', scopes=SCOPES)
+            # Otherwise use the file directly
+            elif os.path.exists('service_account.json'):
+                creds = service_account.Credentials.from_service_account_file('service_account.json', scopes=SCOPES)
+            else:
+                print("Error: No service account credentials found.")
+                sys.exit(1)
+                
+            return gspread.authorize(creds)
+        except Exception as e:
+            print(f"Authentication error: {str(e)}")
+            sys.exit(1)
+    
+    # For local environment, use the normal OAuth flow
     else:
-        flow = InstalledAppFlow.from_client_secrets_file(creds_file, SCOPES)
-        creds = flow.run_local_server(port=0)
-    with open('token.json', 'w') as token:
-        token.write(creds.to_json())
+        print("Running in local environment, using OAuth authentication...")
+        creds_file = 'client_secret.json'
+        
+        if os.path.exists('token.json'):
+            creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+            
+        if not creds or not creds.valid:
+            if creds and creds.expired and creds.refresh_token:
+                creds.refresh(Request())
+            else:
+                flow = InstalledAppFlow.from_client_secrets_file(creds_file, SCOPES)
+                creds = flow.run_local_server(port=0)
+            with open('token.json', 'w') as token:
+                token.write(creds.to_json())
+                
+        return gspread.authorize(creds)
 
-gc = gspread.authorize(creds)
+# Initialize Google Sheets client
+gc = authenticate()
 
 # 2. Open Google Sheet with simplified structure (just 2 sheets)
 sheet_id = '1j8il_-mIGczDX-3eRYNP3jB2Jjo7FLH0DwyaJN6zia0'
