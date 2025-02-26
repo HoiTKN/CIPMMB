@@ -35,3 +35,4 @@ jobs:
         GITHUB_ACTIONS: true
         EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
         GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
+        GOOGLE_USER_EMAIL: ${{ secrets.GOOGLE_USER_EMAIL || 'hoitkn@msc.masangroup.com' }}
