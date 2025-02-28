@@ -536,14 +536,12 @@ def send_email_report(report_data):
         return False
 
 # 5. Main function to run everything
-def # Main execution code
-if __name__ == "__main__":
-    try:
-        run_periodic_testing_monitor()
-    except Exception as e:
-        print(f"Error running periodic testing monitor: {str(e)}")
-        import traceback
-        traceback.print_exc():
+def try:
+    run_periodic_testing_monitor()
+except Exception as e:
+    print(f"Error running periodic testing monitor: {str(e)}")
+    import traceback
+    traceback.print_exc():
     print("Starting raw material periodic testing monitoring...")
     
     try:
