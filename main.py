@@ -210,12 +210,6 @@ def update_cleaning_schedule():
     
         updated_values.append([area, device, method, freq_str, last_cleaning, next_plan_str, current_status, has_product])
     
-    # Add this code at the end of your update_cleaning_schedule() function
-# Just before the return updated_values statement
-
-def update_cleaning_schedule():
-    # ... [existing code remains unchanged] ...
-    
     # Update Master plan
     if updated_values:
         # Use update_cells method to avoid deprecated warnings
@@ -289,7 +283,6 @@ def update_cleaning_schedule():
         print("Không có bản ghi vệ sinh mới để thêm vào Actual Result")
     
     return updated_values
-
 # 5. Function to add a new cleaning record
 def add_cleaning_record(area, device, method, freq, cleaning_date, person, result="Đạt", notes=""):
     """
