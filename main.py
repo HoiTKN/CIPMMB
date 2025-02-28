@@ -749,10 +749,10 @@ if __name__ == "__main__":
     run_update()
 
 # Example: How to add a cleaning record with result
- add_cleaning_record("Khu vực Cốt", "Bồn A1", "CIP 1", "60", "2025-02-25", "Nguyen Van A", "Đạt", "Vệ sinh đúng quy trình")
+# add_cleaning_record("Khu vực Cốt", "Bồn A1", "CIP 1", "60", "2025-02-25", "Nguyen Van A", "Đạt", "Vệ sinh đúng quy trình")
 
 # Example: How to update an existing cleaning result
- update_cleaning_result("Bồn A1", "2025-02-25", "Không đạt", "Cần vệ sinh lại")
+# update_cleaning_result("Bồn A1", "2025-02-25", "Không đạt", "Cần vệ sinh lại")
 
 # Example: How to update product status for a tank
 # update_product_status("Bồn A1", "NTPQ 22 A11 110225")  # Set product code
