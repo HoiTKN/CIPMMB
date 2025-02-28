@@ -94,7 +94,7 @@ def get_or_create_sheet(name, rows=100, cols=20):
 # We need Master plan, Cleaning History, and Actual Result
 master_plan = get_or_create_sheet('Master plan')
 cleaning_history = get_or_create_sheet('Cleaning History')
-actual_result = get_or_create_sheet('Actual Result')
+actual_result = get_or_create_sheet('Actual result')
 
 # 3. Helper function to parse dates in different formats
 def parse_date(date_str):
