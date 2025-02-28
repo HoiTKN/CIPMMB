@@ -564,7 +564,7 @@ def send_email_report(updated_values):
             empty_tanks = [row for row in due_rows if not row[7].strip()]
             filled_tanks = [row for row in due_rows if row[7].strip()]
             
-            # HTML content with product status
+            # HTML content with product status in a single table
             html_content = f"""
             <html>
             <head>
@@ -577,8 +577,8 @@ def send_email_report(updated_values):
                     .overdue {{ background-color: #ffcccc; }}
                     .due-today {{ background-color: #ffeb99; }}
                     .due-soon {{ background-color: #e6ffcc; }}
-                    .has-product {{ background-color: #ffd6cc; }}
-                    .empty {{ background-color: #ccffcc; }}
+                    .has-product {{ color: #cc0000; font-weight: bold; }}
+                    .empty {{ color: #009900; }}
                     h2 {{ color: #003366; }}
                     h3 {{ color: #004d99; margin-top: 25px; }}
                     .summary {{ margin: 20px 0; }}
@@ -595,7 +595,7 @@ def send_email_report(updated_values):
                     <p><strong>Thiết bị đang chứa sản phẩm cần lên kế hoạch:</strong> {len(filled_tanks)}</p>
                 </div>
                 
-                <h3>Thiết bị trống cần vệ sinh sớm:</h3>
+                <h3>Danh sách thiết bị cần vệ sinh:</h3>
                 <table>
                     <thead>
                         <tr>
@@ -603,51 +603,8 @@ def send_email_report(updated_values):
                             <th>Thiết bị</th>
                             <th>Phương pháp</th>
                             <th>Tần suất (ngày)</th>
-                            <th>Ngày vệ sinh gần nhất</th>
-                            <th>Ngày kế hoạch vệ sinh</th>
-                            <th>Trạng thái</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-            """
-            
-            # Add empty tanks first (high priority for cleaning)
-            for row in empty_tanks:
-                area, device, method, freq_str, last_cleaning, next_plan_str, status, has_product = row
-                
-                # Define CSS class based on status
-                css_class = "empty"
-                if status == "Quá hạn":
-                    css_class += " overdue"
-                elif status == "Đến hạn":
-                    css_class += " due-today"
-                    
-                html_content += f"""
-                        <tr class="{css_class}">
-                            <td>{area}</td>
-                            <td>{device}</td>
-                            <td>{method}</td>
-                            <td>{freq_str}</td>
-                            <td>{last_cleaning}</td>
-                            <td>{next_plan_str}</td>
-                            <td>{status}</td>
-                        </tr>
-                """
-            
-            html_content += """
-                    </tbody>
-                </table>
-                
-                <h3>Thiết bị đang chứa sản phẩm cần kế hoạch vệ sinh:</h3>
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Khu vực</th>
-                            <th>Thiết bị</th>
-                            <th>Phương pháp</th>
-                            <th>Tần suất (ngày)</th>
-                            <th>Ngày vệ sinh gần nhất</th>
-                            <th>Ngày kế hoạch vệ sinh</th>
+                            <th>Ngày vệ sinh gần nhất (KQ)</th>
+                            <th>Ngày kế hoạch vệ sinh tiếp theo (KH)</th>
                             <th>Trạng thái</th>
                             <th>Đang chứa sản phẩm</th>
                         </tr>
@@ -655,17 +612,23 @@ def send_email_report(updated_values):
                     <tbody>
             """
             
-            # Add tanks with product
-            for row in filled_tanks:
+            # Add all tanks to the table (both empty and with product)
+            # Sort the rows to prioritize empty tanks first
+            sorted_rows = sorted(due_rows, key=lambda row: 1 if row[7].strip() else 0)
+            
+            for row in sorted_rows:
                 area, device, method, freq_str, last_cleaning, next_plan_str, status, has_product = row
                 
                 # Define CSS class based on status
-                css_class = "has-product"
+                css_class = ""
                 if status == "Quá hạn":
-                    css_class += " overdue"
+                    css_class = "overdue"
                 elif status == "Đến hạn":
-                    css_class += " due-today"
-                    
+                    css_class = "due-today"
+                
+                # Define product status class
+                product_class = "has-product" if has_product.strip() else "empty"
+                
                 html_content += f"""
                         <tr class="{css_class}">
                             <td>{area}</td>
@@ -675,7 +638,7 @@ def send_email_report(updated_values):
                             <td>{last_cleaning}</td>
                             <td>{next_plan_str}</td>
                             <td>{status}</td>
-                            <td>{has_product}</td>
+                            <td class="{product_class}">{has_product}</td>
                         </tr>
                 """
             
