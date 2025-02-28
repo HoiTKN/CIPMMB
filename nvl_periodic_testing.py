@@ -146,10 +146,11 @@ def update_periodic_testing_dates():
         today = datetime.today()
         upcoming_expiry_threshold = today + timedelta(days=7)
         
-        # Lists to store rows with empty, upcoming expiry, and expired dates
+        # Lists to store rows with different statuses
         rows_to_update = []  # Rows where we need to calculate Thời hạn KĐK
         rows_expiring_soon = []  # Rows expiring within 7 days
         rows_expired = []  # Rows already expired
+        rows_missing_test_date = []  # Rows missing test date
         
         # Process each row
         for row_idx, row in enumerate(data_rows, start=2):  # Start from 2 because row 1 is headers
@@ -157,31 +158,66 @@ def update_periodic_testing_dates():
             if len(row) <= max(periodic_test_col_idx, test_expiry_col_idx):
                 continue
                 
-            periodic_test_date_str = row[periodic_test_col_idx].strip()
-            test_expiry_date_str = row[test_expiry_col_idx].strip()
+            # Check if we have test date data
+            periodic_test_date_str = row[periodic_test_col_idx].strip() if periodic_test_col_idx < len(row) else ""
+            test_expiry_date_str = row[test_expiry_col_idx].strip() if test_expiry_col_idx < len(row) else ""
             
-            # Skip rows with no test date
+            # Extract required column values for this row regardless of test date
+            row_data = {}
+            for i, col_idx in enumerate(required_cols_idx):
+                if col_idx >= 0 and col_idx < len(row):
+                    row_data[required_cols[i]] = row[col_idx]
+                else:
+                    row_data[required_cols[i]] = ""
+            
+            # Check if this row is missing test date data but has other important data
+            if not periodic_test_date_str and any([
+                row_data.get('Item', '').strip(),  # Has Item code
+                row_data.get('Tên NVL', '').strip(),  # Has material name
+            ]):
+                # Add to missing test date list
+                rows_missing_test_date.append(row_data)
+                continue  # Skip further processing of this row
+                
+            # Skip rows with no test date AND no important data
             if not periodic_test_date_str:
                 continue
-                
-            periodic_test_date = parse_date(periodic_test_date_str)
-            if not periodic_test_date:
-                print(f"Row {row_idx}: Invalid periodic test date format: '{periodic_test_date_str}'")
-                continue
-                
-            # Calculate expiry date if empty - 1 year after test date
-            if not test_expiry_date_str and periodic_test_date:
-                expiry_date = periodic_test_date + timedelta(days=365)
-                expiry_date_str = expiry_date.strftime('%d/%m/%Y')
-                
-                # Add to rows to update
-                rows_to_update.append((row_idx, test_expiry_col_idx + 1, expiry_date_str))
-                test_expiry_date_str = expiry_date_str  # Use the calculated date for further checks
             
-            # Check expiry status
-            test_expiry_date = parse_date(test_expiry_date_str)
-            if not test_expiry_date:
-                continue
+            # Handle multiple dates in the same cell
+            # Split by common delimiters (newline, space, comma)
+            periodic_test_dates = [date.strip() for date in periodic_test_date_str.replace('\n', ' ').replace(',', ' ').split()]
+            test_expiry_dates = [date.strip() for date in test_expiry_date_str.replace('\n', ' ').replace(',', ' ').split()]
+            
+            # Process each date separately
+            for date_idx, periodic_date_str in enumerate(periodic_test_dates):
+                periodic_test_date = parse_date(periodic_date_str)
+                if not periodic_test_date:
+                    print(f"Row {row_idx}: Invalid periodic test date format: '{periodic_date_str}'")
+                    continue
+                
+                # Check if we have a matching expiry date
+                test_expiry_date = None
+                test_expiry_date_str_current = ""
+                
+                if date_idx < len(test_expiry_dates):
+                    test_expiry_date_str_current = test_expiry_dates[date_idx]
+                    test_expiry_date = parse_date(test_expiry_date_str_current)
+                
+                # Calculate expiry date if not provided - 1 year after test date
+                if (not test_expiry_date_str_current or not test_expiry_date) and periodic_test_date:
+                    expiry_date = periodic_test_date + timedelta(days=365)
+                    expiry_date_str = expiry_date.strftime('%d/%m/%Y')
+                    
+                    # For the first date only, update the cell if it's empty
+                    if date_idx == 0 and not test_expiry_date_str:
+                        rows_to_update.append((row_idx, test_expiry_col_idx + 1, expiry_date_str))
+                    
+                    test_expiry_date = expiry_date
+                    test_expiry_date_str_current = expiry_date_str
+                
+                # Skip if we still don't have a valid expiry date
+                if not test_expiry_date:
+                    continue
                 
             # Extract required column values
             row_data = {}
@@ -208,7 +244,8 @@ def update_periodic_testing_dates():
         # Return the rows that need attention
         return {
             'expiring_soon': rows_expiring_soon,
-            'expired': rows_expired
+            'expired': rows_expired,
+            'missing_test_date': rows_missing_test_date
         }
         
     except Exception as e:
@@ -216,14 +253,14 @@ def update_periodic_testing_dates():
         return None
 
 # 3. Function to create a visualization of expiry status
-def create_expiry_chart(expired_count, expiring_soon_count):
+def create_expiry_chart(expired_count, expiring_soon_count, missing_test_date_count):
     try:
-        plt.figure(figsize=(10, 6))
+        plt.figure(figsize=(12, 6))
         
         # Create bar chart of expiry status
-        labels = ['Đã hết hạn', 'Sắp hết hạn (7 ngày)']
-        counts = [expired_count, expiring_soon_count]
-        colors = ['red', 'orange']
+        labels = ['Đã hết hạn', 'Sắp hết hạn (7 ngày)', 'Thiếu ngày kiểm định kỳ']
+        counts = [expired_count, expiring_soon_count, missing_test_date_count]
+        colors = ['red', 'orange', 'blue']
         
         plt.bar(labels, counts, color=colors)
         plt.title('Trạng thái kiểm định kỳ NVL')
@@ -251,16 +288,25 @@ def send_email_report(report_data):
     print("Preparing to send email report...")
     
     # If no data requires attention, exit early
-    if not report_data or (not report_data['expired'] and not report_data['expiring_soon']):
+    if not report_data or (
+        not report_data['expired'] and 
+        not report_data['expiring_soon'] and 
+        not report_data['missing_test_date']
+    ):
         print("No raw materials require attention. No email sent.")
         return False
     
     try:
         expired_rows = report_data['expired']
         expiring_soon_rows = report_data['expiring_soon']
+        missing_test_date_rows = report_data['missing_test_date']
         
         # Create chart for visualization
-        chart_buffer = create_expiry_chart(len(expired_rows), len(expiring_soon_rows))
+        chart_buffer = create_expiry_chart(
+            len(expired_rows), 
+            len(expiring_soon_rows), 
+            len(missing_test_date_rows)
+        )
         
         # Create email
         msg = MIMEMultipart()
@@ -282,6 +328,7 @@ def send_email_report(report_data):
                 th {{ background-color: #f2f2f2; color: #333; }}
                 .expired {{ background-color: #ffcccc; }}
                 .expiring-soon {{ background-color: #ffeb99; }}
+                .missing-data {{ background-color: #cce0ff; }}
                 h2 {{ color: #003366; }}
                 h3 {{ color: #004d99; margin-top: 25px; }}
                 .summary {{ margin: 20px 0; }}
@@ -294,6 +341,7 @@ def send_email_report(report_data):
             <div class="summary">
                 <p><strong>Số lượng NVL đã hết hạn kiểm định kỳ:</strong> {len(expired_rows)}</p>
                 <p><strong>Số lượng NVL sắp hết hạn kiểm định kỳ (trong 7 ngày):</strong> {len(expiring_soon_rows)}</p>
+                <p><strong>Số lượng NVL thiếu ngày kiểm định kỳ:</strong> {len(missing_test_date_rows)}</p>
             </div>
         """
         
@@ -314,6 +362,7 @@ def send_email_report(report_data):
                         <th>Số hồ sơ công bố</th>
                         <th>Ngày kiểm định kỳ</th>
                         <th>Thời hạn KĐK</th>
+                        <th>Ghi chú</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -326,6 +375,54 @@ def send_email_report(report_data):
                 for field in ['MPO Phụ Trách', 'Ngành', 'Item', 'Tên NVL', 'Nhà cung cấp', 
                              'Mã NCC', 'Nhà sản xuất', 'Số hồ sơ công bố', 
                              'Ngày kiểm định kỳ', 'Thời hạn KĐK']:
+                    html_content += f"""
+                        <td>{row.get(field, '')}</td>
+                    """
+                # Add test date info column if available
+                test_date_info = row.get('_test_date_info', '')
+                html_content += f"""
+                    <td>{test_date_info}</td>
+                """
+                # Add test date info column if available
+                test_date_info = row.get('_test_date_info', '')
+                html_content += f"""
+                    <td>{test_date_info}</td>
+                """
+                html_content += """
+                    </tr>
+                """
+                
+            html_content += """
+                </tbody>
+            </table>
+            """
+        
+        # Add missing test date materials section if any
+        if missing_test_date_rows:
+            html_content += """
+            <h3>Danh sách NVL chưa có ngày kiểm định kỳ:</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>MPO Phụ Trách</th>
+                        <th>Ngành</th>
+                        <th>Item</th>
+                        <th>Tên NVL</th>
+                        <th>Nhà cung cấp</th>
+                        <th>Mã NCC</th>
+                        <th>Nhà sản xuất</th>
+                        <th>Số hồ sơ công bố</th>
+                    </tr>
+                </thead>
+                <tbody>
+            """
+            
+            for row in missing_test_date_rows:
+                html_content += """
+                    <tr class="missing-data">
+                """
+                for field in ['MPO Phụ Trách', 'Ngành', 'Item', 'Tên NVL', 'Nhà cung cấp', 
+                             'Mã NCC', 'Nhà sản xuất', 'Số hồ sơ công bố']:
                     html_content += f"""
                         <td>{row.get(field, '')}</td>
                     """
@@ -355,6 +452,7 @@ def send_email_report(report_data):
                         <th>Số hồ sơ công bố</th>
                         <th>Ngày kiểm định kỳ</th>
                         <th>Thời hạn KĐK</th>
+                        <th>Ghi chú</th>
                     </tr>
                 </thead>
                 <tbody>
