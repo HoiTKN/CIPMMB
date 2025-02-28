@@ -120,7 +120,7 @@ def update_cleaning_schedule():
     # Check and prepare header if needed
     if not master_data:
         headers = ['Khu vực', 'Thiết bị', 'Phương pháp', 'Tần suất (ngày)', 
-                'Ngày vệ sinh gần nhất', 'Ngày kế hoạch vệ sinh tiếp theo', 'Trạng thái']
+                'Ngày vệ sinh gần nhất', 'Ngày kế hoạch vệ sinh tiếp theo', 'Trạng thái', 'Đang chứa sản phẩm']
         master_plan.update_cells(
             cells=[
                 gspread.Cell(1, i+1, header)
@@ -128,6 +128,11 @@ def update_cleaning_schedule():
             ]
         )
         master_data = [headers]
+    
+    # Check if headers need to be updated with the new column
+    if len(master_data[0]) < 8 or master_data[0][7] != 'Đang chứa sản phẩm':
+        master_data[0].append('Đang chứa sản phẩm')
+        master_plan.update_cell(1, 8, 'Đang chứa sản phẩm')
     
     # Check if Cleaning History has headers
     history_data = cleaning_history.get_all_values()
@@ -162,16 +167,19 @@ def update_cleaning_schedule():
     
     # Process each row and calculate status
     for i, row in enumerate(rows):
-        # Ensure each row has 7 columns
-        if len(row) >= 7:
+        # Ensure each row has 8 columns (including the new "Đang chứa sản phẩm" column)
+        if len(row) >= 8:
+            area, device, method, freq_str, last_cleaning, next_plan, status, has_product = row[:8]
+        elif len(row) == 7:
             area, device, method, freq_str, last_cleaning, next_plan, status = row[:7]
+            has_product = ""  # Default empty for the new column
         else:
             # If fewer columns, pad with empty strings
-            padded_row = row + [''] * (7 - len(row))
-            area, device, method, freq_str, last_cleaning, next_plan, status = padded_row
+            padded_row = row + [''] * (8 - len(row))
+            area, device, method, freq_str, last_cleaning, next_plan, status, has_product = padded_row
     
         if not last_cleaning:
-            updated_values.append([area, device, method, freq_str, last_cleaning, "", "Chưa có dữ liệu"])
+            updated_values.append([area, device, method, freq_str, last_cleaning, "", "Chưa có dữ liệu", has_product])
             continue
     
         freq = 0
@@ -183,7 +191,7 @@ def update_cleaning_schedule():
     
         last_cleaning_date = parse_date(last_cleaning)
         if not last_cleaning_date:
-            updated_values.append([area, device, method, freq_str, last_cleaning, "", "Định dạng ngày không hợp lệ"])
+            updated_values.append([area, device, method, freq_str, last_cleaning, "", "Định dạng ngày không hợp lệ", has_product])
             continue
     
         next_plan_date = last_cleaning_date + timedelta(days=freq)
@@ -200,7 +208,7 @@ def update_cleaning_schedule():
         else:
             current_status = 'Quá hạn'
     
-        updated_values.append([area, device, method, freq_str, last_cleaning, next_plan_str, current_status])
+        updated_values.append([area, device, method, freq_str, last_cleaning, next_plan_str, current_status, has_product])
     
     # Update Master plan
     if updated_values:
@@ -274,6 +282,10 @@ def add_cleaning_record(area, device, method, freq, cleaning_date, person, resul
                         current_status = 'Quá hạn'
                         
                     master_plan.update_cell(i, 7, current_status)
+                    
+                    # Update product status - Empty the "Đang chứa sản phẩm" field when cleaning is completed
+                    master_plan.update_cell(i, 8, "")
+                    
                 except ValueError:
                     print(f"Cảnh báo: Không thể tính ngày vệ sinh tiếp theo (tần suất không hợp lệ)")
                 
@@ -297,17 +309,17 @@ def add_cleaning_record(area, device, method, freq, cleaning_date, person, resul
                 else:
                     current_status = 'Quá hạn'
                 
-                # Add new row to Master plan
+                # Add new row to Master plan with empty product status
                 master_plan.append_row([
                     area, device, method, freq, 
-                    formatted_date, next_date_str, current_status
+                    formatted_date, next_date_str, current_status, ""
                 ])
                 
             except ValueError:
                 # If frequency is invalid, add with empty next date and status
                 master_plan.append_row([
                     area, device, method, freq, 
-                    formatted_date, "", "Tần suất không hợp lệ"
+                    formatted_date, "", "Tần suất không hợp lệ", ""
                 ])
         
         message = f"Đã thêm bản ghi vệ sinh cho thiết bị {device}"
@@ -375,16 +387,60 @@ def update_cleaning_result(device, cleaning_date, result, notes=""):
         print(error_message)
         return "Lỗi"
 
-# 7. Function to create a simple dashboard chart for email
+# 7. Function to update product status for a device
+def update_product_status(device, has_product):
+    """
+    Update the product status for a device in the Master plan
+    
+    Parameters:
+    device (str): Device name
+    has_product (str): Product status information
+    
+    Returns:
+    str: Status message
+    """
+    try:
+        # Get all records from Master plan
+        master_data = master_plan.get_all_values()
+        if len(master_data) <= 1:  # Only header row or empty
+            return "Không tìm thấy thiết bị"
+        
+        # Search for the matching device
+        device_found = False
+        for i, row in enumerate(master_data[1:], start=2):
+            if len(row) >= 2 and row[1] == device:
+                # Update product status (column 8)
+                master_plan.update_cell(i, 8, has_product)
+                device_found = True
+                break
+        
+        if device_found:
+            message = f"Đã cập nhật trạng thái sản phẩm cho thiết bị {device}"
+            print(message)
+            return "Thành công"
+        else:
+            message = f"Không tìm thấy thiết bị {device}"
+            print(message)
+            return "Không tìm thấy"
+            
+    except Exception as e:
+        error_message = f"Lỗi khi cập nhật trạng thái sản phẩm: {str(e)}"
+        print(error_message)
+        return "Lỗi"
+
+# 8. Function to create a simple dashboard chart for email, now with product status
 def create_status_chart(updated_values):
     try:
         # Create DataFrame for visualization
         df = pd.DataFrame(updated_values, columns=[
             'Khu vực', 'Thiết bị', 'Phương pháp', 'Tần suất (ngày)',
-            'Ngày vệ sinh gần nhất', 'Ngày kế hoạch vệ sinh tiếp theo', 'Trạng thái'
+            'Ngày vệ sinh gần nhất', 'Ngày kế hoạch vệ sinh tiếp theo', 'Trạng thái', 'Đang chứa sản phẩm'
         ])
         
-        # Count statuses
+        # Set up figure with 2 subplots
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+        
+        # First subplot: Count statuses
         status_counts = df['Trạng thái'].value_counts()
         status_order = ['Bình thường', 'Sắp đến hạn', 'Đến hạn', 'Quá hạn']
         
@@ -396,13 +452,37 @@ def create_status_chart(updated_values):
             if status in status_data.index:
                 status_data[status] = count
         
-        # Create a simple bar chart
-        plt.figure(figsize=(10, 6))
+        # Create a bar chart for cleaning status
         colors = ['green', 'yellow', 'orange', 'red']
-        plt.bar(status_data.index, status_data.values, color=colors)
-        plt.title('Thống kê trạng thái thiết bị vệ sinh')
-        plt.ylabel('Số lượng')
-        plt.grid(axis='y', linestyle='--', alpha=0.7)
+        ax1.bar(status_data.index, status_data.values, color=colors)
+        ax1.set_title('Thống kê trạng thái thiết bị vệ sinh')
+        ax1.set_ylabel('Số lượng')
+        ax1.grid(axis='y', linestyle='--', alpha=0.7)
+        
+        # Second subplot: Count product status for overdue equipment
+        overdue_df = df[df['Trạng thái'].isin(['Đến hạn', 'Quá hạn'])]
+        
+        # Count devices with/without product
+        product_status = overdue_df['Đang chứa sản phẩm'].fillna('Trống').map(lambda x: 'Có sản phẩm' if x.strip() else 'Trống')
+        product_counts = product_status.value_counts()
+        
+        # Ensure both categories are present
+        product_data = pd.Series([0, 0], index=['Có sản phẩm', 'Trống'])
+        for status, count in product_counts.items():
+            product_data[status] = count
+        
+        # Create a pie chart for product status
+        ax2.pie(
+            product_data.values,
+            labels=product_data.index,
+            colors=['red', 'green'],
+            autopct='%1.1f%%',
+            startangle=90
+        )
+        ax2.set_title('Trạng thái sản phẩm của thiết bị cần vệ sinh')
+        ax2.axis('equal')
+        
+        plt.tight_layout()
         
         # Save chart for email
         img_buffer = io.BytesIO()
@@ -416,7 +496,7 @@ def create_status_chart(updated_values):
         print(f"Lỗi khi tạo biểu đồ: {str(e)}")
         return None
 
-# 8. Function to create a results analysis chart for email
+# 9. Function to create a results analysis chart for email
 def create_results_chart():
     try:
         # Get data from Actual Result sheet
@@ -459,7 +539,7 @@ def create_results_chart():
         print(f"Lỗi khi tạo biểu đồ kết quả: {str(e)}")
         return None
 
-# 9. Enhanced function to send email report with actual results
+# 10. Enhanced function to send email report with product status information
 def send_email_report(updated_values):
     print("Đang chuẩn bị gửi email báo cáo...")
     
@@ -480,7 +560,11 @@ def send_email_report(updated_values):
             recipients = ["hoitkn@msc.masangroup.com", "mmb-ktcncsd@msc.masangroup.com","haont1@msc.masangroup.com","datnd@msc.masangroup.com","chungnt2@msc.masangroup.com","luannt4@msc.masangroup.com","quangnd2@msc.masangroup.com"]
             msg['To'] = ", ".join(recipients)
             
-            # HTML content
+            # Prepare data for email summary
+            empty_tanks = [row for row in due_rows if not row[7].strip()]
+            filled_tanks = [row for row in due_rows if row[7].strip()]
+            
+            # HTML content with product status
             html_content = f"""
             <html>
             <head>
@@ -493,7 +577,10 @@ def send_email_report(updated_values):
                     .overdue {{ background-color: #ffcccc; }}
                     .due-today {{ background-color: #ffeb99; }}
                     .due-soon {{ background-color: #e6ffcc; }}
+                    .has-product {{ background-color: #ffd6cc; }}
+                    .empty {{ background-color: #ccffcc; }}
                     h2 {{ color: #003366; }}
+                    h3 {{ color: #004d99; margin-top: 25px; }}
                     .summary {{ margin: 20px 0; }}
                     .footer {{ margin-top: 30px; font-size: 0.9em; color: #666; }}
                 </style>
@@ -504,9 +591,11 @@ def send_email_report(updated_values):
                 <div class="summary">
                     <p><strong>Tổng số thiết bị:</strong> {len(updated_values)}</p>
                     <p><strong>Thiết bị cần vệ sinh:</strong> {len(due_rows)}</p>
+                    <p><strong>Thiết bị trống có thể vệ sinh ngay:</strong> {len(empty_tanks)}</p>
+                    <p><strong>Thiết bị đang chứa sản phẩm cần lên kế hoạch:</strong> {len(filled_tanks)}</p>
                 </div>
                 
-                <h3>Danh sách thiết bị cần vệ sinh:</h3>
+                <h3>Thiết bị trống cần vệ sinh sớm:</h3>
                 <table>
                     <thead>
                         <tr>
@@ -522,15 +611,16 @@ def send_email_report(updated_values):
                     <tbody>
             """
             
-            for row in due_rows:
-                area, device, method, freq_str, last_cleaning, next_plan_str, status = row
+            # Add empty tanks first (high priority for cleaning)
+            for row in empty_tanks:
+                area, device, method, freq_str, last_cleaning, next_plan_str, status, has_product = row
                 
                 # Define CSS class based on status
-                css_class = ""
+                css_class = "empty"
                 if status == "Quá hạn":
-                    css_class = "overdue"
+                    css_class += " overdue"
                 elif status == "Đến hạn":
-                    css_class = "due-today"
+                    css_class += " due-today"
                     
                 html_content += f"""
                         <tr class="{css_class}">
@@ -543,13 +633,58 @@ def send_email_report(updated_values):
                             <td>{status}</td>
                         </tr>
                 """
+            
+            html_content += """
+                    </tbody>
+                </table>
                 
+                <h3>Thiết bị đang chứa sản phẩm cần kế hoạch vệ sinh:</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Khu vực</th>
+                            <th>Thiết bị</th>
+                            <th>Phương pháp</th>
+                            <th>Tần suất (ngày)</th>
+                            <th>Ngày vệ sinh gần nhất</th>
+                            <th>Ngày kế hoạch vệ sinh</th>
+                            <th>Trạng thái</th>
+                            <th>Đang chứa sản phẩm</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            """
+            
+            # Add tanks with product
+            for row in filled_tanks:
+                area, device, method, freq_str, last_cleaning, next_plan_str, status, has_product = row
+                
+                # Define CSS class based on status
+                css_class = "has-product"
+                if status == "Quá hạn":
+                    css_class += " overdue"
+                elif status == "Đến hạn":
+                    css_class += " due-today"
+                    
+                html_content += f"""
+                        <tr class="{css_class}">
+                            <td>{area}</td>
+                            <td>{device}</td>
+                            <td>{method}</td>
+                            <td>{freq_str}</td>
+                            <td>{last_cleaning}</td>
+                            <td>{next_plan_str}</td>
+                            <td>{status}</td>
+                            <td>{has_product}</td>
+                        </tr>
+                """
+            
             html_content += """
                     </tbody>
                 </table>
                 
                 <div class="footer">
-                    <p>Vui lòng xem Google Sheets để biết chi tiết.</p>
+                    <p>Vui lòng xem Google Sheets để biết chi tiết và cập nhật trạng thái của các thiết bị.</p>
                     <p>Email này được tự động tạo bởi hệ thống. Vui lòng không trả lời.</p>
                 </div>
             </body>
@@ -592,7 +727,7 @@ def send_email_report(updated_values):
         print("Không có thiết bị đến hạn/quá hạn, không gửi email.")
         return True
 
-# 10. Main function to run everything
+# 11. Main function to run everything
 def run_update():
     print("Bắt đầu cập nhật hệ thống vệ sinh thiết bị...")
     
@@ -614,7 +749,11 @@ if __name__ == "__main__":
     run_update()
 
 # Example: How to add a cleaning record with result
-# add_cleaning_record("Khu vực Cốt", "Bồn A1", "CIP 1", "60", "2025-02-25", "Nguyen Van A", "Đạt", "Vệ sinh đúng quy trình")
+ add_cleaning_record("Khu vực Cốt", "Bồn A1", "CIP 1", "60", "2025-02-25", "Nguyen Van A", "Đạt", "Vệ sinh đúng quy trình")
 
 # Example: How to update an existing cleaning result
-# update_cleaning_result("Bồn A1", "2025-02-25", "Không đạt", "Cần vệ sinh lại")
+ update_cleaning_result("Bồn A1", "2025-02-25", "Không đạt", "Cần vệ sinh lại")
+
+# Example: How to update product status for a tank
+# update_product_status("Bồn A1", "NTPQ 22 A11 110225")  # Set product code
+# update_product_status("Bồn A2", "")  # Clear product (tank is empty)
