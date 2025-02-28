@@ -1,0 +1,37 @@
+name: Run Raw Material Testing Monitor
+
+on:
+  schedule:
+    # Run weekly on Monday at 8:00 AM UTC (adjust as needed)
+    - cron: '0 8 * * 1'
+  workflow_dispatch:  # Allows manual triggering
+
+jobs:
+  update-nvl-testing:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install gspread pandas matplotlib google-auth google-auth-oauthlib google-auth-httplib2
+        
+    - name: Set up authentication
+      run: |
+        echo '${{ secrets.GOOGLE_TOKEN_JSON }}' > token.json
+      
+    - name: Run periodic testing monitor
+      run: python nvl_periodic_testing.py
+      env:
+        CI: true
+        GITHUB_ACTIONS: true
+        EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+        GOOGLE_TOKEN_JSON: ${{ secrets.GOOGLE_TOKEN_JSON }}
