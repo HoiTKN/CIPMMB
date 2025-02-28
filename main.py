@@ -210,6 +210,12 @@ def update_cleaning_schedule():
     
         updated_values.append([area, device, method, freq_str, last_cleaning, next_plan_str, current_status, has_product])
     
+    # Add this code at the end of your update_cleaning_schedule() function
+# Just before the return updated_values statement
+
+def update_cleaning_schedule():
+    # ... [existing code remains unchanged] ...
+    
     # Update Master plan
     if updated_values:
         # Use update_cells method to avoid deprecated warnings
@@ -221,6 +227,67 @@ def update_cleaning_schedule():
         master_plan.update_cells(cells_to_update)
     
     print(f"Đã cập nhật {len(updated_values)} thiết bị.")
+    
+    # NEW CODE: Update Actual Result with new cleaning records
+    # -------------------------------------------------------------
+    print("Kiểm tra và cập nhật bản ghi vệ sinh mới...")
+    
+    # Read existing records from Actual Result
+    actual_data = actual_result.get_all_values()
+    existing_records = set()  # Set of unique cleaning records (device + date)
+    
+    # Skip header row
+    for row in actual_data[1:]:
+        if len(row) >= 5:  # Ensure row has enough columns
+            device_name = row[1]  # Device column
+            cleaning_date_str = row[4]  # Cleaning date column
+            if device_name and cleaning_date_str:
+                # Create unique key for existing record
+                record_key = f"{device_name}_{cleaning_date_str}"
+                existing_records.add(record_key)
+    
+    # Identify new cleaning records from Master plan
+    new_cleaning_records = []
+    
+    for row in updated_values:
+        area, device, method, freq_str, last_cleaning, next_plan_str, status, has_product = row
+        
+        # Skip if no cleaning date or format is invalid
+        if not last_cleaning or "không hợp lệ" in status.lower() or "chưa có dữ liệu" in status.lower():
+            continue
+            
+        # Create unique key for this cleaning record
+        record_key = f"{device}_{last_cleaning}"
+        
+        # Add to Actual Result if not already recorded
+        if record_key not in existing_records:
+            # Default values for new records
+            person = "Tự động"  # Placeholder or default person
+            result = "Đạt"      # Default result
+            notes = ""          # Empty notes
+            
+            # Add new cleaning record
+            new_cleaning_records.append([
+                area,
+                device,
+                method,
+                freq_str,
+                last_cleaning,
+                person,
+                result,
+                notes
+            ])
+            
+            # Mark as processed to avoid duplicates
+            existing_records.add(record_key)
+    
+    # Add new cleaning records to Actual Result sheet
+    if new_cleaning_records:
+        actual_result.append_rows(new_cleaning_records)
+        print(f"Đã thêm {len(new_cleaning_records)} bản ghi vệ sinh mới vào Actual Result")
+    else:
+        print("Không có bản ghi vệ sinh mới để thêm vào Actual Result")
+    
     return updated_values
 
 # 5. Function to add a new cleaning record
@@ -710,13 +777,3 @@ def run_update():
 # Run the update if executed directly
 if __name__ == "__main__":
     run_update()
-
-# Example: How to add a cleaning record with result
-# add_cleaning_record("Khu vực Cốt", "Bồn A1", "CIP 1", "60", "2025-02-25", "Nguyen Van A", "Đạt", "Vệ sinh đúng quy trình")
-
-# Example: How to update an existing cleaning result
-# update_cleaning_result("Bồn A1", "2025-02-25", "Không đạt", "Cần vệ sinh lại")
-
-# Example: How to update product status for a tank
-# update_product_status("Bồn A1", "NTPQ 22 A11 110225")  # Set product code
-# update_product_status("Bồn A2", "")  # Clear product (tank is empty)
