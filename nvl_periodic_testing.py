@@ -242,20 +242,38 @@ def update_periodic_testing_dates():
                     
                 # Make sure we have a valid test_expiry_date before proceeding with status checks
                 
-            # Extract required column values
-            row_data = {}
-            for i, col_idx in enumerate(required_cols_idx):
-                if col_idx >= 0 and col_idx < len(row):
-                    row_data[required_cols[i]] = row[col_idx]
-                else:
-                    row_data[required_cols[i]] = ""
-            
-            # Check if expired
-            if test_expiry_date.date() < today.date():
-                rows_expired.append(row_data)
-            # Check if expiring soon (within 7 days)
-            elif test_expiry_date.date() <= upcoming_expiry_threshold.date():
-                rows_expiring_soon.append(row_data)
+                # Extract required column values
+                row_data = {}
+                for i, col_idx in enumerate(required_cols_idx):
+                    if col_idx >= 0 and col_idx < len(row):
+                        # For test date and expiry date columns, use the current date we're processing
+                        if required_cols[i] == 'Ngày kiểm định kỳ':
+                            row_data[required_cols[i]] = periodic_date_str
+                        elif required_cols[i] == 'Thời hạn KĐK':
+                            row_data[required_cols[i]] = test_expiry_date_str_current
+                        else:
+                            row_data[required_cols[i]] = row[col_idx]
+                    else:
+                        row_data[required_cols[i]] = ""
+                
+                # Check if expired
+                if test_expiry_date.date() < today.date():
+                    # Add material item + specific test date for clarity
+                    if 'Item' in row_data and 'Tên NVL' in row_data:
+                        item_id = row_data.get('Item', '')
+                        material_name = row_data.get('Tên NVL', '')
+                        
+                        # Make a deep copy to avoid modifying the original
+                        expired_row_data = row_data.copy()
+                        expired_row_data['_test_date_info'] = f"Test date: {periodic_date_str}, Expiry: {test_expiry_date_str_current}"
+                        rows_expired.append(expired_row_data)
+                        
+                # Check if expiring soon (within 7 days)
+                elif test_expiry_date.date() <= upcoming_expiry_threshold.date():
+                    # Make a deep copy to avoid modifying the original
+                    expiring_row_data = row_data.copy()
+                    expiring_row_data['_test_date_info'] = f"Test date: {periodic_date_str}, Expiry: {test_expiry_date_str_current}"
+                    rows_expiring_soon.append(expiring_row_data)
         
         # Update expiry dates in the worksheet
         if rows_to_update:
@@ -406,6 +424,48 @@ def send_email_report(report_data):
                 html_content += f"""
                     <td>{test_date_info}</td>
                 """
+                html_content += """
+                    </tr>
+                """
+                
+            html_content += """
+                </tbody>
+            </table>
+            """
+        
+        # Add expiring soon materials section if any
+        if expiring_soon_rows:
+            html_content += """
+            <h3>Danh sách NVL sắp hết hạn kiểm định kỳ (trong 7 ngày):</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>MPO Phụ Trách</th>
+                        <th>Ngành</th>
+                        <th>Item</th>
+                        <th>Tên NVL</th>
+                        <th>Nhà cung cấp</th>
+                        <th>Mã NCC</th>
+                        <th>Nhà sản xuất</th>
+                        <th>Số hồ sơ công bố</th>
+                        <th>Ngày kiểm định kỳ</th>
+                        <th>Thời hạn KĐK</th>
+                        <th>Ghi chú</th>
+                    </tr>
+                </thead>
+                <tbody>
+            """
+            
+            for row in expiring_soon_rows:
+                html_content += """
+                    <tr class="expiring-soon">
+                """
+                for field in ['MPO Phụ Trách', 'Ngành', 'Item', 'Tên NVL', 'Nhà cung cấp', 
+                             'Mã NCC', 'Nhà sản xuất', 'Số hồ sơ công bố', 
+                             'Ngày kiểm định kỳ', 'Thời hạn KĐK']:
+                    html_content += f"""
+                        <td>{row.get(field, '')}</td>
+                    """
                 # Add test date info column if available
                 test_date_info = row.get('_test_date_info', '')
                 html_content += f"""
@@ -458,48 +518,6 @@ def send_email_report(report_data):
             </table>
             """
         
-        # Add expiring soon materials section if any
-        if expiring_soon_rows:
-            html_content += """
-            <h3>Danh sách NVL sắp hết hạn kiểm định kỳ (trong 7 ngày):</h3>
-            <table>
-                <thead>
-                    <tr>
-                        <th>MPO Phụ Trách</th>
-                        <th>Ngành</th>
-                        <th>Item</th>
-                        <th>Tên NVL</th>
-                        <th>Nhà cung cấp</th>
-                        <th>Mã NCC</th>
-                        <th>Nhà sản xuất</th>
-                        <th>Số hồ sơ công bố</th>
-                        <th>Ngày kiểm định kỳ</th>
-                        <th>Thời hạn KĐK</th>
-                        <th>Ghi chú</th>
-                    </tr>
-                </thead>
-                <tbody>
-            """
-            
-            for row in expiring_soon_rows:
-                html_content += """
-                    <tr class="expiring-soon">
-                """
-                for field in ['MPO Phụ Trách', 'Ngành', 'Item', 'Tên NVL', 'Nhà cung cấp', 
-                             'Mã NCC', 'Nhà sản xuất', 'Số hồ sơ công bố', 
-                             'Ngày kiểm định kỳ', 'Thời hạn KĐK']:
-                    html_content += f"""
-                        <td>{row.get(field, '')}</td>
-                    """
-                html_content += """
-                    </tr>
-                """
-                
-            html_content += """
-                </tbody>
-            </table>
-            """
-        
         # Add footer
         html_content += """
             <div class="footer">
@@ -536,12 +554,7 @@ def send_email_report(report_data):
         return False
 
 # 5. Main function to run everything
-def try:
-    run_periodic_testing_monitor()
-except Exception as e:
-    print(f"Error running periodic testing monitor: {str(e)}")
-    import traceback
-    traceback.print_exc():
+def run_periodic_testing_monitor():
     print("Starting raw material periodic testing monitoring...")
     
     try:
@@ -558,6 +571,11 @@ except Exception as e:
         print(f"Error in periodic testing monitoring: {str(e)}")
         return False
 
-# Run the update if executed directly
+# Main execution code
 if __name__ == "__main__":
-    run_periodic_testing_monitor()
+    try:
+        run_periodic_testing_monitor()
+    except Exception as e:
+        print(f"Error running periodic testing monitor: {str(e)}")
+        import traceback
+        traceback.print_exc()
