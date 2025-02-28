@@ -81,13 +81,34 @@ def parse_date(date_str):
     """Try to parse date with multiple formats"""
     if not date_str or date_str.strip() == "":
         return None
-        
-    date_formats = ['%d/%m/%Y', '%Y-%m-%d', '%B %d, %Y', '%d-%m-%Y']
-    for fmt in date_formats:
+    
+    # Clean up the date string
+    date_str = date_str.strip()
+    
+    # First try with two-digit year formats
+    date_formats_short = ['%d/%m/%y', '%d-%m-%y']
+    for fmt in date_formats_short:
+        try:
+            date = datetime.strptime(date_str, fmt)
+            # Adjust years for two-digit format (assuming 21st century for now)
+            if date.year < 100:
+                if date.year < 30:  # Adjust this threshold as needed
+                    date = date.replace(year=date.year + 2000)
+                else:
+                    date = date.replace(year=date.year + 1900)
+            return date
+        except ValueError:
+            continue
+            
+    # Then try with four-digit year formats
+    date_formats_long = ['%d/%m/%Y', '%Y-%m-%d', '%B %d, %Y', '%d-%m-%Y']
+    for fmt in date_formats_long:
         try:
             return datetime.strptime(date_str, fmt)
         except ValueError:
             continue
+            
+    print(f"Could not parse date: {date_str}")
     return None
 
 # 2. Function to update periodic testing dates
@@ -154,9 +175,9 @@ def update_periodic_testing_dates():
         
         # Process each row
         for row_idx, row in enumerate(data_rows, start=2):  # Start from 2 because row 1 is headers
-            # Check if the row has enough columns
-            if len(row) <= max(periodic_test_col_idx, test_expiry_col_idx):
-                continue
+            # Check if the row has enough columns - expand row with empty strings if needed
+            while len(row) <= max(periodic_test_col_idx, test_expiry_col_idx):
+                row.append("")
                 
             # Check if we have test date data
             periodic_test_date_str = row[periodic_test_col_idx].strip() if periodic_test_col_idx < len(row) else ""
@@ -218,6 +239,8 @@ def update_periodic_testing_dates():
                 # Skip if we still don't have a valid expiry date
                 if not test_expiry_date:
                     continue
+                    
+                # Make sure we have a valid test_expiry_date before proceeding with status checks
                 
             # Extract required column values
             row_data = {}
@@ -513,7 +536,12 @@ def send_email_report(report_data):
         return False
 
 # 5. Main function to run everything
-def run_periodic_testing_monitor():
+def try:
+    run_periodic_testing_monitor()
+except Exception as e:
+    print(f"Error running periodic testing monitor: {str(e)}")
+    import traceback
+    traceback.print_exc():
     print("Starting raw material periodic testing monitoring...")
     
     try:
