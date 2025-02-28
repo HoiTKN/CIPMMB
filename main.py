@@ -79,11 +79,11 @@ def authenticate():
 # Initialize Google Sheets client
 gc = authenticate()
 
-# 2. Open Google Sheet with simplified structure (just 2 sheets)
+# 2. Open Google Sheet with updated structure (3 sheets now)
 sheet_id = '1j8il_-mIGczDX-3eRYNP3jB2Jjo7FLH0DwyaJN6zia0'
 spreadsheet = gc.open_by_key(sheet_id)
 
-# Get or create necessary worksheets - simplified to only 2 sheets
+# Get or create necessary worksheets - now adding Actual Result sheet
 def get_or_create_sheet(name, rows=100, cols=20):
     try:
         worksheet = spreadsheet.worksheet(name)
@@ -91,9 +91,10 @@ def get_or_create_sheet(name, rows=100, cols=20):
         worksheet = spreadsheet.add_worksheet(title=name, rows=rows, cols=cols)
     return worksheet
 
-# We only need Master plan and Cleaning History
+# We need Master plan, Cleaning History, and Actual Result
 master_plan = get_or_create_sheet('Master plan')
 cleaning_history = get_or_create_sheet('Cleaning History')
+actual_result = get_or_create_sheet('Actual Result')
 
 # 3. Helper function to parse dates in different formats
 def parse_date(date_str):
@@ -137,6 +138,18 @@ def update_cleaning_schedule():
             cells=[
                 gspread.Cell(1, i+1, header)
                 for i, header in enumerate(history_headers)
+            ]
+        )
+    
+    # Check if Actual Result has headers
+    actual_data = actual_result.get_all_values()
+    if not actual_data:
+        actual_headers = ['Khu vực', 'Thiết bị', 'Phương pháp', 'Tần suất (ngày)', 
+                           'Ngày vệ sinh', 'Người thực hiện', 'Kết quả', 'Ghi chú']
+        actual_result.update_cells(
+            cells=[
+                gspread.Cell(1, i+1, header)
+                for i, header in enumerate(actual_headers)
             ]
         )
     
@@ -203,9 +216,9 @@ def update_cleaning_schedule():
     return updated_values
 
 # 5. Function to add a new cleaning record
-def add_cleaning_record(area, device, method, freq, cleaning_date, person):
+def add_cleaning_record(area, device, method, freq, cleaning_date, person, result="Đạt", notes=""):
     """
-    Add a new cleaning record and update Master plan
+    Add a new cleaning record and update Master plan and Actual Result
     
     Parameters:
     area (str): Area name
@@ -214,6 +227,8 @@ def add_cleaning_record(area, device, method, freq, cleaning_date, person):
     freq (str): Frequency in days
     cleaning_date (str): Cleaning date (any format)
     person (str): Person who performed the cleaning
+    result (str, optional): Cleaning result (default: "Đạt")
+    notes (str, optional): Additional notes (default: "")
     """
     try:
         # Format the date consistently
@@ -225,6 +240,9 @@ def add_cleaning_record(area, device, method, freq, cleaning_date, person):
         
         # Add new record to Cleaning History
         cleaning_history.append_row([area, device, method, freq, formatted_date, person])
+        
+        # Add new record to Actual Result sheet
+        actual_result.append_row([area, device, method, freq, formatted_date, person, result, notes])
         
         # Update Master plan with the new cleaning date
         master_data = master_plan.get_all_values()
@@ -301,7 +319,63 @@ def add_cleaning_record(area, device, method, freq, cleaning_date, person):
         print(error_message)
         return "Lỗi"
 
-# 6. Function to create a simple dashboard chart for email
+# 6. Function to update actual cleaning results for existing records
+def update_cleaning_result(device, cleaning_date, result, notes=""):
+    """
+    Update the result of a cleaning record in the Actual Result sheet
+    
+    Parameters:
+    device (str): Device name
+    cleaning_date (str): Cleaning date to identify the record
+    result (str): Cleaning result ("Đạt" or "Không đạt")
+    notes (str, optional): Additional notes (default: "")
+    
+    Returns:
+    str: Status message
+    """
+    try:
+        # Get all records from Actual Result sheet
+        actual_data = actual_result.get_all_values()
+        if len(actual_data) <= 1:  # Only header row or empty
+            return "Không tìm thấy bản ghi"
+            
+        # Format the date for comparison
+        target_date = parse_date(cleaning_date)
+        if not target_date:
+            return f"Lỗi: Định dạng ngày '{cleaning_date}' không hợp lệ"
+            
+        target_date_str = target_date.strftime('%d/%m/%Y')
+        
+        # Search for the matching record
+        record_found = False
+        for i, row in enumerate(actual_data[1:], start=2):
+            if len(row) >= 6:  # Ensure row has enough columns
+                row_device = row[1]
+                row_date = row[4]
+                
+                # Check if device and date match
+                if row_device == device and row_date == target_date_str:
+                    # Update result and notes (columns 7 and 8)
+                    actual_result.update_cell(i, 7, result)
+                    actual_result.update_cell(i, 8, notes)
+                    record_found = True
+                    break
+        
+        if record_found:
+            message = f"Đã cập nhật kết quả vệ sinh cho thiết bị {device} (ngày {target_date_str})"
+            print(message)
+            return "Thành công"
+        else:
+            message = f"Không tìm thấy bản ghi vệ sinh cho thiết bị {device} (ngày {target_date_str})"
+            print(message)
+            return "Không tìm thấy"
+            
+    except Exception as e:
+        error_message = f"Lỗi khi cập nhật kết quả vệ sinh: {str(e)}"
+        print(error_message)
+        return "Lỗi"
+
+# 7. Function to create a simple dashboard chart for email
 def create_status_chart(updated_values):
     try:
         # Create DataFrame for visualization
@@ -342,7 +416,50 @@ def create_status_chart(updated_values):
         print(f"Lỗi khi tạo biểu đồ: {str(e)}")
         return None
 
-# 7. Function to send email report
+# 8. Function to create a results analysis chart for email
+def create_results_chart():
+    try:
+        # Get data from Actual Result sheet
+        actual_data = actual_result.get_all_values()
+        if len(actual_data) <= 1:  # Only header or empty
+            return None
+            
+        # Create DataFrame for analysis
+        df = pd.DataFrame(actual_data[1:], columns=actual_data[0])
+        
+        # Count results
+        if 'Kết quả' in df.columns:
+            result_counts = df['Kết quả'].value_counts()
+            
+            # Create a pie chart of results
+            plt.figure(figsize=(8, 8))
+            colors = ['green', 'red', 'gray']
+            
+            plt.pie(
+                result_counts.values,
+                labels=result_counts.index,
+                colors=colors[:len(result_counts)],
+                autopct='%1.1f%%',
+                startangle=140
+            )
+            plt.axis('equal')
+            plt.title('Phân tích kết quả vệ sinh thiết bị')
+            
+            # Save chart for email
+            img_buffer = io.BytesIO()
+            plt.savefig(img_buffer, format='png', dpi=100)
+            img_buffer.seek(0)
+            
+            plt.close()  # Close the plot to avoid warnings
+            return img_buffer
+        else:
+            return None
+    
+    except Exception as e:
+        print(f"Lỗi khi tạo biểu đồ kết quả: {str(e)}")
+        return None
+
+# 9. Enhanced function to send email report with actual results
 def send_email_report(updated_values):
     print("Đang chuẩn bị gửi email báo cáo...")
     
@@ -351,8 +468,9 @@ def send_email_report(updated_values):
     
     if due_rows:
         try:
-            # Create chart
-            img_buffer = create_status_chart(updated_values)
+            # Create charts
+            status_img_buffer = create_status_chart(updated_values)
+            results_img_buffer = create_results_chart()
             
             # Create email
             msg = MIMEMultipart()
@@ -441,12 +559,20 @@ def send_email_report(updated_values):
             # Attach HTML
             msg.attach(MIMEText(html_content, "html", "utf-8"))
             
-            # Attach chart if available
-            if img_buffer:
+            # Attach status chart if available
+            if status_img_buffer:
                 part = MIMEBase('application', 'octet-stream')
-                part.set_payload(img_buffer.read())
+                part.set_payload(status_img_buffer.read())
                 encoders.encode_base64(part)
                 part.add_header('Content-Disposition', 'attachment; filename="cleaning_status.png"')
+                msg.attach(part)
+                
+            # Attach results chart if available
+            if results_img_buffer:
+                part = MIMEBase('application', 'octet-stream')
+                part.set_payload(results_img_buffer.read())
+                encoders.encode_base64(part)
+                part.add_header('Content-Disposition', 'attachment; filename="cleaning_results.png"')
                 msg.attach(part)
             
             # Send email using environment variable for password
@@ -466,7 +592,7 @@ def send_email_report(updated_values):
         print("Không có thiết bị đến hạn/quá hạn, không gửi email.")
         return True
 
-# 8. Main function to run everything
+# 10. Main function to run everything
 def run_update():
     print("Bắt đầu cập nhật hệ thống vệ sinh thiết bị...")
     
@@ -487,5 +613,8 @@ def run_update():
 if __name__ == "__main__":
     run_update()
 
-# Example: How to add a cleaning record
-# add_cleaning_record("Khu vực Cốt", "Bồn A1", "CIP 1", "60", "2025-02-25", "Nguyen Van A")
+# Example: How to add a cleaning record with result
+# add_cleaning_record("Khu vực Cốt", "Bồn A1", "CIP 1", "60", "2025-02-25", "Nguyen Van A", "Đạt", "Vệ sinh đúng quy trình")
+
+# Example: How to update an existing cleaning result
+# update_cleaning_result("Bồn A1", "2025-02-25", "Không đạt", "Cần vệ sinh lại")
