@@ -6,7 +6,6 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from google.oauth2.credentials import Credentials
 from datetime import datetime, timedelta
 import pandas as pd
-import matplotlib.pyplot as plt
 import io
 import smtplib
 from email.mime.text import MIMEText
@@ -294,235 +293,133 @@ def update_periodic_testing_dates():
         
     except Exception as e:
         print(f"Error updating periodic testing dates: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return None
 
-# 3. Function to create a visualization of expiry status
-def create_expiry_chart(expired_count, expiring_soon_count, missing_test_date_count):
-    try:
-        plt.figure(figsize=(12, 6))
-        
-        # Create bar chart of expiry status
-        labels = ['Đã hết hạn', 'Sắp hết hạn (7 ngày)', 'Thiếu ngày kiểm định kỳ']
-        counts = [expired_count, expiring_soon_count, missing_test_date_count]
-        colors = ['red', 'orange', 'blue']
-        
-        plt.bar(labels, counts, color=colors)
-        plt.title('Trạng thái kiểm định kỳ NVL')
-        plt.ylabel('Số lượng NVL')
-        plt.grid(axis='y', linestyle='--', alpha=0.7)
-        
-        # Add count labels on top of each bar
-        for i, count in enumerate(counts):
-            plt.text(i, count + 0.5, str(count), ha='center')
-        
-        # Save chart to buffer
-        img_buffer = io.BytesIO()
-        plt.savefig(img_buffer, format='png', dpi=100)
-        img_buffer.seek(0)
-        
-        plt.close()  # Close the plot to avoid warnings
-        return img_buffer
-        
-    except Exception as e:
-        print(f"Error creating expiry chart: {str(e)}")
-        return None
-
-# NEW FUNCTION: Create Excel report with all data
-def create_excel_report(report_data):
-    print("Creating Excel report file...")
+# Simplified Excel report creation
+def create_excel_file(report_data):
+    print("Creating Excel file...")
     
     try:
-        # Create Excel writer
-        excel_buffer = io.BytesIO()
+        # Create temp file path for Excel
+        report_date = datetime.today().strftime("%Y%m%d")
+        file_path = f"NVL_Periodic_Testing_Report_{report_date}.xlsx"
         
-        # Make sure pandas and xlsxwriter are properly installed and imported
-        with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
-            # Write each category to a separate sheet
+        # Create Excel with multiple sheets using ExcelWriter
+        with pd.ExcelWriter(file_path, engine='xlsxwriter') as writer:
             workbook = writer.book
             
-            # Write expired items
+            # Define formats
+            header_formats = {
+                'expired': workbook.add_format({
+                    'bold': True, 'bg_color': '#FFC7CE', 'font_color': '#9C0006', 'border': 1
+                }),
+                'expiring': workbook.add_format({
+                    'bold': True, 'bg_color': '#FFEB9C', 'font_color': '#9C6500', 'border': 1
+                }),
+                'missing': workbook.add_format({
+                    'bold': True, 'bg_color': '#DBEEF4', 'font_color': '#2F75B5', 'border': 1
+                }),
+                'all': workbook.add_format({
+                    'bold': True, 'bg_color': '#D9D9D9', 'border': 1
+                })
+            }
+            
+            # Process expired items
             if report_data['expired']:
+                print(f"Adding {len(report_data['expired'])} expired items")
                 expired_df = pd.DataFrame(report_data['expired'])
-                # Remove any internal tracking columns that shouldn't be in the Excel file
                 if '_test_date_info' in expired_df.columns:
                     expired_df = expired_df.rename(columns={'_test_date_info': 'Ghi chú test'})
                 
+                # Write to Excel
                 expired_df.to_excel(writer, sheet_name='Đã hết hạn', index=False)
                 
-                # Format the expired sheet
+                # Format header
                 worksheet = writer.sheets['Đã hết hạn']
-                
-                # Add red background format for header
-                header_format = workbook.add_format({
-                    'bold': True,
-                    'bg_color': '#FFC7CE',
-                    'font_color': '#9C0006',
-                    'border': 1
-                })
-                
-                # Apply header format
-                for col_num, value in enumerate(expired_df.columns.values):
-                    worksheet.write(0, col_num, value, header_format)
-                
-                # Auto-adjust column width
-                for i, col in enumerate(expired_df.columns):
-                    # Get the max length of the column data
-                    col_len = max([
-                        len(str(x)) for x in expired_df[col].tolist() + [col]
+                for col_num, col_name in enumerate(expired_df.columns):
+                    worksheet.write(0, col_num, col_name, header_formats['expired'])
+                    # Set column width
+                    max_len = max([
+                        len(str(x)) for x in expired_df[col_name].tolist() + [col_name]
                     ]) + 2
-                    worksheet.set_column(i, i, col_len)
+                    worksheet.set_column(col_num, col_num, max_len)
             
-            # Write expiring soon items
+            # Process expiring soon items
             if report_data['expiring_soon']:
+                print(f"Adding {len(report_data['expiring_soon'])} expiring soon items")
                 expiring_df = pd.DataFrame(report_data['expiring_soon'])
-                # Remove any internal tracking columns that shouldn't be in the Excel file
                 if '_test_date_info' in expiring_df.columns:
                     expiring_df = expiring_df.rename(columns={'_test_date_info': 'Ghi chú test'})
                 
+                # Write to Excel
                 expiring_df.to_excel(writer, sheet_name='Sắp hết hạn', index=False)
                 
-                # Format the expiring soon sheet
+                # Format header
                 worksheet = writer.sheets['Sắp hết hạn']
-                
-                # Add yellow background format for header
-                header_format = workbook.add_format({
-                    'bold': True,
-                    'bg_color': '#FFEB9C',
-                    'font_color': '#9C6500',
-                    'border': 1
-                })
-                
-                # Apply header format
-                for col_num, value in enumerate(expiring_df.columns.values):
-                    worksheet.write(0, col_num, value, header_format)
-                
-                # Auto-adjust column width
-                for i, col in enumerate(expiring_df.columns):
-                    # Get the max length of the column data
-                    col_len = max([
-                        len(str(x)) for x in expiring_df[col].tolist() + [col]
+                for col_num, col_name in enumerate(expiring_df.columns):
+                    worksheet.write(0, col_num, col_name, header_formats['expiring'])
+                    # Set column width
+                    max_len = max([
+                        len(str(x)) for x in expiring_df[col_name].tolist() + [col_name]
                     ]) + 2
-                    worksheet.set_column(i, i, col_len)
+                    worksheet.set_column(col_num, col_num, max_len)
             
-            # Write missing test date items
+            # Process missing test date items
             if report_data['missing_test_date']:
+                print(f"Adding {len(report_data['missing_test_date'])} missing test date items")
                 missing_df = pd.DataFrame(report_data['missing_test_date'])
+                
+                # Write to Excel
                 missing_df.to_excel(writer, sheet_name='Thiếu ngày KĐK', index=False)
                 
-                # Format the missing sheet
+                # Format header
                 worksheet = writer.sheets['Thiếu ngày KĐK']
-                
-                # Add blue background format for header
-                header_format = workbook.add_format({
-                    'bold': True,
-                    'bg_color': '#DBEEF4',
-                    'font_color': '#2F75B5',
-                    'border': 1
-                })
-                
-                # Apply header format
-                for col_num, value in enumerate(missing_df.columns.values):
-                    worksheet.write(0, col_num, value, header_format)
-                
-                # Auto-adjust column width
-                for i, col in enumerate(missing_df.columns):
-                    # Get the max length of the column data
-                    col_len = max([
-                        len(str(x)) for x in missing_df[col].tolist() + [col]
+                for col_num, col_name in enumerate(missing_df.columns):
+                    worksheet.write(0, col_num, col_name, header_formats['missing'])
+                    # Set column width
+                    max_len = max([
+                        len(str(x)) for x in missing_df[col_name].tolist() + [col_name]
                     ]) + 2
-                    worksheet.set_column(i, i, col_len)
+                    worksheet.set_column(col_num, col_num, max_len)
             
-            # Write summary with all items
+            # Create a consolidated sheet with all items
             all_rows = []
-            # Add expired rows
-            for row in report_data['expired']:
-                row_copy = row.copy()
-                all_rows.append(row_copy)
-                
-            # Add expiring soon rows
-            for row in report_data['expiring_soon']:
-                row_copy = row.copy()
-                all_rows.append(row_copy)
-                
-            # Add missing test date rows
-            for row in report_data['missing_test_date']:
-                row_copy = row.copy()
-                all_rows.append(row_copy)
-                
+            for category, items in report_data.items():
+                for item in items:
+                    item_copy = item.copy()
+                    all_rows.append(item_copy)
+            
             if all_rows:
+                print(f"Adding {len(all_rows)} total items to summary sheet")
                 all_df = pd.DataFrame(all_rows)
-                # Remove any internal tracking columns that shouldn't be in the Excel file
                 if '_test_date_info' in all_df.columns:
                     all_df = all_df.rename(columns={'_test_date_info': 'Ghi chú test'})
                 
+                # Write to Excel
                 all_df.to_excel(writer, sheet_name='Tất cả', index=False)
                 
-                # Format the summary sheet
+                # Format header
                 worksheet = writer.sheets['Tất cả']
-                
-                # Add format for header
-                header_format = workbook.add_format({
-                    'bold': True,
-                    'bg_color': '#D9D9D9',
-                    'border': 1
-                })
-                
-                # Apply header format
-                for col_num, value in enumerate(all_df.columns.values):
-                    worksheet.write(0, col_num, value, header_format)
-                
-                # Auto-adjust column width
-                for i, col in enumerate(all_df.columns):
-                    # Get the max length of the column data
-                    col_len = max([
-                        len(str(x)) for x in all_df[col].tolist() + [col]
+                for col_num, col_name in enumerate(all_df.columns):
+                    worksheet.write(0, col_num, col_name, header_formats['all'])
+                    # Set column width
+                    max_len = max([
+                        len(str(x)) for x in all_df[col_name].tolist() + [col_name]
                     ]) + 2
-                    worksheet.set_column(i, i, col_len)
+                    worksheet.set_column(col_num, col_num, max_len)
+            
+            # Save workbook
+            print("Excel file saved successfully")
         
-        # Explicitly save and close the workbook
-        writer.close()
-        
-        # Reset buffer position to beginning
-        excel_buffer.seek(0)
-        
-        print("Excel report created successfully!")
-        return excel_buffer
+        return file_path
         
     except Exception as e:
-        print(f"Error creating Excel report: {str(e)}")
+        print(f"Error creating Excel file: {str(e)}")
         import traceback
         traceback.print_exc()
         return None
-
-# Helper function to attach Excel file to email
-def attach_excel_to_email(msg, excel_buffer):
-    try:
-        if excel_buffer:
-            report_date = datetime.today().strftime("%Y%m%d")
-            excel_filename = f"NVL_Periodic_Testing_Report_{report_date}.xlsx"
-            
-            # Get the buffer value before attaching
-            excel_data = excel_buffer.getvalue()
-            
-            # Create attachment
-            attachment = MIMEBase('application', 'vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-            attachment.set_payload(excel_data)
-            encoders.encode_base64(attachment)
-            attachment.add_header('Content-Disposition', f'attachment; filename="{excel_filename}"')
-            
-            # Add attachment to message
-            msg.attach(attachment)
-            
-            print(f"Excel file '{excel_filename}' attached successfully!")
-            return True
-        else:
-            print("No Excel buffer provided, skipping attachment.")
-            return False
-    except Exception as e:
-        print(f"Error attaching Excel file: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return False
 
 # 4. Function to send email report
 def send_email_report(report_data):
@@ -542,15 +439,11 @@ def send_email_report(report_data):
         expiring_soon_rows = report_data['expiring_soon']
         missing_test_date_rows = report_data['missing_test_date']
         
-        # Create chart for visualization
-        chart_buffer = create_expiry_chart(
-            len(expired_rows), 
-            len(expiring_soon_rows), 
-            len(missing_test_date_rows)
-        )
-        
-        # Create Excel report
-        excel_buffer = create_excel_report(report_data)
+        # Create Excel file (local file, not using BytesIO)
+        excel_path = create_excel_file(report_data)
+        if not excel_path:
+            print("Failed to create Excel file")
+            return False
         
         # Create email
         msg = MIMEMultipart()
@@ -736,38 +629,59 @@ def send_email_report(report_data):
         # Attach HTML
         msg.attach(MIMEText(html_content, "html", "utf-8"))
         
-        # Attach chart if available
-        if chart_buffer:
-            try:
-                chart_part = MIMEBase('application', 'octet-stream')
-                chart_part.set_payload(chart_buffer.read())
-                encoders.encode_base64(chart_part)
-                chart_part.add_header('Content-Disposition', 'attachment; filename="periodic_testing_status.png"')
-                msg.attach(chart_part)
-                print("Chart attached successfully")
-            except Exception as e:
-                print(f"Error attaching chart: {str(e)}")
-        
-        # Attach Excel report using the helper function
-        attach_excel_to_email(msg, excel_buffer)
-        
-        # Debug info about attachments
-        print(f"Number of attachments: {len(msg.get_payload()) - 1}")  # Subtract 1 for the HTML content
+        # Attach Excel file
+        try:
+            with open(excel_path, 'rb') as f:
+                # Add file as application/octet-stream
+                part = MIMEBase('application', 'vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+                part.set_payload(f.read())
+                
+                # Encode file in ASCII characters to send by email    
+                encoders.encode_base64(part)
+                
+                # Add header as key/value pair to attachment part
+                part.add_header(
+                    'Content-Disposition',
+                    f'attachment; filename="{os.path.basename(excel_path)}"',
+                )
+                
+                # Add attachment to message
+                msg.attach(part)
+                print(f"Excel file attached successfully: {excel_path}")
+        except Exception as e:
+            print(f"Error attaching Excel file: {str(e)}")
+            import traceback
+            traceback.print_exc()
         
         # Send email
-        with smtplib.SMTP('smtp.gmail.com', 587) as server:
-            server.starttls()
-            email_password = os.environ.get('EMAIL_PASSWORD')
-            if not email_password:
-                print("WARNING: EMAIL_PASSWORD environment variable not set!")
-                return False
+        try:
+            with smtplib.SMTP('smtp.gmail.com', 587) as server:
+                server.starttls()
+                email_password = os.environ.get('EMAIL_PASSWORD')
+                if not email_password:
+                    print("WARNING: EMAIL_PASSWORD environment variable not set!")
+                    return False
                 
-            server.login("hoitkn@msc.masangroup.com", email_password)
-            server.send_message(msg)
+                # Login and send email
+                server.login("hoitkn@msc.masangroup.com", email_password)
+                server.send_message(msg)
+                
+                print("Email report sent successfully with Excel attachment!")
+                
+                # Clean up the local Excel file after sending
+                try:
+                    os.remove(excel_path)
+                    print(f"Temporary Excel file removed: {excel_path}")
+                except Exception as cleanup_e:
+                    print(f"Warning: Could not remove temporary Excel file: {str(cleanup_e)}")
+                    
+                return True
+        except Exception as e:
+            print(f"Error sending email: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return False
             
-        print("Email report sent successfully with Excel attachment!")
-        return True
-        
     except Exception as e:
         print(f"Error sending email report: {str(e)}")
         import traceback
@@ -790,6 +704,8 @@ def run_periodic_testing_monitor():
         return True
     except Exception as e:
         print(f"Error in periodic testing monitoring: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return False
 
 # Main execution code
