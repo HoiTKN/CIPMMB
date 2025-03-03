@@ -81,11 +81,11 @@ def parse_date(date_str):
     if not date_str or date_str.strip() == "":
         return None
     
-    # Clean up the date string
-    date_str = date_str.strip()
+    # Clean up the date string - remove quotes and extra whitespace
+    date_str = date_str.strip().strip("'").strip('"')
     
     # First try with two-digit year formats
-    date_formats_short = ['%d/%m/%y', '%d-%m-%y']
+    date_formats_short = ['%d/%m/%y', '%m/%d/%y', '%d-%m-%y']
     for fmt in date_formats_short:
         try:
             date = datetime.strptime(date_str, fmt)
@@ -100,12 +100,24 @@ def parse_date(date_str):
             continue
             
     # Then try with four-digit year formats
-    date_formats_long = ['%d/%m/%Y', '%Y-%m-%d', '%B %d, %Y', '%d-%m-%Y']
+    date_formats_long = ['%d/%m/%Y', '%m/%d/%Y', '%Y-%m-%d', '%B %d, %Y', '%d-%m-%Y']
     for fmt in date_formats_long:
         try:
             return datetime.strptime(date_str, fmt)
         except ValueError:
             continue
+    
+    # Try American date format with single-digit month
+    try:
+        parts = date_str.split('/')
+        if len(parts) == 3:
+            month, day, year = int(parts[0]), int(parts[1]), int(parts[2])
+            if 1 <= month <= 12 and 1 <= day <= 31:
+                if year < 100:
+                    year = 2000 + year if year < 30 else 1900 + year
+                return datetime(year, month, day)
+    except Exception:
+        pass
             
     print(f"Could not parse date: {date_str}")
     return None
@@ -298,6 +310,7 @@ def update_periodic_testing_dates():
         return None
 
 # Simplified Excel report creation
+# Modified create_excel_file function
 def create_excel_file(report_data):
     print("Creating Excel file...")
     
@@ -306,26 +319,17 @@ def create_excel_file(report_data):
         report_date = datetime.today().strftime("%Y%m%d")
         file_path = f"NVL_Periodic_Testing_Report_{report_date}.xlsx"
         
+        # Try to determine which Excel engine is available
+        excel_engine = 'openpyxl'  # Default fallback
+        try:
+            import xlsxwriter
+            excel_engine = 'xlsxwriter'
+            print(f"Using {excel_engine} engine for Excel creation")
+        except ImportError:
+            print(f"xlsxwriter not found, using {excel_engine} engine instead")
+            
         # Create Excel with multiple sheets using ExcelWriter
-        with pd.ExcelWriter(file_path, engine='xlsxwriter') as writer:
-            workbook = writer.book
-            
-            # Define formats
-            header_formats = {
-                'expired': workbook.add_format({
-                    'bold': True, 'bg_color': '#FFC7CE', 'font_color': '#9C0006', 'border': 1
-                }),
-                'expiring': workbook.add_format({
-                    'bold': True, 'bg_color': '#FFEB9C', 'font_color': '#9C6500', 'border': 1
-                }),
-                'missing': workbook.add_format({
-                    'bold': True, 'bg_color': '#DBEEF4', 'font_color': '#2F75B5', 'border': 1
-                }),
-                'all': workbook.add_format({
-                    'bold': True, 'bg_color': '#D9D9D9', 'border': 1
-                })
-            }
-            
+        with pd.ExcelWriter(file_path, engine=excel_engine) as writer:
             # Process expired items
             if report_data['expired']:
                 print(f"Adding {len(report_data['expired'])} expired items")
@@ -336,15 +340,27 @@ def create_excel_file(report_data):
                 # Write to Excel
                 expired_df.to_excel(writer, sheet_name='Đã hết hạn', index=False)
                 
-                # Format header
-                worksheet = writer.sheets['Đã hết hạn']
-                for col_num, col_name in enumerate(expired_df.columns):
-                    worksheet.write(0, col_num, col_name, header_formats['expired'])
-                    # Set column width
-                    max_len = max([
-                        len(str(x)) for x in expired_df[col_name].tolist() + [col_name]
-                    ]) + 2
-                    worksheet.set_column(col_num, col_num, max_len)
+                # Format header if xlsxwriter is available
+                if excel_engine == 'xlsxwriter':
+                    workbook = writer.book
+                    worksheet = writer.sheets['Đã hết hạn']
+                    
+                    # Add red background format for header
+                    header_format = workbook.add_format({
+                        'bold': True,
+                        'bg_color': '#FFC7CE',
+                        'font_color': '#9C0006',
+                        'border': 1
+                    })
+                    
+                    # Apply header format
+                    for col_num, col_name in enumerate(expired_df.columns):
+                        worksheet.write(0, col_num, col_name, header_format)
+                        # Set column width
+                        max_len = max([
+                            len(str(x)) for x in expired_df[col_name].tolist() + [col_name]
+                        ]) + 2
+                        worksheet.set_column(col_num, col_num, max_len)
             
             # Process expiring soon items
             if report_data['expiring_soon']:
@@ -356,15 +372,26 @@ def create_excel_file(report_data):
                 # Write to Excel
                 expiring_df.to_excel(writer, sheet_name='Sắp hết hạn', index=False)
                 
-                # Format header
-                worksheet = writer.sheets['Sắp hết hạn']
-                for col_num, col_name in enumerate(expiring_df.columns):
-                    worksheet.write(0, col_num, col_name, header_formats['expiring'])
-                    # Set column width
-                    max_len = max([
-                        len(str(x)) for x in expiring_df[col_name].tolist() + [col_name]
-                    ]) + 2
-                    worksheet.set_column(col_num, col_num, max_len)
+                # Format header if xlsxwriter is available
+                if excel_engine == 'xlsxwriter':
+                    worksheet = writer.sheets['Sắp hết hạn']
+                    
+                    # Add yellow background format for header
+                    header_format = workbook.add_format({
+                        'bold': True,
+                        'bg_color': '#FFEB9C',
+                        'font_color': '#9C6500',
+                        'border': 1
+                    })
+                    
+                    # Apply header format
+                    for col_num, col_name in enumerate(expiring_df.columns):
+                        worksheet.write(0, col_num, col_name, header_format)
+                        # Set column width
+                        max_len = max([
+                            len(str(x)) for x in expiring_df[col_name].tolist() + [col_name]
+                        ]) + 2
+                        worksheet.set_column(col_num, col_num, max_len)
             
             # Process missing test date items
             if report_data['missing_test_date']:
@@ -374,15 +401,26 @@ def create_excel_file(report_data):
                 # Write to Excel
                 missing_df.to_excel(writer, sheet_name='Thiếu ngày KĐK', index=False)
                 
-                # Format header
-                worksheet = writer.sheets['Thiếu ngày KĐK']
-                for col_num, col_name in enumerate(missing_df.columns):
-                    worksheet.write(0, col_num, col_name, header_formats['missing'])
-                    # Set column width
-                    max_len = max([
-                        len(str(x)) for x in missing_df[col_name].tolist() + [col_name]
-                    ]) + 2
-                    worksheet.set_column(col_num, col_num, max_len)
+                # Format header if xlsxwriter is available
+                if excel_engine == 'xlsxwriter':
+                    worksheet = writer.sheets['Thiếu ngày KĐK']
+                    
+                    # Add blue background format for header
+                    header_format = workbook.add_format({
+                        'bold': True,
+                        'bg_color': '#DBEEF4',
+                        'font_color': '#2F75B5',
+                        'border': 1
+                    })
+                    
+                    # Apply header format
+                    for col_num, col_name in enumerate(missing_df.columns):
+                        worksheet.write(0, col_num, col_name, header_format)
+                        # Set column width
+                        max_len = max([
+                            len(str(x)) for x in missing_df[col_name].tolist() + [col_name]
+                        ]) + 2
+                        worksheet.set_column(col_num, col_num, max_len)
             
             # Create a consolidated sheet with all items
             all_rows = []
@@ -400,19 +438,27 @@ def create_excel_file(report_data):
                 # Write to Excel
                 all_df.to_excel(writer, sheet_name='Tất cả', index=False)
                 
-                # Format header
-                worksheet = writer.sheets['Tất cả']
-                for col_num, col_name in enumerate(all_df.columns):
-                    worksheet.write(0, col_num, col_name, header_formats['all'])
-                    # Set column width
-                    max_len = max([
-                        len(str(x)) for x in all_df[col_name].tolist() + [col_name]
-                    ]) + 2
-                    worksheet.set_column(col_num, col_num, max_len)
-            
-            # Save workbook
-            print("Excel file saved successfully")
+                # Format header if xlsxwriter is available
+                if excel_engine == 'xlsxwriter':
+                    worksheet = writer.sheets['Tất cả']
+                    
+                    # Add format for header
+                    header_format = workbook.add_format({
+                        'bold': True,
+                        'bg_color': '#D9D9D9',
+                        'border': 1
+                    })
+                    
+                    # Apply header format
+                    for col_num, col_name in enumerate(all_df.columns):
+                        worksheet.write(0, col_num, col_name, header_format)
+                        # Set column width
+                        max_len = max([
+                            len(str(x)) for x in all_df[col_name].tolist() + [col_name]
+                        ]) + 2
+                        worksheet.set_column(col_num, col_num, max_len)
         
+        print("Excel file saved successfully")
         return file_path
         
     except Exception as e:
