@@ -354,7 +354,7 @@ def send_email_report(report_data):
         msg['Subject'] = f'Báo cáo kiểm định kỳ NVL - {datetime.today().strftime("%d/%m/%Y")}'
         msg['From'] = 'hoitkn@msc.masangroup.com'
         
-        recipients = ["hoitkn@msc.masangroup.com", "qanvlmb@msc.masangroup.com"]
+        recipients = ["hoitkn@msc.masangroup.com", "qanvlmb@msc.masangroup.com", "qakstlmb@msc.masangroup.com", "thangtv@msc.masangroup.com"]
         msg['To'] = ", ".join(recipients)
         
         # HTML content
