@@ -1,8 +1,7 @@
 name: Run Raw Material Testing Monitor
-
 on:
   schedule:
-    # Run weekly on Monday at 8:00 AM UTC (adjust as needed)
+    # Run weekly on Monday at 2:00 AM UTC (9:00 AM Vietnam time)
     - cron: '0 2 * * 1'
   workflow_dispatch:  # Allows manual triggering
 
