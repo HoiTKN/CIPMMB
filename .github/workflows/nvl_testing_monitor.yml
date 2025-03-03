@@ -21,7 +21,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install gspread pandas matplotlib google-auth google-auth-oauthlib google-auth-httplib2
+        pip install gspread pandas matplotlib google-auth google-auth-oauthlib google-auth-httplib2 xlsxwriter
         
     - name: Set up authentication
       run: |
