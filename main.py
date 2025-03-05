@@ -617,7 +617,7 @@ def send_email_report(updated_values):
             msg['Subject'] = f'Báo cáo vệ sinh thiết bị - {datetime.today().strftime("%d/%m/%Y")}'
             msg['From'] = 'hoitkn@msc.masangroup.com'
             
-            recipients = ["hoitkn@msc.masangroup.com", "mmb-ktcncsd@msc.masangroup.com","haont1@msc.masangroup.com","datnd@msc.masangroup.com","chungnt2@msc.masangroup.com","luannt4@msc.masangroup.com","quangnd2@msc.masangroup.com"]
+            recipients = ["hoitkn@msc.masangroup.com", "mmb-ktcncsd@msc.masangroup.com","haont1@msc.masangroup.com","datnd@msc.masangroup.com","chungnt2@msc.masangroup.com","luannt4@msc.masangroup.com","quangnd2@msc.masangroup.com","haitm1@msc.masangroup.com",]
             msg['To'] = ", ".join(recipients)
             
             # Prepare data for email summary
