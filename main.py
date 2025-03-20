@@ -652,7 +652,7 @@ def send_email_report(updated_values):
                 send_area_specific_email(
                     other_area_rows, 
                     other_recipients, 
-                    "Các khu vực khác", 
+                    "Khu vực muối, cốt, chế biến mắm", 
                     status_img_buffer, 
                     results_img_buffer
                 )
