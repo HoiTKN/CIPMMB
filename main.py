@@ -599,7 +599,7 @@ def create_results_chart():
         print(f"Lỗi khi tạo biểu đồ kết quả: {str(e)}")
         return None
 
-# 10. Enhanced function to send email report with product status information
+# Modified send_email_report function with area-based email filtering
 def send_email_report(updated_values):
     print("Đang chuẩn bị gửi email báo cáo...")
     
@@ -612,133 +612,50 @@ def send_email_report(updated_values):
             status_img_buffer = create_status_chart(updated_values)
             results_img_buffer = create_results_chart()
             
-            # Create email
-            msg = MIMEMultipart()
-            msg['Subject'] = f'Báo cáo vệ sinh thiết bị - {datetime.today().strftime("%d/%m/%Y")}'
-            msg['From'] = 'hoitkn@msc.masangroup.com'
+            # Split the devices by area
+            ro_station_rows = [row for row in due_rows if row[0] == 'Trạm RO']
+            other_area_rows = [row for row in due_rows if row[0] != 'Trạm RO']
             
-            recipients = ["hoitkn@msc.masangroup.com", "mmb-ktcncsd@msc.masangroup.com","haont1@msc.masangroup.com","datnd@msc.masangroup.com","chungnt2@msc.masangroup.com","luannt4@msc.masangroup.com","quangnd2@msc.masangroup.com","haitm1@msc.masangroup.com",]
-            msg['To'] = ", ".join(recipients)
+            # Define email recipient lists
+            ro_recipients = [
+                "hoitkn@msc.masangroup.com", 
+                "mmb-ktcncsd@msc.masangroup.com", 
+                "thinnx@msc.masangroup.com", 
+                "mmb-baotri-utilities@msc.masangroup.com", 
+                "binhnt@msc.masangroup.com", 
+                "toandv@msc.masangroup.com"
+            ]
             
-            # Prepare data for email summary
-            empty_tanks = [row for row in due_rows if not row[7].strip()]
-            filled_tanks = [row for row in due_rows if row[7].strip()]
+            other_recipients = [
+                "hoitkn@msc.masangroup.com", 
+                "mmb-ktcncsd@msc.masangroup.com",
+                "haont1@msc.masangroup.com",
+                "datnd@msc.masangroup.com",
+                "chungnt2@msc.masangroup.com",
+                "luannt4@msc.masangroup.com",
+                "quangnd2@msc.masangroup.com",
+                "haitm1@msc.masangroup.com"
+            ]
             
-            # HTML content with product status in a single table
-            html_content = f"""
-            <html>
-            <head>
-                <meta charset="UTF-8">
-                <style>
-                    body {{ font-family: Arial, sans-serif; }}
-                    table {{ border-collapse: collapse; width: 100%; margin-top: 20px; }}
-                    th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
-                    th {{ background-color: #f2f2f2; color: #333; }}
-                    .overdue {{ background-color: #ffcccc; }}
-                    .due-today {{ background-color: #ffeb99; }}
-                    .due-soon {{ background-color: #e6ffcc; }}
-                    .has-product {{ color: #cc0000; font-weight: bold; }}
-                    .empty {{ color: #009900; }}
-                    h2 {{ color: #003366; }}
-                    h3 {{ color: #004d99; margin-top: 25px; }}
-                    .summary {{ margin: 20px 0; }}
-                    .footer {{ margin-top: 30px; font-size: 0.9em; color: #666; }}
-                </style>
-            </head>
-            <body>
-                <h2>Báo cáo vệ sinh thiết bị - {datetime.today().strftime("%d/%m/%Y")}</h2>
-                
-                <div class="summary">
-                    <p><strong>Tổng số thiết bị:</strong> {len(updated_values)}</p>
-                    <p><strong>Thiết bị cần vệ sinh:</strong> {len(due_rows)}</p>
-                    <p><strong>Thiết bị trống có thể vệ sinh ngay:</strong> {len(empty_tanks)}</p>
-                    <p><strong>Thiết bị đang chứa sản phẩm cần lên kế hoạch:</strong> {len(filled_tanks)}</p>
-                </div>
-                
-                <h3>Danh sách thiết bị cần vệ sinh:</h3>
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Khu vực</th>
-                            <th>Thiết bị</th>
-                            <th>Phương pháp</th>
-                            <th>Tần suất (ngày)</th>
-                            <th>Ngày vệ sinh gần nhất (KQ)</th>
-                            <th>Ngày kế hoạch vệ sinh tiếp theo (KH)</th>
-                            <th>Trạng thái</th>
-                            <th>Đang chứa sản phẩm</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-            """
+            # Send RO station email if there are relevant items
+            if ro_station_rows:
+                send_area_specific_email(
+                    ro_station_rows, 
+                    ro_recipients, 
+                    "Trạm RO", 
+                    status_img_buffer, 
+                    results_img_buffer
+                )
             
-            # Add all tanks to the table (both empty and with product)
-            # Sort the rows to prioritize empty tanks first
-            sorted_rows = sorted(due_rows, key=lambda row: 1 if row[7].strip() else 0)
-            
-            for row in sorted_rows:
-                area, device, method, freq_str, last_cleaning, next_plan_str, status, has_product = row
-                
-                # Define CSS class based on status
-                css_class = ""
-                if status == "Quá hạn":
-                    css_class = "overdue"
-                elif status == "Đến hạn":
-                    css_class = "due-today"
-                
-                # Define product status class
-                product_class = "has-product" if has_product.strip() else "empty"
-                
-                html_content += f"""
-                        <tr class="{css_class}">
-                            <td>{area}</td>
-                            <td>{device}</td>
-                            <td>{method}</td>
-                            <td>{freq_str}</td>
-                            <td>{last_cleaning}</td>
-                            <td>{next_plan_str}</td>
-                            <td>{status}</td>
-                            <td class="{product_class}">{has_product}</td>
-                        </tr>
-                """
-            
-            html_content += """
-                    </tbody>
-                </table>
-                
-                <div class="footer">
-                    <p>Vui lòng xem Google Sheets để biết chi tiết và cập nhật trạng thái của các thiết bị.</p>
-                    <p>Email này được tự động tạo bởi hệ thống. Vui lòng không trả lời.</p>
-                </div>
-            </body>
-            </html>
-            """
-            
-            # Attach HTML
-            msg.attach(MIMEText(html_content, "html", "utf-8"))
-            
-            # Attach status chart if available
-            if status_img_buffer:
-                part = MIMEBase('application', 'octet-stream')
-                part.set_payload(status_img_buffer.read())
-                encoders.encode_base64(part)
-                part.add_header('Content-Disposition', 'attachment; filename="cleaning_status.png"')
-                msg.attach(part)
-                
-            # Attach results chart if available
-            if results_img_buffer:
-                part = MIMEBase('application', 'octet-stream')
-                part.set_payload(results_img_buffer.read())
-                encoders.encode_base64(part)
-                part.add_header('Content-Disposition', 'attachment; filename="cleaning_results.png"')
-                msg.attach(part)
-            
-            # Send email using environment variable for password
-            with smtplib.SMTP('smtp.gmail.com', 587) as server:
-                server.starttls()
-                email_password = os.environ.get('EMAIL_PASSWORD')
-                server.login("hoitkn@msc.masangroup.com", email_password)
-                server.send_message(msg)
+            # Send other areas email if there are relevant items
+            if other_area_rows:
+                send_area_specific_email(
+                    other_area_rows, 
+                    other_recipients, 
+                    "Các khu vực khác", 
+                    status_img_buffer, 
+                    results_img_buffer
+                )
                 
             print("Email đã được gửi kèm bảng HTML và biểu đồ.")
             return True
@@ -749,6 +666,147 @@ def send_email_report(updated_values):
     else:
         print("Không có thiết bị đến hạn/quá hạn, không gửi email.")
         return True
+
+# Helper function to send area-specific emails
+def send_area_specific_email(filtered_rows, recipients, area_name, status_img_buffer, results_img_buffer):
+    """
+    Send an email for a specific area with the filtered rows
+    
+    Parameters:
+    filtered_rows (list): List of rows for the specific area
+    recipients (list): List of email recipients
+    area_name (str): Name of the area for the email subject
+    status_img_buffer (BytesIO): Buffer containing the status chart image
+    results_img_buffer (BytesIO): Buffer containing the results chart image
+    """
+    # Create email
+    msg = MIMEMultipart()
+    msg['Subject'] = f'Báo cáo vệ sinh thiết bị - {area_name} - {datetime.today().strftime("%d/%m/%Y")}'
+    msg['From'] = 'hoitkn@msc.masangroup.com'
+    msg['To'] = ", ".join(recipients)
+    
+    # Prepare data for email summary
+    empty_tanks = [row for row in filtered_rows if not row[7].strip()]
+    filled_tanks = [row for row in filtered_rows if row[7].strip()]
+    
+    # HTML content with product status in a single table
+    html_content = f"""
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <style>
+            body {{ font-family: Arial, sans-serif; }}
+            table {{ border-collapse: collapse; width: 100%; margin-top: 20px; }}
+            th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+            th {{ background-color: #f2f2f2; color: #333; }}
+            .overdue {{ background-color: #ffcccc; }}
+            .due-today {{ background-color: #ffeb99; }}
+            .due-soon {{ background-color: #e6ffcc; }}
+            .has-product {{ color: #cc0000; font-weight: bold; }}
+            .empty {{ color: #009900; }}
+            h2 {{ color: #003366; }}
+            h3 {{ color: #004d99; margin-top: 25px; }}
+            .summary {{ margin: 20px 0; }}
+            .footer {{ margin-top: 30px; font-size: 0.9em; color: #666; }}
+        </style>
+    </head>
+    <body>
+        <h2>Báo cáo vệ sinh thiết bị - {area_name} - {datetime.today().strftime("%d/%m/%Y")}</h2>
+        
+        <div class="summary">
+            <p><strong>Tổng số thiết bị cần vệ sinh:</strong> {len(filtered_rows)}</p>
+            <p><strong>Thiết bị trống có thể vệ sinh ngay:</strong> {len(empty_tanks)}</p>
+            <p><strong>Thiết bị đang chứa sản phẩm cần lên kế hoạch:</strong> {len(filled_tanks)}</p>
+        </div>
+        
+        <h3>Danh sách thiết bị cần vệ sinh:</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>Khu vực</th>
+                    <th>Thiết bị</th>
+                    <th>Phương pháp</th>
+                    <th>Tần suất (ngày)</th>
+                    <th>Ngày vệ sinh gần nhất (KQ)</th>
+                    <th>Ngày kế hoạch vệ sinh tiếp theo (KH)</th>
+                    <th>Trạng thái</th>
+                    <th>Đang chứa sản phẩm</th>
+                </tr>
+            </thead>
+            <tbody>
+    """
+    
+    # Add all tanks to the table (both empty and with product)
+    # Sort the rows to prioritize empty tanks first
+    sorted_rows = sorted(filtered_rows, key=lambda row: 1 if row[7].strip() else 0)
+    
+    for row in sorted_rows:
+        area, device, method, freq_str, last_cleaning, next_plan_str, status, has_product = row
+        
+        # Define CSS class based on status
+        css_class = ""
+        if status == "Quá hạn":
+            css_class = "overdue"
+        elif status == "Đến hạn":
+            css_class = "due-today"
+        
+        # Define product status class
+        product_class = "has-product" if has_product.strip() else "empty"
+        
+        html_content += f"""
+                <tr class="{css_class}">
+                    <td>{area}</td>
+                    <td>{device}</td>
+                    <td>{method}</td>
+                    <td>{freq_str}</td>
+                    <td>{last_cleaning}</td>
+                    <td>{next_plan_str}</td>
+                    <td>{status}</td>
+                    <td class="{product_class}">{has_product}</td>
+                </tr>
+        """
+    
+    html_content += """
+            </tbody>
+        </table>
+        
+        <div class="footer">
+            <p>Vui lòng xem Google Sheets để biết chi tiết và cập nhật trạng thái của các thiết bị.</p>
+            <p>Email này được tự động tạo bởi hệ thống. Vui lòng không trả lời.</p>
+        </div>
+    </body>
+    </html>
+    """
+    
+    # Attach HTML
+    msg.attach(MIMEText(html_content, "html", "utf-8"))
+    
+    # Attach status chart if available
+    if status_img_buffer:
+        status_img_buffer.seek(0)  # Reset buffer position to start
+        part = MIMEBase('application', 'octet-stream')
+        part.set_payload(status_img_buffer.read())
+        encoders.encode_base64(part)
+        part.add_header('Content-Disposition', 'attachment; filename="cleaning_status.png"')
+        msg.attach(part)
+        
+    # Attach results chart if available
+    if results_img_buffer:
+        results_img_buffer.seek(0)  # Reset buffer position to start
+        part = MIMEBase('application', 'octet-stream')
+        part.set_payload(results_img_buffer.read())
+        encoders.encode_base64(part)
+        part.add_header('Content-Disposition', 'attachment; filename="cleaning_results.png"')
+        msg.attach(part)
+    
+    # Send email using environment variable for password
+    with smtplib.SMTP('smtp.gmail.com', 587) as server:
+        server.starttls()
+        email_password = os.environ.get('EMAIL_PASSWORD')
+        server.login("hoitkn@msc.masangroup.com", email_password)
+        server.send_message(msg)
+        
+    print(f"Email cho {area_name} đã được gửi đến {len(recipients)} người nhận.")
 
 # 11. Main function to run everything
 def run_update():
