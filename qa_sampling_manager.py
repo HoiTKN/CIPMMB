@@ -1,6 +1,7 @@
 import gspread
 import os
 import json
+import time
 from google.auth.transport.requests import Request
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.oauth2.credentials import Credentials
@@ -140,6 +141,7 @@ def update_sampling_schedule():
     today = datetime.today()
     updated_rows = []
     due_samples = []
+    cells_to_update = []  # For batch updating
     
     # Process each row and calculate next sampling date
     for i, row in enumerate(rows, start=2):  # Start from 2 as row 1 is the header
@@ -196,13 +198,24 @@ def update_sampling_schedule():
                 'row_index': i
             })
         
-        # Update the Next Sampling Plan cell
-        sampling_schedule.update_cell(i, col_indices['ke_hoach'] + 1, next_sampling_str)
+        # Add to batch update instead of immediate update
+        cells_to_update.append(gspread.Cell(i, col_indices['ke_hoach'] + 1, next_sampling_str))
         
         # Store updated row data
         updated_row = list(row)
         updated_row[col_indices['ke_hoach']] = next_sampling_str
         updated_rows.append(updated_row)
+    
+    # Batch update all cells at once to reduce API calls
+    if cells_to_update:
+        # Split into batches of 100 cells to avoid API limits
+        batch_size = 100
+        for i in range(0, len(cells_to_update), batch_size):
+            batch = cells_to_update[i:i+batch_size]
+            sampling_schedule.update_cells(batch)
+            # Add a small delay to avoid hitting rate limits
+            if i + batch_size < len(cells_to_update):
+                time.sleep(1)
         
     print(f"Đã cập nhật {len(updated_rows)} mẫu kiểm tra.")
     print(f"Có {len(due_samples)} mẫu đến hạn cần lấy.")
@@ -279,7 +292,15 @@ def update_sample_history():
     
     # Add new samples to history sheet
     if new_samples:
-        sampling_history.append_rows(new_samples)
+        # Split into smaller batches to avoid API limits
+        batch_size = 100
+        for i in range(0, len(new_samples), batch_size):
+            batch = new_samples[i:i+batch_size]
+            sampling_history.append_rows(batch)
+            # Add a small delay between batches
+            if i + batch_size < len(new_samples):
+                time.sleep(1)
+                
         print(f"Đã thêm {len(new_samples)} ID mẫu mới vào lịch sử.")
     else:
         print("Không tìm thấy ID mẫu mới.")
@@ -447,11 +468,44 @@ def run_update():
     print("Bắt đầu cập nhật lịch lấy mẫu QA...")
     
     try:
-        # Update sampling schedule and get due samples
-        due_samples = update_sampling_schedule()
+        # Add exponential backoff for API rate limiting
+        max_retries = 5
+        retry_count = 0
+        backoff_time = 2  # Starting with 2 seconds
         
-        # Check for new sample IDs and update history
-        update_sample_history()
+        # Update sampling schedule with retry logic
+        while retry_count < max_retries:
+            try:
+                # Update sampling schedule and get due samples
+                due_samples = update_sampling_schedule()
+                break  # Exit the retry loop if successful
+            except gspread.exceptions.APIError as e:
+                if "429" in str(e) and retry_count < max_retries - 1:  # Rate limiting error
+                    retry_count += 1
+                    wait_time = backoff_time * (2 ** retry_count)  # Exponential backoff
+                    print(f"API rate limit hit. Retrying in {wait_time} seconds... (Attempt {retry_count}/{max_retries})")
+                    time.sleep(wait_time)
+                else:
+                    raise  # Re-raise the exception if it's not a rate limit error or we've exceeded retries
+        
+        # Add delay between major operations to avoid rate limits
+        time.sleep(5)
+        
+        # Similar retry logic for sample history update
+        retry_count = 0
+        while retry_count < max_retries:
+            try:
+                # Check for new sample IDs and update history
+                update_sample_history()
+                break
+            except gspread.exceptions.APIError as e:
+                if "429" in str(e) and retry_count < max_retries - 1:
+                    retry_count += 1
+                    wait_time = backoff_time * (2 ** retry_count)
+                    print(f"API rate limit hit. Retrying in {wait_time} seconds... (Attempt {retry_count}/{max_retries})")
+                    time.sleep(wait_time)
+                else:
+                    raise
         
         # Send email notification for due samples
         if due_samples:
