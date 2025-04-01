@@ -21,8 +21,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install gspread google-auth pandas matplotlib
           
-      - name: Run Sample CF
+      - name: Run QA Sampling Update
         env:
           GOOGLE_TOKEN_JSON: ${{ secrets.GOOGLE_TOKEN_JSON }}
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
-        run: python Sample CF.py
+        run: python qa_sampling_manager.py
