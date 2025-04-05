@@ -364,7 +364,6 @@ def send_email_notification(due_samples):
         recipients = [
             "hoitkn@msc.masangroup.com",
             "qatpmbmi@msc.masangroup.com",
-            "ktcnnemmb@msc.masangroup.com"
         ]
         msg['To'] = ", ".join(recipients)
         
