@@ -34,11 +34,6 @@ jobs:
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
         run: python Nem.py
         
-      - name: Upload logs if error
-        if: failure()
-        uses: actions/upload-artifact@v2
-        with:
-          name: execution-logs
-          path: |
-            *.log
-            *.png
+      # Removing the upload-artifact action that's causing issues
+      # If you need to capture logs, consider using a different approach
+      # such as printing them to the console output
