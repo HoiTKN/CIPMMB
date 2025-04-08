@@ -618,7 +618,6 @@ def send_email_report(updated_values):
             
             # Define email recipient lists
             ro_recipients = [
-                "hoitkn@msc.masangroup.com", 
                 "mmb-ktcncsd@msc.masangroup.com", 
                 "thinnx@msc.masangroup.com", 
                 "mmb-baotri-utilities@msc.masangroup.com", 
@@ -628,7 +627,6 @@ def send_email_report(updated_values):
             ]
             
             other_recipients = [
-                "hoitkn@msc.masangroup.com", 
                 "mmb-ktcncsd@msc.masangroup.com",
                 "haont1@msc.masangroup.com",
                 "datnd@msc.masangroup.com",
