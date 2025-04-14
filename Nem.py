@@ -112,7 +112,7 @@ def parse_date(date_str):
             continue
     return None
 
-# 4. Main function to update sampling schedule and find due samples
+# 4. Modified function to update sampling schedule and find due samples AND track all samples
 def update_sampling_schedule(worksheet, check_type="Hóa lý"):
     print(f"Đang cập nhật lịch lấy mẫu {check_type}...")
     
@@ -122,7 +122,7 @@ def update_sampling_schedule(worksheet, check_type="Hóa lý"):
     # Ensure headers exist
     if len(schedule_data) <= 1:
         print(f"Không tìm thấy dữ liệu hoặc không đủ hàng trong bảng {check_type}.")
-        return []
+        return [], []
     
     # Extract header and data rows
     header = schedule_data[0]
@@ -143,6 +143,7 @@ def update_sampling_schedule(worksheet, check_type="Hóa lý"):
     today = datetime.today()
     updated_rows = []
     due_samples = []
+    all_samples = []  # NEW: To track all samples regardless of due date
     cells_to_update = []  # For batch updating
     
     # Process each row and calculate next sampling date
@@ -186,6 +187,22 @@ def update_sampling_schedule(worksheet, check_type="Hóa lý"):
         days_until_next = (next_sampling_date.date() - today.date()).days
         status = ""
         
+        # NEW: Add to all_samples list regardless of due date
+        all_samples.append({
+            'khu_vuc': khu_vuc,
+            'san_pham': san_pham,
+            'line': line,
+            'chi_tieu': chi_tieu,
+            'tan_suat': tan_suat_str,
+            'ngay_kiem_tra': ngay_kiem_tra,
+            'sample_id': sample_id,
+            'ke_hoach': next_sampling_str,
+            'loai_kiem_tra': check_type,
+            'row_index': i,
+            'status': 'Đến hạn' if days_until_next <= 0 else 'Chưa đến hạn'
+        })
+        
+        # Still maintain separate list for due samples
         if days_until_next <= 0:
             status = "Đến hạn"
             due_samples.append({
@@ -224,28 +241,31 @@ def update_sampling_schedule(worksheet, check_type="Hóa lý"):
         
     print(f"Đã cập nhật {len(updated_rows)} mẫu kiểm tra {check_type}.")
     print(f"Có {len(due_samples)} mẫu {check_type} đến hạn cần lấy.")
+    print(f"Tổng số mẫu {check_type} đã được theo dõi: {len(all_samples)}")
     
-    return due_samples
+    # Return both lists - due samples and all samples
+    return due_samples, all_samples
 
-# 5. Function to update the summary report
-def update_summary_report(due_samples):
-    print("Đang cập nhật báo cáo tổng hợp...")
+# 5. NEW: Function to update the complete samples summary report
+def update_complete_summary_report(all_samples):
+    print("Đang cập nhật báo cáo tổng hợp tất cả mẫu...")
     
-    if not due_samples:
-        print("Không có mẫu đến hạn, không cập nhật báo cáo tổng hợp.")
+    if not all_samples:
+        print("Không có mẫu nào, không cập nhật báo cáo tổng hợp.")
         return
     
-    # Define headers for summary sheet
+    # Define headers for complete summary sheet
     headers = ['Khu vực', 'Sản phẩm', 'Line / Xưởng', 'Chỉ tiêu kiểm', 
-               'Tần suất (ngày)', 'Sample ID', 'Ngày kiểm tra', 'Loại kiểm tra']
+               'Tần suất (ngày)', 'Sample ID', 'Ngày kiểm tra', 
+               'Kế hoạch lấy mẫu tiếp theo', 'Loại kiểm tra', 'Trạng thái']
     
     # Clear the summary sheet and add headers
     summary_sheet.clear()
     summary_sheet.append_row(headers)
     
-    # Prepare rows for summary
+    # Prepare rows for complete summary
     summary_rows = []
-    for sample in due_samples:
+    for sample in all_samples:
         summary_rows.append([
             sample['khu_vuc'],
             sample['san_pham'],
@@ -254,7 +274,9 @@ def update_summary_report(due_samples):
             sample['tan_suat'],
             sample['sample_id'],
             sample['ngay_kiem_tra'],
-            sample['loai_kiem_tra']
+            sample['ke_hoach'],
+            sample['loai_kiem_tra'],
+            sample['status']
         ])
     
     # Add rows to summary sheet in batches
@@ -268,8 +290,21 @@ def update_summary_report(due_samples):
                 time.sleep(1)
     
     print(f"Đã cập nhật {len(summary_rows)} mẫu vào báo cáo tổng hợp.")
+    
+    # Apply conditional formatting to highlight due samples
+    try:
+        summary_sheet.format("J2:J1000", {
+            "backgroundColor": {
+                "red": 1.0,
+                "green": 0.8,
+                "blue": 0.8
+            }
+        }, {"textFormat": {"bold": True}}, 
+        condition={"type": "TEXT_EQ", "values": [{"userEnteredValue": "Đến hạn"}]})
+    except Exception as e:
+        print(f"Lỗi khi áp dụng định dạng có điều kiện: {str(e)}")
 
-# 6. Create visualization charts for email
+# 6. Create visualization charts for email (unchanged)
 def create_charts(due_samples):
     try:
         # Create a DataFrame from the samples
@@ -306,7 +341,7 @@ def create_charts(due_samples):
         print(f"Lỗi khi tạo biểu đồ: {str(e)}")
         return None
 
-# 7. Send email notification for due samples
+# 7. Send email notification for due samples (unchanged)
 def send_email_notification(due_samples):
     if not due_samples:
         print("Không có mẫu đến hạn, không gửi email.")
@@ -475,7 +510,7 @@ def send_email_notification(due_samples):
         print(f"Lỗi khi gửi email: {str(e)}")
         return False
 
-# 8. Main function to run everything
+# 8. Modified main function to run everything with complete sample tracking
 def run_update():
     print("Bắt đầu cập nhật lịch lấy mẫu QA...")
     
@@ -486,12 +521,14 @@ def run_update():
         backoff_time = 2  # Starting with 2 seconds
         
         all_due_samples = []
+        all_collected_samples = []  # NEW: collect all samples
         
         # Update Hoa ly sampling schedule with retry logic
         while retry_count < max_retries:
             try:
-                hoa_ly_samples = update_sampling_schedule(hoa_ly_sheet, "Hóa lý")
-                all_due_samples.extend(hoa_ly_samples)
+                hoa_ly_due, hoa_ly_all = update_sampling_schedule(hoa_ly_sheet, "Hóa lý")
+                all_due_samples.extend(hoa_ly_due)
+                all_collected_samples.extend(hoa_ly_all)  # Add all Hoa ly samples
                 break  # Exit the retry loop if successful
             except gspread.exceptions.APIError as e:
                 if "429" in str(e) and retry_count < max_retries - 1:  # Rate limiting error
@@ -509,8 +546,9 @@ def run_update():
         retry_count = 0
         while retry_count < max_retries:
             try:
-                vi_sinh_samples = update_sampling_schedule(vi_sinh_sheet, "Vi sinh")
-                all_due_samples.extend(vi_sinh_samples)
+                vi_sinh_due, vi_sinh_all = update_sampling_schedule(vi_sinh_sheet, "Vi sinh")
+                all_due_samples.extend(vi_sinh_due)
+                all_collected_samples.extend(vi_sinh_all)  # Add all Vi sinh samples
                 break
             except gspread.exceptions.APIError as e:
                 if "429" in str(e) and retry_count < max_retries - 1:
@@ -524,23 +562,22 @@ def run_update():
         # Add delay before updating summary
         time.sleep(5)
         
-        # Update summary report
-        if all_due_samples:
-            retry_count = 0
-            while retry_count < max_retries:
-                try:
-                    update_summary_report(all_due_samples)
-                    break
-                except gspread.exceptions.APIError as e:
-                    if "429" in str(e) and retry_count < max_retries - 1:
-                        retry_count += 1
-                        wait_time = backoff_time * (2 ** retry_count)
-                        print(f"API rate limit hit. Retrying in {wait_time} seconds... (Attempt {retry_count}/{max_retries})")
-                        time.sleep(wait_time)
-                    else:
-                        raise
+        # Update complete summary report with all samples
+        retry_count = 0
+        while retry_count < max_retries:
+            try:
+                update_complete_summary_report(all_collected_samples)
+                break
+            except gspread.exceptions.APIError as e:
+                if "429" in str(e) and retry_count < max_retries - 1:
+                    retry_count += 1
+                    wait_time = backoff_time * (2 ** retry_count)
+                    print(f"API rate limit hit. Retrying in {wait_time} seconds... (Attempt {retry_count}/{max_retries})")
+                    time.sleep(wait_time)
+                else:
+                    raise
         
-        # Send email notification for due samples
+        # Send email notification for due samples (unchanged)
         if all_due_samples:
             send_email_notification(all_due_samples)
         
