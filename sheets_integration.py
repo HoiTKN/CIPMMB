@@ -2,9 +2,11 @@ import pandas as pd
 import re
 from datetime import datetime, time
 import gspread
-from google.oauth2.service_account import Credentials
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
 import os
 import sys
+import json
 
 # Define the scopes
 SCOPES = [
@@ -13,20 +15,34 @@ SCOPES = [
 ]
 
 def authenticate():
-    """Authenticate to Google API using service account credentials"""
+    """Authenticate to Google API using OAuth token (matching your existing scripts)"""
     try:
-        # In GitHub Actions, we'll use secrets stored as environment variables
-        if os.environ.get('GOOGLE_CREDENTIALS'):
-            # Write the credentials JSON to a temporary file
-            with open('credentials.json', 'w') as f:
-                f.write(os.environ.get('GOOGLE_CREDENTIALS'))
+        print("Attempting OAuth authentication...")
+        creds = None
+        
+        # Check if GOOGLE_TOKEN_JSON environment variable exists
+        if os.environ.get('GOOGLE_TOKEN_JSON'):
+            print("Found GOOGLE_TOKEN_JSON, writing to file...")
+            # Write the token JSON to a file
+            with open('token.json', 'w') as f:
+                f.write(os.environ.get('GOOGLE_TOKEN_JSON'))
+                
+            # Load credentials from the token file
+            creds = Credentials.from_authorized_user_file('token.json', SCOPES)
             
-            # Use the credentials file
-            creds = Credentials.from_service_account_file('credentials.json', scopes=SCOPES)
+            # Refresh the token if needed
+            if creds and creds.expired and creds.refresh_token:
+                print("Token expired, refreshing...")
+                creds.refresh(Request())
+                # Save the refreshed token
+                with open('token.json', 'w') as token:
+                    token.write(creds.to_json())
+            
             return gspread.authorize(creds)
         else:
-            print("Error: No GOOGLE_CREDENTIALS environment variable found.")
+            print("Error: No GOOGLE_TOKEN_JSON environment variable found.")
             sys.exit(1)
+            
     except Exception as e:
         print(f"Authentication error: {str(e)}")
         sys.exit(1)
