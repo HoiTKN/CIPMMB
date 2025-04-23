@@ -26,5 +26,5 @@ jobs:
           
       - name: Run sheets integration script
         env:
-          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_TOKEN_JSON }}
         run: python sheets_integration.py
