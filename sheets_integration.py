@@ -2,11 +2,11 @@ import pandas as pd
 import re
 from datetime import datetime, time
 import gspread
-from google.oauth2.credentials import Credentials
-from google.auth.transport.requests import Request
 import os
 import sys
 import json
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
 
 # Define the scopes
 SCOPES = [
@@ -15,36 +15,48 @@ SCOPES = [
 ]
 
 def authenticate():
-    """Authenticate to Google API using OAuth token (matching your existing scripts)"""
+    """Authentication using OAuth token - exactly matching your other scripts"""
     try:
-        print("Attempting OAuth authentication...")
+        print("Starting OAuth authentication process...")
         creds = None
         
-        # Check if GOOGLE_TOKEN_JSON environment variable exists
-        if os.environ.get('GOOGLE_TOKEN_JSON'):
-            print("Found GOOGLE_TOKEN_JSON, writing to file...")
-            # Write the token JSON to a file
+        # Check if token.json exists first
+        if os.path.exists('token.json'):
+            print("Loading credentials from existing token.json file")
+            creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+        # Otherwise create it from the environment variable
+        elif os.environ.get('GOOGLE_TOKEN_JSON'):
+            print("Creating token.json from GOOGLE_TOKEN_JSON environment variable")
             with open('token.json', 'w') as f:
                 f.write(os.environ.get('GOOGLE_TOKEN_JSON'))
-                
-            # Load credentials from the token file
             creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-            
-            # Refresh the token if needed
-            if creds and creds.expired and creds.refresh_token:
-                print("Token expired, refreshing...")
-                creds.refresh(Request())
-                # Save the refreshed token
-                with open('token.json', 'w') as token:
-                    token.write(creds.to_json())
-            
-            return gspread.authorize(creds)
         else:
-            print("Error: No GOOGLE_TOKEN_JSON environment variable found.")
+            print("Error: No token.json file or GOOGLE_TOKEN_JSON environment variable found")
             sys.exit(1)
-            
+        
+        # Refresh token if expired
+        if creds and creds.expired and creds.refresh_token:
+            print("Token expired, refreshing...")
+            creds.refresh(Request())
+            with open('token.json', 'w') as token:
+                token.write(creds.to_json())
+                
+        # Return authorized client
+        return gspread.authorize(creds)
+    
     except Exception as e:
         print(f"Authentication error: {str(e)}")
+        # Print more details to help debug
+        if os.environ.get('GOOGLE_TOKEN_JSON'):
+            token_json = os.environ.get('GOOGLE_TOKEN_JSON')
+            print(f"Token starts with: {token_json[:20]}...")
+            print(f"Token length: {len(token_json)}")
+            try:
+                # Try to parse as JSON to see if it's valid
+                token_data = json.loads(token_json)
+                print(f"Token contains keys: {', '.join(token_data.keys())}")
+            except json.JSONDecodeError:
+                print("Token is not valid JSON")
         sys.exit(1)
 
 def extract_production_info(text):
