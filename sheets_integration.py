@@ -46,17 +46,6 @@ def authenticate():
     
     except Exception as e:
         print(f"Authentication error: {str(e)}")
-        # Print more details to help debug
-        if os.environ.get('GOOGLE_TOKEN_JSON'):
-            token_json = os.environ.get('GOOGLE_TOKEN_JSON')
-            print(f"Token starts with: {token_json[:20]}...")
-            print(f"Token length: {len(token_json)}")
-            try:
-                # Try to parse as JSON to see if it's valid
-                token_data = json.loads(token_json)
-                print(f"Token contains keys: {', '.join(token_data.keys())}")
-            except json.JSONDecodeError:
-                print("Token is not valid JSON")
         sys.exit(1)
 
 def extract_production_info(text):
@@ -382,12 +371,12 @@ def main():
         joined_df_cleaned = joined_df.fillna('')
         data_to_write = [joined_df_cleaned.columns.tolist()] + joined_df_cleaned.values.tolist()
 
-        # Update the worksheet
-        integrated_worksheet.update(values=data_to_write, range_name='A1')
+        # Update the worksheet - FIXED METHOD
+        integrated_worksheet.update('A1', data_to_write)
         print(f"Successfully wrote {len(data_to_write)-1} rows to the destination sheet, sorted by receipt date (newest first)")
 
     except Exception as e:
-        print(f"Error writing to destination sheet: {e}")
+        print(f"Error writing to destination sheet: {str(e)}")
         sys.exit(1)
 
 if __name__ == "__main__":
