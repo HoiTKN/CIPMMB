@@ -286,6 +286,19 @@ def main():
 
     print(f"Retrieved {len(knkh_df)} KNKH records and {len(aql_df)} AQL records")
 
+    # Standardize dates first for filtering
+    knkh_df['Ngày SX_std'] = knkh_df['Ngày SX'].apply(standardize_date)
+    aql_df['Ngày SX_std'] = aql_df['Ngày SX'].apply(standardize_date)
+    
+    # Create filter date (March 1, 2025)
+    filter_date = pd.to_datetime('2025-03-01')
+    
+    # Filter both DataFrames to only include data from March 1, 2025 onwards
+    knkh_df = knkh_df[knkh_df['Ngày SX_std'] >= filter_date]
+    aql_df = aql_df[aql_df['Ngày SX_std'] >= filter_date]
+    
+    print(f"After date filtering: {len(knkh_df)} KNKH records and {len(aql_df)} AQL records")
+
     # Apply data processing steps
     # Step 2: Extract time, line, and machine information
     knkh_df[['Giờ_extracted', 'Line_extracted', 'Máy_extracted']] = knkh_df['Nội dung phản hồi'].apply(
@@ -296,9 +309,7 @@ def main():
     knkh_df['Line_extracted'] = pd.to_numeric(knkh_df['Line_extracted'], errors='coerce')
     knkh_df['Máy_extracted'] = pd.to_numeric(knkh_df['Máy_extracted'], errors='coerce')
 
-    # Step 3: Standardize dates
-    knkh_df['Ngày SX_std'] = knkh_df['Ngày SX'].apply(standardize_date)
-    aql_df['Ngày SX_std'] = aql_df['Ngày SX'].apply(standardize_date)
+    # Step 3: Standardize the receipt date
     knkh_df['Ngày tiếp nhận_std'] = knkh_df['Ngày tiếp nhận'].apply(standardize_date)
 
     # Step 4: Clean item codes
