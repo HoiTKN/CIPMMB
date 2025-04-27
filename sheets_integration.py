@@ -48,22 +48,51 @@ def authenticate():
         print(f"Authentication error: {str(e)}")
         sys.exit(1)
 
+def extract_correct_date(text):
+    """Extract the correct Ngày SX from Nội dung phản hồi"""
+    if not isinstance(text, str):
+        return None
+    
+    # Pattern to find "Ngày SX: DD/MM/YYYY"
+    pattern = r'Ngày SX:\s*(\d{1,2}/\d{1,2}/\d{4})'
+    match = re.search(pattern, text)
+    
+    if match:
+        return match.group(1)  # Return the date exactly as it appears in the text
+    
+    return None
+
 def extract_production_info(text):
     if not isinstance(text, str):
         return None, None, None
 
-    # More flexible patterns to handle variations with spaces
+    # More flexible patterns to handle variations
     patterns = [
+        # Pattern for "(HH:MM DD)" where DD is line number and machine number (two digits)
         r'Nơi SX: I-MBP \((\d{2}:\d{2})\s+(\d)(\d)I\s*\)',
-        r'Nơi SX: I-MBP \((\d{2}:\d{2})\s+(\d)(\d)\s*I\s*\)'
+        r'Nơi SX: I-MBP \((\d{2}:\d{2})\s+(\d)(\d)\s*I\s*\)',
+        # Pattern for "(HH:MM D)" where D is just line number (single digit)
+        r'Nơi SX: I-MBP \((\d{2}:\d{2})\s+(\d)I\s*\)',
+        # Pattern for "(HH:MM DI)" where D is just line number (single digit) 
+        r'Nơi SX: I-MBP \((\d{2}:\d{2})\s+(\d)I\)',
+        # Pattern with optional machine
+        r'Nơi SX: I-MBP \((\d{2}:\d{2})\s+(\d+)(?:(\d))?I?\s*\)'
     ]
     
     for pattern in patterns:
         match = re.search(pattern, text)
         if match:
             production_time = match.group(1)  # HH:MM format
-            line = match.group(2)             # First digit
-            machine = match.group(3)          # Second digit
+            
+            # For patterns with optional machine
+            if len(match.groups()) == 3:
+                line = match.group(2)             # First digit or full number
+                machine = match.group(3) if match.group(3) else None  # Second digit or None
+            else:
+                # For patterns with just line
+                line = match.group(2)
+                machine = None
+            
             return production_time, line, machine
         
     return None, None, None
@@ -285,6 +314,15 @@ def main():
     aql_df = pd.DataFrame(aql_data)
 
     print(f"Retrieved {len(knkh_df)} KNKH records and {len(aql_df)} AQL records")
+
+    # NEW: Extract correct Ngày SX from Nội dung phản hồi and ALWAYS replace the Ngày SX column
+    knkh_df['Ngày SX_extracted'] = knkh_df['Nội dung phản hồi'].apply(extract_correct_date)
+    
+    # Replace the original Ngày SX with the extracted one when available, keeping the exact format
+    knkh_df['Ngày SX'] = knkh_df.apply(
+        lambda row: row['Ngày SX_extracted'] if row['Ngày SX_extracted'] is not None else row['Ngày SX'], 
+        axis=1
+    )
 
     # Standardize dates first for filtering
     knkh_df['Ngày SX_std'] = knkh_df['Ngày SX'].apply(standardize_date)
