@@ -328,10 +328,10 @@ def main():
     knkh_df['Ngày SX_std'] = knkh_df['Ngày SX'].apply(standardize_date)
     aql_df['Ngày SX_std'] = aql_df['Ngày SX'].apply(standardize_date)
     
-    # Create filter date (March 1, 2025)
-    filter_date = pd.to_datetime('2025-03-01')
+    # Create filter date (December 1, 2024)
+    filter_date = pd.to_datetime('2024-12-01')
     
-    # Filter both DataFrames to only include data from March 1, 2025 onwards
+    # Filter both DataFrames to only include data from December 1, 2024 onwards
     knkh_df = knkh_df[knkh_df['Ngày SX_std'] >= filter_date]
     aql_df = aql_df[aql_df['Ngày SX_std'] >= filter_date]
     
@@ -395,8 +395,8 @@ def main():
         'Tên Trưởng ca_matched': 'Tên Trưởng ca'
     }, inplace=True)
 
-    # Sort by Ngày tiếp nhận from newest to oldest
-    joined_df = joined_df.sort_values(by='Ngày tiếp nhận_std', ascending=False)
+    # Sort by Mã ticket from largest to smallest
+    joined_df = joined_df.sort_values(by='Mã ticket', ascending=False)
 
     # Remove the standardized date column as it's not needed for output
     joined_df = joined_df.drop(columns=['Ngày tiếp nhận_std'])
@@ -422,7 +422,7 @@ def main():
 
         # Update the worksheet - FIXED METHOD
         integrated_worksheet.update('A1', data_to_write)
-        print(f"Successfully wrote {len(data_to_write)-1} rows to the destination sheet, sorted by receipt date (newest first)")
+        print(f"Successfully wrote {len(data_to_write)-1} rows to the destination sheet, sorted by Mã ticket (largest to smallest)")
 
     except Exception as e:
         print(f"Error writing to destination sheet: {str(e)}")
