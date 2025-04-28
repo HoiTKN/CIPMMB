@@ -1,24 +1,87 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 from datetime import datetime
 import time
 import gspread
 import os
 import json
-import sys
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 
-# Set page configuration
+# Set page configuration with improved styling
 st.set_page_config(
     page_title="Customer Complaint Dashboard",
     page_icon="⚠️",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
+# Custom CSS to improve the look and feel
+st.markdown("""
+<style>
+    .main-header {
+        font-size: 2.5rem;
+        font-weight: 700;
+        color: #1E3A8A;
+        text-align: center;
+        margin-bottom: 1rem;
+    }
+    .sub-header {
+        font-size: 1.8rem;
+        font-weight: 600;
+        color: #1E3A8A;
+        margin-top: 1rem;
+        margin-bottom: 0.5rem;
+    }
+    .metric-card {
+        background-color: #f8f9fa;
+        border-radius: 10px;
+        padding: 20px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
+    .metric-title {
+        font-size: 1.2rem;
+        font-weight: 600;
+        color: #64748b;
+    }
+    .metric-value {
+        font-size: 2.5rem;
+        font-weight: 700;
+        color: #1E3A8A;
+    }
+    .stDataFrame {
+        border-radius: 10px !important;
+        overflow: hidden;
+    }
+    .stDataFrame table {
+        border-collapse: collapse;
+        width: 100%;
+    }
+    .stDataFrame th {
+        background-color: #1E3A8A !important;
+        color: white !important;
+        font-weight: 600;
+        padding: 12px !important;
+    }
+    .stDataFrame td {
+        padding: 10px !important;
+    }
+    .stDataFrame tr:nth-child(even) {
+        background-color: #f8f9fa;
+    }
+    .sidebar .sidebar-content {
+        background-color: #f8f9fa;
+    }
+    [data-testid="stSidebar"] {
+        background-color: #f8f9fa;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 # Title and description
-st.title("Customer Complaint Dashboard")
+st.markdown('<div class="main-header">Customer Complaint Dashboard</div>', unsafe_allow_html=True)
 st.markdown("Real-time dashboard for monitoring customer complaints in FMCG production")
 
 # Define the scopes
@@ -31,10 +94,9 @@ SCOPES = [
 def authenticate():
     """Authentication using OAuth token"""
     try:
-        debug_expander = st.expander("Authentication Debugging")
+        debug_expander = st.expander("Authentication Status", expanded=False)
         
         with debug_expander:
-            st.markdown("#### OAuth Authentication Status")
             creds = None
             
             # Check if token.json exists first
@@ -107,27 +169,23 @@ def load_data():
         # Open the spreadsheet and get the worksheet
         try:
             spreadsheet = gc.open_by_key(sheet_key)
-            st.success(f"✅ Successfully opened spreadsheet: {spreadsheet.title}")
+            connection_status = st.empty()
+            connection_status.success(f"✅ Successfully opened spreadsheet: {spreadsheet.title}")
             
             # Try to get the "Integrated_Data" worksheet
             try:
                 worksheet = spreadsheet.worksheet('Integrated_Data')
-                st.success(f"✅ Found worksheet: Integrated_Data")
+                connection_status.success(f"✅ Connected to: {spreadsheet.title} - Integrated_Data")
             except gspread.exceptions.WorksheetNotFound:
                 # Fall back to first worksheet if Integrated_Data doesn't exist
                 worksheet = spreadsheet.get_worksheet(0)
-                st.warning(f"⚠️ 'Integrated_Data' worksheet not found. Using '{worksheet.title}' instead.")
+                connection_status.warning(f"⚠️ 'Integrated_Data' worksheet not found. Using '{worksheet.title}' instead.")
             
             # Get all records
             data = worksheet.get_all_records()
-            st.success(f"✅ Retrieved {len(data)} records from worksheet")
             
             # Convert to DataFrame
             df = pd.DataFrame(data)
-            
-            # Display available columns for debugging
-            if not df.empty:
-                st.write("Available columns:", df.columns.tolist())
             
             # Basic data cleaning
             # Convert date columns to datetime if needed
@@ -135,13 +193,23 @@ def load_data():
                 try:
                     df["Production_Month"] = pd.to_datetime(df["Ngày SX"], format="%d/%m/%Y", errors='coerce')
                     df["Production_Month"] = df["Production_Month"].dt.strftime("%m/%Y")
-                    st.success("✅ Successfully created Production_Month column")
                 except Exception as e:
-                    st.warning(f"⚠️ Could not process date column: {e}")
+                    connection_status.warning(f"⚠️ Could not process date column: {e}")
             
             # Make sure numeric columns are properly typed
             if "SL pack/ cây lỗi" in df.columns:
                 df["SL pack/ cây lỗi"] = pd.to_numeric(df["SL pack/ cây lỗi"], errors='coerce').fillna(0)
+            
+            # Ensure Line column is converted to string for consistent filtering
+            if "Line" in df.columns:
+                df["Line"] = df["Line"].astype(str)
+            
+            # Ensure Máy column is converted to string
+            if "Máy" in df.columns:
+                df["Máy"] = df["Máy"].astype(str)
+            
+            # Hide connection status after successful load
+            connection_status.empty()
             
             return df
             
@@ -199,183 +267,229 @@ if df.empty:
     st.stop()
 
 # Create a sidebar for filters
-st.sidebar.header("Filters")
+with st.sidebar:
+    st.markdown("<h2 style='text-align: center; color: #1E3A8A;'>Filters</h2>", unsafe_allow_html=True)
+    
+    # Initialize filtered_df
+    filtered_df = df.copy()
+    
+    # Date filter - if you have a date range
+    if "Production_Month" in df.columns and not df["Production_Month"].isna().all():
+        try:
+            production_months = ["All"] + sorted(df["Production_Month"].dropna().unique().tolist())
+            selected_month = st.selectbox("📅 Select Production Month", production_months)
+            
+            if selected_month != "All":
+                filtered_df = filtered_df[filtered_df["Production_Month"] == selected_month]
+        except Exception as e:
+            st.warning(f"Error in month filter: {e}")
+    
+    # Product filter
+    if "Tên sản phẩm" in df.columns and not df["Tên sản phẩm"].isna().all():
+        try:
+            products = ["All"] + sorted(df["Tên sản phẩm"].dropna().unique().tolist())
+            selected_product = st.selectbox("🍜 Select Product", products)
+            
+            if selected_product != "All":
+                filtered_df = filtered_df[filtered_df["Tên sản phẩm"] == selected_product]
+        except Exception as e:
+            st.warning(f"Error in product filter: {e}")
+    
+    # Line filter
+    if "Line" in df.columns and not df["Line"].isna().all():
+        try:
+            # Ensure Line is treated as string for consistent comparison
+            lines = ["All"] + sorted(filtered_df["Line"].astype(str).dropna().unique().tolist())
+            selected_line = st.selectbox("🏭 Select Production Line", lines)
+            
+            if selected_line != "All":
+                filtered_df = filtered_df[filtered_df["Line"].astype(str) == selected_line]
+        except Exception as e:
+            st.warning(f"Error in line filter: {e}")
+    
+    # Refresh button
+    if st.button("🔄 Refresh Data", use_container_width=True):
+        st.cache_data.clear()
+        st.experimental_rerun()
+    
+    # Show last update time
+    st.markdown(f"**Last updated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    # Add auto-refresh checkbox
+    auto_refresh = st.checkbox("⏱️ Enable Auto-Refresh (30s)", value=False)
 
-# Initialize filtered_df
-filtered_df = df.copy()
-
-# Date filter - if you have a date range
-if "Production_Month" in df.columns and not df["Production_Month"].isna().all():
-    try:
-        production_months = ["All"] + sorted(df["Production_Month"].dropna().unique().tolist())
-        selected_month = st.sidebar.selectbox("Select Production Month", production_months)
-        
-        if selected_month != "All":
-            filtered_df = filtered_df[filtered_df["Production_Month"] == selected_month]
-    except Exception as e:
-        st.sidebar.warning(f"Error in month filter: {e}")
-
-# Product filter
-if "Tên sản phẩm" in df.columns and not df["Tên sản phẩm"].isna().all():
-    try:
-        products = ["All"] + sorted(df["Tên sản phẩm"].dropna().unique().tolist())
-        selected_product = st.sidebar.selectbox("Select Product", products)
-        
-        if selected_product != "All":
-            filtered_df = filtered_df[filtered_df["Tên sản phẩm"] == selected_product]
-    except Exception as e:
-        st.sidebar.warning(f"Error in product filter: {e}")
-
-# Line filter
-if "Line" in df.columns and not df["Line"].isna().all():
-    try:
-        lines = ["All"] + sorted(filtered_df["Line"].dropna().unique().tolist())
-        selected_line = st.sidebar.selectbox("Select Production Line", lines)
-        
-        if selected_line != "All":
-            filtered_df = filtered_df[filtered_df["Line"] == selected_line]
-    except Exception as e:
-        st.sidebar.warning(f"Error in line filter: {e}")
-
-# Refresh button
-if st.sidebar.button("Refresh Data"):
-    st.cache_data.clear()
-    st.experimental_rerun()
-
-# Show last update time
-st.sidebar.markdown(f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-
-# Remove debug information when data is successfully loaded
-st.markdown("---")
+# Clear any residual connection messages
+st.markdown("")
 
 # Main dashboard layout
-col1, col2 = st.columns(2)
+# First row - KPIs
+st.markdown('<div class="sub-header">Complaint Overview</div>', unsafe_allow_html=True)
+col1, col2, col3 = st.columns(3)
 
-# KPIs in the first row
+# KPIs
 with col1:
-    st.subheader("Complaint Summary")
-    
-    # Count unique tickets
     if "Mã ticket" in filtered_df.columns:
         total_complaints = filtered_df["Mã ticket"].nunique()
-        st.metric("Total Complaints", f"{total_complaints}")
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-title">Total Complaints</div>
+            <div class="metric-value">{total_complaints}</div>
+        </div>
+        """, unsafe_allow_html=True)
     else:
-        st.warning("No 'Mã ticket' column found")
-    
-    # Sum of defective packs
+        st.warning("Missing 'Mã ticket' column")
+
+with col2:
     if "SL pack/ cây lỗi" in filtered_df.columns:
         total_defective_packs = filtered_df["SL pack/ cây lỗi"].sum()
-        st.metric("Total Defective Packs", f"{total_defective_packs:,.0f}")
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-title">Total Defective Packs</div>
+            <div class="metric-value">{total_defective_packs:,.0f}</div>
+        </div>
+        """, unsafe_allow_html=True)
     else:
-        st.warning("No 'SL pack/ cây lỗi' column found")
+        st.warning("Missing 'SL pack/ cây lỗi' column")
 
-# Complaints by Product
-with col2:
-    st.subheader("Complaints by Product")
-    
+with col3:
+    if "Tỉnh" in filtered_df.columns:
+        total_provinces = filtered_df["Tỉnh"].nunique()
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-title">Affected Provinces</div>
+            <div class="metric-value">{total_provinces}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.warning("Missing 'Tỉnh' column")
+
+# Second row - Top charts
+st.markdown('<div class="sub-header">Product & Defect Analysis</div>', unsafe_allow_html=True)
+col1, col2 = st.columns(2)
+
+# Complaints by Product - improved visualization
+with col1:
     if "Tên sản phẩm" in filtered_df.columns and "Mã ticket" in filtered_df.columns:
         try:
             product_counts = filtered_df.groupby("Tên sản phẩm")["Mã ticket"].nunique().reset_index()
             product_counts.columns = ["Product", "Complaints"]
-            product_counts = product_counts.sort_values("Complaints", ascending=False)
+            product_counts = product_counts.sort_values("Complaints", ascending=False).head(10)
             
+            # Improved horizontal bar chart for better label readability
             fig = px.bar(
                 product_counts, 
-                x="Product", 
-                y="Complaints",
+                y="Product", 
+                x="Complaints",
                 color="Complaints",
                 color_continuous_scale="Reds",
+                orientation='h',
+                title="Top 10 Products by Complaints",
+                text="Complaints"
             )
-            fig.update_layout(xaxis_title="Product", yaxis_title="Number of Complaints")
+            
+            # Improve layout
+            fig.update_layout(
+                height=400,
+                xaxis_title="Number of Complaints",
+                yaxis_title="",
+                font=dict(size=12),
+                margin=dict(l=20, r=20, t=40, b=20),
+                yaxis=dict(tickfont=dict(size=10))
+            )
+            
+            # Add data labels
+            fig.update_traces(textposition='outside')
+            
             st.plotly_chart(fig, use_container_width=True)
         except Exception as e:
             st.error(f"Error in product chart: {e}")
     else:
         st.warning("Missing columns required for product chart")
 
-# Second row
-col3, col4 = st.columns(2)
-
 # Complaints by Defect Type
-with col3:
-    st.subheader("Complaints by Defect Type")
-    
+with col2:
     if "Tên lỗi" in filtered_df.columns and "Mã ticket" in filtered_df.columns:
         try:
             defect_counts = filtered_df.groupby("Tên lỗi")["Mã ticket"].nunique().reset_index()
             defect_counts.columns = ["Defect Type", "Complaints"]
             defect_counts = defect_counts.sort_values("Complaints", ascending=False)
             
+            # Calculate percentages for better context
+            total = defect_counts['Complaints'].sum()
+            defect_counts['Percentage'] = (defect_counts['Complaints'] / total * 100).round(1)
+            defect_counts['Label'] = defect_counts['Defect Type'] + ' (' + defect_counts['Percentage'].astype(str) + '%)'
+            
+            # Improved pie chart with percentage labels
             fig = px.pie(
                 defect_counts, 
-                names="Defect Type", 
+                names="Label", 
                 values="Complaints",
+                title="Complaints by Defect Type",
                 hole=0.4,
+                color_discrete_sequence=px.colors.qualitative.Bold
             )
+            
+            # Improve layout
+            fig.update_layout(
+                height=400,
+                font=dict(size=12),
+                legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="center", x=0.5),
+                margin=dict(l=20, r=20, t=40, b=80)
+            )
+            
+            # Improve trace display
+            fig.update_traces(textposition='inside', textinfo='percent+label')
+            
             st.plotly_chart(fig, use_container_width=True)
         except Exception as e:
             st.error(f"Error in defect chart: {e}")
     else:
         st.warning("Missing columns required for defect chart")
 
+# Third row - Production metrics
+st.markdown('<div class="sub-header">Production Analysis</div>', unsafe_allow_html=True)
+col1, col2 = st.columns(2)
+
 # Complaints by Line
-with col4:
-    st.subheader("Complaints by Production Line")
-    
+with col1:
     if "Line" in filtered_df.columns and "Mã ticket" in filtered_df.columns:
         try:
             line_counts = filtered_df.groupby("Line")["Mã ticket"].nunique().reset_index()
             line_counts.columns = ["Production Line", "Complaints"]
             line_counts = line_counts.sort_values("Complaints", ascending=False)
             
+            # Improved bar chart
             fig = px.bar(
                 line_counts, 
                 x="Production Line", 
                 y="Complaints",
                 color="Complaints",
                 color_continuous_scale="Blues",
+                title="Complaints by Production Line",
+                text="Complaints"
             )
-            fig.update_layout(xaxis_title="Production Line", yaxis_title="Number of Complaints")
+            
+            # Improve layout
+            fig.update_layout(
+                height=400,
+                xaxis_title="Production Line",
+                yaxis_title="Number of Complaints",
+                font=dict(size=12),
+                margin=dict(l=20, r=20, t=40, b=20),
+                xaxis=dict(tickangle=-45, tickfont=dict(size=10))
+            )
+            
+            # Add data labels
+            fig.update_traces(textposition='outside')
+            
             st.plotly_chart(fig, use_container_width=True)
         except Exception as e:
             st.error(f"Error in line chart: {e}")
     else:
         st.warning("Missing columns required for line chart")
 
-# Third row
-col5, col6 = st.columns(2)
-
-# Complaints by Machine (MDG)
-with col5:
-    st.subheader("Complaints by Machine (MDG)")
-    
-    if "Máy" in filtered_df.columns and "Line" in filtered_df.columns and "Mã ticket" in filtered_df.columns:
-        try:
-            # Create a combined column for line-machine
-            filtered_df["Line_Machine"] = filtered_df["Line"].astype(str) + " - " + filtered_df["Máy"].astype(str)
-            
-            machine_counts = filtered_df.groupby("Line_Machine")["Mã ticket"].nunique().reset_index()
-            machine_counts.columns = ["Line-Machine", "Complaints"]
-            machine_counts = machine_counts.sort_values("Complaints", ascending=False).head(10)  # Top 10
-            
-            fig = px.bar(
-                machine_counts, 
-                x="Line-Machine", 
-                y="Complaints",
-                color="Complaints",
-                color_continuous_scale="Greens",
-            )
-            fig.update_layout(xaxis_title="Line-Machine", yaxis_title="Number of Complaints")
-            st.plotly_chart(fig, use_container_width=True)
-        except Exception as e:
-            st.error(f"Error in machine chart: {e}")
-    else:
-        st.warning("Missing columns required for machine chart")
-
 # Complaints by Production Month
-with col6:
-    st.subheader("Complaints by Production Month")
-    
+with col2:
     if "Production_Month" in filtered_df.columns and "Mã ticket" in filtered_df.columns:
         try:
             month_counts = filtered_df.groupby("Production_Month")["Mã ticket"].nunique().reset_index()
@@ -389,76 +503,158 @@ with col6:
                 # If date sorting fails, use the original order
                 pass
             
+            # Improved line chart
             fig = px.line(
                 month_counts, 
                 x="Production Month", 
                 y="Complaints",
                 markers=True,
+                title="Complaints Trend by Production Month",
+                text="Complaints"
             )
-            fig.update_layout(xaxis_title="Production Month", yaxis_title="Number of Complaints")
+            
+            # Improve layout
+            fig.update_layout(
+                height=400,
+                xaxis_title="Production Month",
+                yaxis_title="Number of Complaints",
+                font=dict(size=12),
+                margin=dict(l=20, r=20, t=40, b=20)
+            )
+            
+            # Customize line
+            fig.update_traces(
+                line=dict(width=3, color='royalblue'),
+                marker=dict(size=10, color='royalblue'),
+                textposition='top center'
+            )
+            
             st.plotly_chart(fig, use_container_width=True)
         except Exception as e:
             st.error(f"Error in month chart: {e}")
     else:
         st.warning("Missing Production_Month column required for month chart")
 
-# Fourth row
-col7, col8 = st.columns(2)
+# Fourth row - Machine and Personnel
+st.markdown('<div class="sub-header">Machine & Personnel Analysis</div>', unsafe_allow_html=True)
+col1, col2 = st.columns(2)
 
-# Complaints by QA
-with col7:
-    st.subheader("Complaints by QA Personnel")
-    
-    if "QA" in filtered_df.columns and "Mã ticket" in filtered_df.columns:
+# Complaints by Machine (MDG)
+with col1:
+    if "Máy" in filtered_df.columns and "Line" in filtered_df.columns and "Mã ticket" in filtered_df.columns:
         try:
+            # Create a combined column for line-machine
+            filtered_df["Line_Machine"] = filtered_df["Line"].astype(str) + " - " + filtered_df["Máy"].astype(str)
+            
+            machine_counts = filtered_df.groupby("Line_Machine")["Mã ticket"].nunique().reset_index()
+            machine_counts.columns = ["Line-Machine", "Complaints"]
+            machine_counts = machine_counts.sort_values("Complaints", ascending=False).head(10)  # Top 10
+            
+            # Improved horizontal bar chart
+            fig = px.bar(
+                machine_counts, 
+                y="Line-Machine", 
+                x="Complaints",
+                color="Complaints",
+                color_continuous_scale="Greens",
+                orientation='h',
+                title="Top 10 Machine-Line Combinations by Complaints",
+                text="Complaints"
+            )
+            
+            # Improve layout
+            fig.update_layout(
+                height=400,
+                xaxis_title="Number of Complaints",
+                yaxis_title="",
+                font=dict(size=12),
+                margin=dict(l=20, r=20, t=40, b=20)
+            )
+            
+            # Add data labels
+            fig.update_traces(textposition='outside')
+            
+            st.plotly_chart(fig, use_container_width=True)
+        except Exception as e:
+            st.error(f"Error in machine chart: {e}")
+    else:
+        st.warning("Missing columns required for machine chart")
+
+# Complaints by QA and Shift Leader
+with col2:
+    try:
+        if "QA" in filtered_df.columns and "Tên Trưởng ca" in filtered_df.columns and "Mã ticket" in filtered_df.columns:
+            # Create a combined personnel analysis
+            # QA Personnel Analysis
             qa_counts = filtered_df.groupby("QA")["Mã ticket"].nunique().reset_index()
-            qa_counts.columns = ["QA Personnel", "Complaints"]
-            qa_counts = qa_counts.sort_values("Complaints", ascending=False)
+            qa_counts.columns = ["Personnel", "Complaints"]
+            qa_counts["Role"] = "QA"
             
-            fig = px.bar(
-                qa_counts, 
-                x="QA Personnel", 
-                y="Complaints",
-                color="Complaints",
-                color_continuous_scale="Purples",
-            )
-            fig.update_layout(xaxis_title="QA Personnel", yaxis_title="Number of Complaints")
-            st.plotly_chart(fig, use_container_width=True)
-        except Exception as e:
-            st.error(f"Error in QA chart: {e}")
-    else:
-        st.warning("Missing columns required for QA chart")
-
-# Complaints by Shift Leader
-with col8:
-    st.subheader("Complaints by Shift Leader")
-    
-    if "Tên Trưởng ca" in filtered_df.columns and "Mã ticket" in filtered_df.columns:
-        try:
+            # Shift Leader Analysis
             leader_counts = filtered_df.groupby("Tên Trưởng ca")["Mã ticket"].nunique().reset_index()
-            leader_counts.columns = ["Shift Leader", "Complaints"]
-            leader_counts = leader_counts.sort_values("Complaints", ascending=False)
+            leader_counts.columns = ["Personnel", "Complaints"]
+            leader_counts["Role"] = "Shift Leader"
             
+            # Combine both dataframes
+            personnel_counts = pd.concat([qa_counts, leader_counts])
+            personnel_counts = personnel_counts.sort_values(["Role", "Complaints"], ascending=[True, False])
+            
+            # Improved grouped bar chart
             fig = px.bar(
-                leader_counts, 
-                x="Shift Leader", 
+                personnel_counts, 
+                x="Personnel", 
                 y="Complaints",
-                color="Complaints",
-                color_continuous_scale="Oranges",
+                color="Role",
+                barmode="group",
+                title="Complaints by Personnel",
+                text="Complaints",
+                color_discrete_map={"QA": "purple", "Shift Leader": "darkred"}
             )
-            fig.update_layout(xaxis_title="Shift Leader", yaxis_title="Number of Complaints")
+            
+            # Improve layout
+            fig.update_layout(
+                height=400,
+                xaxis_title="Personnel",
+                yaxis_title="Number of Complaints",
+                font=dict(size=12),
+                margin=dict(l=20, r=20, t=40, b=20),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+            )
+            
+            # Add data labels
+            fig.update_traces(textposition='outside')
+            
             st.plotly_chart(fig, use_container_width=True)
-        except Exception as e:
-            st.error(f"Error in Shift Leader chart: {e}")
-    else:
-        st.warning("Missing columns required for Shift Leader chart")
+        else:
+            st.warning("Missing columns required for personnel charts")
+    except Exception as e:
+        st.error(f"Error in personnel charts: {e}")
 
-# Detailed complaint data table
-st.subheader("Detailed Complaint Data")
-st.dataframe(filtered_df, use_container_width=True)
+# Detailed complaint data table with improved styling
+st.markdown('<div class="sub-header">Detailed Complaint Data</div>', unsafe_allow_html=True)
+
+# Format the dataframe for better display
+if not filtered_df.empty:
+    try:
+        display_df = filtered_df.copy()
+        
+        # Format date columns if they exist
+        date_columns = ["Ngày SX", "Ngày tiếp nhận"]
+        for col in date_columns:
+            if col in display_df.columns:
+                try:
+                    display_df[col] = pd.to_datetime(display_df[col], errors='coerce').dt.strftime('%d/%m/%Y')
+                except:
+                    pass
+        
+        # Show the dataframe with pagination
+        st.dataframe(display_df.style.set_properties(**{'text-align': 'left'}), use_container_width=True, height=400)
+    except Exception as e:
+        st.error(f"Error displaying data table: {e}")
+else:
+    st.warning("No data available to display")
 
 # Add an auto-refresh mechanism
-if st.sidebar.checkbox("Enable Auto-Refresh (30s)", value=False):
-    st.empty()
+if auto_refresh:
     time.sleep(30)  # Wait for 30 seconds
     st.experimental_rerun()
