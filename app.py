@@ -228,43 +228,6 @@ df = load_data()
 # Check if dataframe is empty
 if df.empty:
     st.warning("⚠️ No data available. Please check your Google Sheet connection.")
-    
-    # Show additional debug information if dataframe is empty
-    st.markdown("### Additional Debug Information")
-    st.markdown("Your dataframe is empty. Here are possible reasons:")
-    
-    st.markdown("1. Authentication failure - Check that your token.json or GOOGLE_TOKEN_JSON is properly configured")
-    st.markdown("2. Worksheet not found - Check that 'Integrated_Data' exists in your spreadsheet")
-    st.markdown("3. Sheet permissions - Make sure your Google Sheet is shared with your Google account")
-    st.markdown("4. Data format - Ensure the data in your spreadsheet is properly formatted")
-    
-    # Add a button to attempt raw data fetch
-    if st.button("Attempt Raw Data Fetch"):
-        try:
-            gc = authenticate()
-            if gc:
-                sheet_key = "1d6uGPbJV6BsOB6XSB1IS3NhfeaMyMBcaQPvOnNg2yA4"
-                spreadsheet = gc.open_by_key(sheet_key)
-                st.write(f"Found spreadsheet: {spreadsheet.title}")
-                
-                # List all worksheets
-                worksheets = spreadsheet.worksheets()
-                st.write(f"Available worksheets in the spreadsheet:")
-                for ws in worksheets:
-                    st.write(f"- {ws.title} (rows: {ws.row_count}, cols: {ws.col_count})")
-                
-                # Try to get the first few rows from the first worksheet
-                first_ws = spreadsheet.get_worksheet(0)
-                values = first_ws.get_all_values()
-                st.write(f"First worksheet '{first_ws.title}' has {len(values)} rows")
-                st.write("First few rows:")
-                for i, row in enumerate(values[:5]):
-                    st.write(f"Row {i}: {row}")
-            else:
-                st.error("Could not authenticate")
-        except Exception as e:
-            st.error(f"Error in raw data fetch: {e}")
-    
     st.stop()
 
 # Create a sidebar for filters
@@ -319,9 +282,6 @@ with st.sidebar:
     # Add auto-refresh checkbox
     auto_refresh = st.checkbox("⏱️ Enable Auto-Refresh (30s)", value=False)
 
-# Clear any residual connection messages
-st.markdown("")
-
 # Main dashboard layout
 # First row - KPIs
 st.markdown('<div class="sub-header">Complaint Overview</div>', unsafe_allow_html=True)
@@ -372,7 +332,7 @@ col1, col2 = st.columns(2)
 with col1:
     if "Tên sản phẩm" in filtered_df.columns and "Mã ticket" in filtered_df.columns and "SL pack/ cây lỗi" in filtered_df.columns:
         try:
-            # Prepare data with both metrics
+            # Group by product and aggregate both metrics
             product_counts = filtered_df.groupby("Tên sản phẩm").agg({
                 "Mã ticket": "nunique",
                 "SL pack/ cây lỗi": "sum"
@@ -380,60 +340,48 @@ with col1:
             product_counts.columns = ["Product", "Complaints", "Defective Packs"]
             product_counts = product_counts.sort_values("Complaints", ascending=False).head(10)
             
-            # Create subplots with two y-axes
-            fig = make_subplots(specs=[[{"secondary_y": True}]])
+            # Create figure with two traces
+            fig = go.Figure()
             
-            # Add bar chart for complaints
-            fig.add_trace(
-                go.Bar(
-                    x=product_counts["Product"],
-                    y=product_counts["Complaints"],
-                    name="Complaints",
-                    marker_color="firebrick",
-                    text=product_counts["Complaints"],
-                    textposition="outside"
+            # Add bars for complaints
+            fig.add_trace(go.Bar(
+                y=product_counts["Product"],
+                x=product_counts["Complaints"],
+                name="Complaints",
+                orientation='h',
+                marker_color='firebrick',
+                text=product_counts["Complaints"],
+                textposition="outside"
+            ))
+            
+            # Add scatter markers for defective packs
+            fig.add_trace(go.Scatter(
+                y=product_counts["Product"],
+                x=product_counts["Defective Packs"],
+                name="Defective Packs",
+                mode="markers",
+                marker=dict(
+                    size=12, 
+                    color='royalblue',
+                    symbol='diamond'
                 ),
-                secondary_y=False
-            )
+                text=product_counts["Defective Packs"].round(0).astype(int),
+                textposition="middle right"
+            ))
             
-            # Add line chart for defective packs
-            fig.add_trace(
-                go.Scatter(
-                    x=product_counts["Product"],
-                    y=product_counts["Defective Packs"],
-                    name="Defective Packs",
-                    mode="lines+markers+text",
-                    text=product_counts["Defective Packs"].round(0).astype(int),
-                    textposition="top center",
-                    line=dict(color="royalblue", width=2),
-                    marker=dict(size=8)
-                ),
-                secondary_y=True
-            )
-            
-            # Update layout and axes
+            # Update layout
             fig.update_layout(
-                title="Top 10 Products by Complaints and Defective Packs",
+                title="Top 10 Products by Complaints",
                 height=400,
-                font=dict(size=12),
-                margin=dict(l=20, r=20, t=40, b=100),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-            )
-            
-            fig.update_xaxes(
-                title_text="Product",
-                tickangle=-45,
-                tickfont=dict(size=10)
-            )
-            
-            fig.update_yaxes(
-                title_text="Number of Complaints",
-                secondary_y=False
-            )
-            
-            fig.update_yaxes(
-                title_text="Number of Defective Packs",
-                secondary_y=True
+                xaxis_title="Count",
+                legend=dict(
+                    orientation="h",
+                    yanchor="bottom",
+                    y=1.02,
+                    xanchor="right",
+                    x=1
+                ),
+                margin=dict(l=20, r=20, t=40, b=20)
             )
             
             st.plotly_chart(fig, use_container_width=True)
@@ -511,60 +459,55 @@ with col1:
             line_counts.columns = ["Production Line", "Complaints", "Defective Packs"]
             line_counts = line_counts.sort_values("Complaints", ascending=False)
             
-            # Create subplots with two y-axes
-            fig = make_subplots(specs=[[{"secondary_y": True}]])
+            # Create figure with two y-axes
+            fig = go.Figure()
             
-            # Add bar chart for complaints
-            fig.add_trace(
-                go.Bar(
-                    x=line_counts["Production Line"],
-                    y=line_counts["Complaints"],
-                    name="Complaints",
-                    marker_color="navy",
-                    text=line_counts["Complaints"],
-                    textposition="outside"
+            # Add bars for complaints
+            fig.add_trace(go.Bar(
+                x=line_counts["Production Line"],
+                y=line_counts["Complaints"],
+                name="Complaints",
+                marker_color="navy",
+                text=line_counts["Complaints"],
+                textposition="outside"
+            ))
+            
+            # Add markers for defective packs
+            fig.add_trace(go.Scatter(
+                x=line_counts["Production Line"],
+                y=line_counts["Defective Packs"],
+                name="Defective Packs",
+                mode="markers",
+                marker=dict(
+                    size=15,
+                    color="orange",
+                    symbol="star"
                 ),
-                secondary_y=False
-            )
+                text=line_counts["Defective Packs"].round(0).astype(int),
+                hovertemplate="Line: %{x}<br>Defective Packs: %{y}<br>%{text}"
+            ))
             
-            # Add line chart for defective packs
-            fig.add_trace(
-                go.Scatter(
-                    x=line_counts["Production Line"],
-                    y=line_counts["Defective Packs"],
-                    name="Defective Packs",
-                    mode="lines+markers+text",
-                    text=line_counts["Defective Packs"].round(0).astype(int),
-                    textposition="top center",
-                    line=dict(color="orange", width=2),
-                    marker=dict(size=8)
-                ),
-                secondary_y=True
-            )
-            
-            # Update layout and axes
+            # Update layout
             fig.update_layout(
                 title="Complaints and Defective Packs by Production Line",
                 height=400,
-                font=dict(size=12),
-                margin=dict(l=20, r=20, t=40, b=20),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                 xaxis=dict(
-                    type='category',  # Using categorical axis type for discrete lines
-                    tickmode='array',
-                    tickvals=line_counts["Production Line"],
-                    ticktext=line_counts["Production Line"]
-                )
-            )
-            
-            fig.update_yaxes(
-                title_text="Number of Complaints",
-                secondary_y=False
-            )
-            
-            fig.update_yaxes(
-                title_text="Number of Defective Packs",
-                secondary_y=True
+                    title="Production Line",
+                    type='category',  # Fixed scale for discrete production lines
+                    categoryorder='array',
+                    categoryarray=line_counts["Production Line"]
+                ),
+                yaxis=dict(
+                    title="Count"
+                ),
+                legend=dict(
+                    orientation="h", 
+                    yanchor="bottom", 
+                    y=1.02, 
+                    xanchor="right", 
+                    x=1
+                ),
+                margin=dict(l=20, r=20, t=40, b=20),
             )
             
             st.plotly_chart(fig, use_container_width=True)
@@ -590,64 +533,52 @@ with col2:
                 month_counts = month_counts.sort_values("Sort_Date")
                 month_counts = month_counts.drop(columns=["Sort_Date"])
             except:
-                # If date sorting fails, use the original order
                 pass
             
-            # Create subplots with two y-axes
-            fig = make_subplots(specs=[[{"secondary_y": True}]])
+            # Create figure
+            fig = go.Figure()
             
-            # Add line chart for complaints
-            fig.add_trace(
-                go.Scatter(
-                    x=month_counts["Production Month"],
-                    y=month_counts["Complaints"],
-                    name="Complaints",
-                    mode="lines+markers+text",
-                    text=month_counts["Complaints"],
-                    textposition="top center",
-                    line=dict(color="royalblue", width=3),
-                    marker=dict(size=10)
-                ),
-                secondary_y=False
-            )
+            # Add line for complaints
+            fig.add_trace(go.Scatter(
+                x=month_counts["Production Month"],
+                y=month_counts["Complaints"],
+                name="Complaints",
+                mode="lines+markers",
+                line=dict(color="royalblue", width=3),
+                marker=dict(size=10, color="royalblue"),
+                text=month_counts["Complaints"],
+                textposition="top center"
+            ))
             
-            # Add line chart for defective packs
-            fig.add_trace(
-                go.Scatter(
-                    x=month_counts["Production Month"],
-                    y=month_counts["Defective Packs"],
-                    name="Defective Packs",
-                    mode="lines+markers+text",
-                    text=month_counts["Defective Packs"].round(0).astype(int),
-                    textposition="top center",
-                    line=dict(color="firebrick", width=2, dash='dot'),
-                    marker=dict(size=8)
-                ),
-                secondary_y=True
-            )
+            # Add bars for defective packs
+            fig.add_trace(go.Bar(
+                x=month_counts["Production Month"],
+                y=month_counts["Defective Packs"],
+                name="Defective Packs",
+                marker_color="rgba(178, 34, 34, 0.7)",
+                text=month_counts["Defective Packs"].round(0).astype(int),
+                textposition="outside"
+            ))
             
-            # Update layout and axes
+            # Update layout
             fig.update_layout(
                 title="Complaints and Defective Packs by Production Month",
                 height=400,
-                font=dict(size=12),
-                margin=dict(l=20, r=20, t=40, b=20),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-            )
-            
-            fig.update_xaxes(
-                title_text="Production Month",
-                tickangle=0
-            )
-            
-            fig.update_yaxes(
-                title_text="Number of Complaints",
-                secondary_y=False
-            )
-            
-            fig.update_yaxes(
-                title_text="Number of Defective Packs",
-                secondary_y=True
+                xaxis=dict(
+                    title="Production Month",
+                    tickangle=0
+                ),
+                yaxis=dict(
+                    title="Count"
+                ),
+                legend=dict(
+                    orientation="h", 
+                    yanchor="bottom", 
+                    y=1.02, 
+                    xanchor="right", 
+                    x=1
+                ),
+                margin=dict(l=20, r=20, t=40, b=20)
             )
             
             st.plotly_chart(fig, use_container_width=True)
@@ -660,7 +591,7 @@ with col2:
 st.markdown('<div class="sub-header">Machine & Personnel Analysis</div>', unsafe_allow_html=True)
 col1, col2 = st.columns(2)
 
-# Complaints by Machine (MDG) with both metrics
+# Complaints by Machine (MDG) - FIXED to prevent secondary_y error
 with col1:
     if "Máy" in filtered_df.columns and "Line" in filtered_df.columns and "Mã ticket" in filtered_df.columns and "SL pack/ cây lỗi" in filtered_df.columns:
         try:
@@ -675,56 +606,47 @@ with col1:
             machine_counts.columns = ["Line-Machine", "Complaints", "Defective Packs"]
             machine_counts = machine_counts.sort_values("Complaints", ascending=False).head(10)  # Top 10
             
-            # Create subplots with two y-axes
-            fig = make_subplots(specs=[[{"secondary_y": True}]])
+            # Create figure
+            fig = go.Figure()
             
-            # Add bar chart for complaints
-            fig.add_trace(
-                go.Bar(
-                    y=machine_counts["Line-Machine"],
-                    x=machine_counts["Complaints"],
-                    name="Complaints",
-                    marker_color="darkgreen",
-                    text=machine_counts["Complaints"],
-                    textposition="outside",
-                    orientation='h'
+            # Add bars for complaints
+            fig.add_trace(go.Bar(
+                y=machine_counts["Line-Machine"],
+                x=machine_counts["Complaints"],
+                name="Complaints",
+                orientation='h',
+                marker_color="darkgreen",
+                text=machine_counts["Complaints"],
+                textposition="outside"
+            ))
+            
+            # Add markers for defective packs
+            fig.add_trace(go.Scatter(
+                y=machine_counts["Line-Machine"],
+                x=machine_counts["Defective Packs"],
+                name="Defective Packs",
+                mode="markers",
+                marker=dict(
+                    size=12,
+                    color="lightgreen",
+                    symbol="circle"
                 ),
-                secondary_y=False
-            )
+                text=machine_counts["Defective Packs"].round(0).astype(int)
+            ))
             
-            # Add bar chart for defective packs
-            fig.add_trace(
-                go.Bar(
-                    y=machine_counts["Line-Machine"],
-                    x=machine_counts["Defective Packs"],
-                    name="Defective Packs",
-                    marker_color="lightgreen",
-                    text=machine_counts["Defective Packs"].round(0).astype(int),
-                    textposition="outside",
-                    orientation='h',
-                    opacity=0.7
-                ),
-                secondary_y=True
-            )
-            
-            # Update layout and axes
+            # Update layout
             fig.update_layout(
                 title="Top 10 Machine-Line Combinations",
                 height=400,
-                font=dict(size=12),
-                margin=dict(l=20, r=20, t=40, b=20),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                barmode='group'
-            )
-            
-            fig.update_xaxes(
-                title_text="Number of Complaints",
-                secondary_y=False
-            )
-            
-            fig.update_xaxes(
-                title_text="Number of Defective Packs",
-                secondary_y=True
+                xaxis_title="Count",
+                legend=dict(
+                    orientation="h",
+                    yanchor="bottom",
+                    y=1.02,
+                    xanchor="right",
+                    x=1
+                ),
+                margin=dict(l=20, r=20, t=40, b=20)
             )
             
             st.plotly_chart(fig, use_container_width=True)
@@ -733,7 +655,7 @@ with col1:
     else:
         st.warning("Missing columns required for machine chart")
 
-# Complaints by QA and Shift Leader with both metrics
+# Complaints by QA and Shift Leader
 with col2:
     try:
         if "QA" in filtered_df.columns and "Tên Trưởng ca" in filtered_df.columns and "Mã ticket" in filtered_df.columns and "SL pack/ cây lỗi" in filtered_df.columns:
@@ -758,40 +680,47 @@ with col2:
             personnel_counts = personnel_counts.sort_values(["Role", "Complaints"], ascending=[True, False])
             
             # Create the figure
-            fig = px.bar(
-                personnel_counts,
-                x="Personnel",
-                y="Complaints",
-                color="Role",
-                hover_data=["Defective Packs"],
-                text="Complaints",
-                title="Complaints and Defective Packs by Personnel",
-                color_discrete_map={"QA": "purple", "Shift Leader": "darkred"},
-                barmode="group"
-            )
+            fig = go.Figure()
             
-            # Add text annotation for defective packs
-            for i, row in enumerate(personnel_counts.itertuples()):
-                fig.add_annotation(
-                    x=row.Personnel,
-                    y=row.Complaints + (max(personnel_counts["Complaints"]) * 0.1),
-                    text=f"Packs: {int(row.Defective_Packs)}",
-                    showarrow=False,
-                    font=dict(size=9)
-                )
+            # Add bars for complaints
+            fig.add_trace(go.Bar(
+                x=personnel_counts["Personnel"],
+                y=personnel_counts["Complaints"],
+                name="Complaints",
+                marker_color=personnel_counts["Role"].map({"QA": "purple", "Shift Leader": "darkred"}),
+                text=personnel_counts["Complaints"],
+                textposition="outside"
+            ))
             
-            # Improve layout
+            # Add markers for defective packs
+            fig.add_trace(go.Scatter(
+                x=personnel_counts["Personnel"],
+                y=personnel_counts["Defective Packs"],
+                name="Defective Packs",
+                mode="markers",
+                marker=dict(
+                    size=12,
+                    color="gold",
+                    symbol="diamond"
+                ),
+                text=personnel_counts["Defective Packs"].round(0).astype(int)
+            ))
+            
+            # Update layout
             fig.update_layout(
+                title="Complaints and Defective Packs by Personnel",
                 height=400,
                 xaxis_title="Personnel",
-                yaxis_title="Number of Complaints",
-                font=dict(size=12),
-                margin=dict(l=20, r=20, t=40, b=20),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                yaxis_title="Count",
+                legend=dict(
+                    orientation="h",
+                    yanchor="bottom",
+                    y=1.02,
+                    xanchor="right",
+                    x=1
+                ),
+                margin=dict(l=20, r=20, t=40, b=20)
             )
-            
-            # Add data labels
-            fig.update_traces(textposition='outside')
             
             st.plotly_chart(fig, use_container_width=True)
         else:
