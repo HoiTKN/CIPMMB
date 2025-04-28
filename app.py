@@ -4,9 +4,10 @@ import plotly.express as px
 from datetime import datetime
 import time
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
 import os
 import json
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
 
 # Set page configuration
 st.set_page_config(
@@ -19,162 +20,106 @@ st.set_page_config(
 st.title("Customer Complaint Dashboard")
 st.markdown("Real-time dashboard for monitoring customer complaints in FMCG production")
 
-# Debug section - will show on the main page for easier troubleshooting
-st.markdown("### 🔍 Debug Information")
-debug_expander = st.expander("Authentication Debugging")
-
-with debug_expander:
-    st.markdown("#### Secrets Check")
-    if 'GOOGLE_CLIENT_SECRET' in st.secrets:
-        st.success("✅ GOOGLE_CLIENT_SECRET exists in Streamlit secrets")
-        # Try to display some info about the secret without showing sensitive data
-        try:
-            secret_content = json.loads(st.secrets["GOOGLE_CLIENT_SECRET"])
-            safe_display = {
-                "type": secret_content.get("type", "Not found"),
-                "project_id": secret_content.get("project_id", "Not found"),
-                "client_email": secret_content.get("client_email", "Not found").split("@")[0] + "@..." if secret_content.get("client_email") else "Not found",
-                "has_private_key": "Yes" if secret_content.get("private_key") else "No"
-            }
-            st.json(safe_display)
-        except Exception as e:
-            st.error(f"Error parsing secret: {e}")
-    else:
-        st.error("❌ GOOGLE_CLIENT_SECRET not found in Streamlit secrets")
-    
-    st.markdown("#### Worksheet Check")
-    sheet_url = "https://docs.google.com/spreadsheets/d/1d6uGPbJV6BsOB6XSB1IS3NhfeaMyMBcaQPvOnNg2yA4/edit?gid=1495122288#gid=1495122288"
-    sheet_key = sheet_url.split('/d/')[1].split('/')[0]
-    st.write(f"Trying to access sheet key: {sheet_key}")
-    
-    st.markdown("#### List Worksheets")
-    if st.button("List Available Worksheets in Spreadsheet"):
-        try:
-            # Use credentials stored in GitHub secrets
-            if 'GOOGLE_CLIENT_SECRET' in st.secrets:
-                # Create a credentials dictionary from the secret
-                creds_dict = json.loads(st.secrets["GOOGLE_CLIENT_SECRET"])
-                
-                # Define the scope
-                scope = ['https://spreadsheets.google.com/feeds',
-                        'https://www.googleapis.com/auth/drive']
-                
-                # Create credentials from the dictionary
-                creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-                client = gspread.authorize(creds)
-                
-                # Open the Google Sheet by key
-                spreadsheet = client.open_by_key(sheet_key)
-                
-                # Get all worksheets
-                worksheets = spreadsheet.worksheets()
-                
-                if worksheets:
-                    st.success(f"✅ Found {len(worksheets)} worksheets in the spreadsheet")
-                    for ws in worksheets:
-                        st.write(f"- {ws.title} (rows: {ws.row_count}, cols: {ws.col_count})")
-                else:
-                    st.warning("No worksheets found in the spreadsheet")
-            else:
-                st.error("Cannot list worksheets: GOOGLE_CLIENT_SECRET not found")
-        except Exception as e:
-            st.error(f"Error listing worksheets: {e}")
-
-# Function to connect to Google Sheets
-def connect_to_sheets():
+# Function to authenticate with OAuth
+def authenticate():
     try:
-        # Check if we're running in Streamlit Cloud (in which case we need to use st.secrets)
-        if 'GOOGLE_CLIENT_SECRET' in st.secrets:
-            # Create a credentials dictionary from the secret
-            creds_dict = json.loads(st.secrets["GOOGLE_CLIENT_SECRET"])
-            
-            # Define the scope
-            scope = ['https://spreadsheets.google.com/feeds',
-                    'https://www.googleapis.com/auth/drive']
-            
-            # Create credentials from the dictionary
-            creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-            client = gspread.authorize(creds)
-            
-            # Open the Google Sheet by URL or key
-            sheet_url = "https://docs.google.com/spreadsheets/d/1d6uGPbJV6BsOB6XSB1IS3NhfeaMyMBcaQPvOnNg2yA4/edit?gid=1495122288#gid=1495122288"
-            # Extract sheet key from URL
-            sheet_key = sheet_url.split('/d/')[1].split('/')[0]
-            
-            # Open the spreadsheet and get the first worksheet
-            # We'll try to get the "Integrated_Data" worksheet first, then fall back to the first sheet if that fails
-            spreadsheet = client.open_by_key(sheet_key)
-            
-            try:
-                worksheet = spreadsheet.worksheet('Integrated_Data')
-            except gspread.exceptions.WorksheetNotFound:
-                # If 'Integrated_Data' doesn't exist, get the first worksheet
-                worksheet = spreadsheet.get_worksheet(0)
-                st.warning(f"'Integrated_Data' worksheet not found. Using '{worksheet.title}' instead.")
-            
-            return worksheet
-        # Fallback to local file (for local development)
-        else:
-            # Method 2: If you have a client_secret.json file in your repository
-            if os.path.exists("client_secret.json"):
-                creds_path = "client_secret.json"  # Path to your credentials file
-                
-                # Define the scope
-                scope = ['https://spreadsheets.google.com/feeds',
-                        'https://www.googleapis.com/auth/drive']
-                
-                # Authenticate
-                creds = ServiceAccountCredentials.from_json_keyfile_name(creds_path, scope)
-                client = gspread.authorize(creds)
-                
-                # Open the Google Sheet by URL or key
-                sheet_url = "https://docs.google.com/spreadsheets/d/1d6uGPbJV6BsOB6XSB1IS3NhfeaMyMBcaQPvOnNg2yA4/edit?gid=1495122288#gid=1495122288"
-                # Extract sheet key from URL
-                sheet_key = sheet_url.split('/d/')[1].split('/')[0]
-                
-                # Open the spreadsheet and the first worksheet
-                spreadsheet = client.open_by_key(sheet_key)
-                
-                try:
-                    worksheet = spreadsheet.worksheet('Integrated_Data')
-                except gspread.exceptions.WorksheetNotFound:
-                    # If 'Integrated_Data' doesn't exist, get the first worksheet
-                    worksheet = spreadsheet.get_worksheet(0)
-                    st.warning(f"'Integrated_Data' worksheet not found. Using '{worksheet.title}' instead.")
-                
-                return worksheet
+        st.markdown("### 🔍 Authentication Status")
+        auth_expander = st.expander("Authentication Details")
+        
+        with auth_expander:
+            creds = None
+            # Check if token.json exists in local environment
+            if os.path.exists('token.json'):
+                st.success("✅ Found token.json file")
+                creds = Credentials.from_authorized_user_file('token.json', [
+                    "https://www.googleapis.com/auth/spreadsheets",
+                    "https://www.googleapis.com/auth/drive"
+                ])
+            # Check if token is in Streamlit secrets
+            elif 'GOOGLE_TOKEN_JSON' in st.secrets:
+                st.success("✅ Found GOOGLE_TOKEN_JSON in Streamlit secrets")
+                token_info = json.loads(st.secrets["GOOGLE_TOKEN_JSON"])
+                creds = Credentials.from_authorized_user_info(token_info, [
+                    "https://www.googleapis.com/auth/spreadsheets",
+                    "https://www.googleapis.com/auth/drive"
+                ])
             else:
-                st.error("No authentication method available (neither Streamlit secrets nor client_secret.json file)")
+                st.error("❌ No authentication credentials found")
+                st.info("Please add GOOGLE_TOKEN_JSON to Streamlit secrets or token.json to your repository")
                 return None
+            
+            # Refresh token if expired
+            if creds and creds.expired and creds.refresh_token:
+                st.info("🔄 Token expired, refreshing...")
+                creds.refresh(Request())
+                # In local environment, save the refreshed token
+                if os.path.exists('token.json'):
+                    with open('token.json', 'w') as token:
+                        token.write(creds.to_json())
+                        st.success("✅ Token refreshed and saved")
+            
+            if creds:
+                st.success("✅ Authentication successful")
+                return gspread.authorize(creds)
+            else:
+                st.error("❌ Authentication failed")
+                return None
+                
     except Exception as e:
-        st.error(f"Error connecting to Google Sheets: {e}")
+        st.error(f"❌ Authentication error: {str(e)}")
         return None
 
-# Function to load and process data
+# Load and process data
 @st.cache_data(ttl=300)  # Cache for 5 minutes
 def load_data():
     try:
-        worksheet = connect_to_sheets()
-        if worksheet is None:
+        # Authenticate
+        client = authenticate()
+        if client is None:
             return pd.DataFrame()
+        
+        # Open the Google Sheet
+        sheet_url = "https://docs.google.com/spreadsheets/d/1d6uGPbJV6BsOB6XSB1IS3NhfeaMyMBcaQPvOnNg2yA4/edit"
+        sheet_id = sheet_url.split('/d/')[1].split('/')[0]
+        
+        try:
+            spreadsheet = client.open_by_key(sheet_id)
+            st.success(f"✅ Successfully opened spreadsheet: {spreadsheet.title}")
             
-        # Get all values
-        data = worksheet.get_all_records()
-        df = pd.DataFrame(data)
+            # Try to get the "Integrated_Data" worksheet
+            try:
+                worksheet = spreadsheet.worksheet('Integrated_Data')
+                st.success(f"✅ Found worksheet: Integrated_Data")
+            except gspread.exceptions.WorksheetNotFound:
+                # Fall back to first worksheet if Integrated_Data doesn't exist
+                worksheet = spreadsheet.get_worksheet(0)
+                st.warning(f"⚠️ 'Integrated_Data' worksheet not found. Using '{worksheet.title}' instead.")
+            
+            # Get all records
+            data = worksheet.get_all_records()
+            st.success(f"✅ Retrieved {len(data)} records from worksheet")
+            
+            # Convert to DataFrame
+            df = pd.DataFrame(data)
+            
+            # Basic data cleaning
+            # Convert date columns to datetime if needed
+            if "Ngày SX" in df.columns:
+                df["Production_Month"] = pd.to_datetime(df["Ngày SX"], format="%d/%m/%Y", errors='coerce')
+                df["Production_Month"] = df["Production_Month"].dt.strftime("%m/%Y")
+            
+            # Make sure numeric columns are properly typed
+            if "SL pack/ cây lỗi" in df.columns:
+                df["SL pack/ cây lỗi"] = pd.to_numeric(df["SL pack/ cây lỗi"], errors='coerce').fillna(0)
+            
+            return df
+            
+        except Exception as e:
+            st.error(f"❌ Error accessing spreadsheet: {str(e)}")
+            return pd.DataFrame()
         
-        # Basic data cleaning
-        # Convert date columns to datetime if needed
-        if "Ngày SX" in df.columns:
-            df["Production_Month"] = pd.to_datetime(df["Ngày SX"], format="%d/%m/%Y", errors='coerce')
-            df["Production_Month"] = df["Production_Month"].dt.strftime("%m/%Y")
-        
-        # Make sure numeric columns are properly typed
-        if "SL pack/ cây lỗi" in df.columns:
-            df["SL pack/ cây lỗi"] = pd.to_numeric(df["SL pack/ cây lỗi"], errors='coerce').fillna(0)
-        
-        return df
     except Exception as e:
-        st.error(f"Error loading data: {e}")
+        st.error(f"❌ Error loading data: {str(e)}")
         return pd.DataFrame()
 
 # Load the data
@@ -182,31 +127,41 @@ df = load_data()
 
 # Check if dataframe is empty
 if df.empty:
-    st.warning("No data available. Please check your Google Sheet connection.")
+    st.warning("⚠️ No data available. Please check your Google Sheet connection.")
     
     # Show additional debug information if dataframe is empty
     st.markdown("### Additional Debug Information")
     st.markdown("Your dataframe is empty. Here are possible reasons:")
     
-    st.markdown("1. Authentication failure - Check that your GOOGLE_CLIENT_SECRET is properly configured")
+    st.markdown("1. Authentication failure - Check that your GOOGLE_TOKEN_JSON is properly configured in Streamlit secrets")
     st.markdown("2. Worksheet not found - Check that 'Integrated_Data' exists in your spreadsheet")
-    st.markdown("3. Sheet permissions - Make sure your Google Sheet is shared with the service account email")
+    st.markdown("3. Sheet permissions - Make sure your Google Sheet is shared with your personal Google account")
     st.markdown("4. Data format - Ensure the data in your spreadsheet is properly formatted")
     
-    # Add a button to see raw attempt at fetching data
+    # Add a button to attempt raw data fetch
     if st.button("Attempt Raw Data Fetch"):
         try:
-            worksheet = connect_to_sheets()
-            if worksheet:
-                raw_data = worksheet.get_all_values()
-                st.write(f"Found worksheet: {worksheet.title}")
-                st.write(f"Number of rows: {len(raw_data)}")
-                st.write(f"Number of columns: {len(raw_data[0]) if raw_data else 0}")
+            client = authenticate()
+            if client:
+                sheet_id = "1d6uGPbJV6BsOB6XSB1IS3NhfeaMyMBcaQPvOnNg2yA4"
+                spreadsheet = client.open_by_key(sheet_id)
+                st.write(f"Found spreadsheet: {spreadsheet.title}")
+                
+                # List all worksheets
+                worksheets = spreadsheet.worksheets()
+                st.write(f"Found {len(worksheets)} worksheets:")
+                for ws in worksheets:
+                    st.write(f"- {ws.title} (rows: {ws.row_count}, cols: {ws.col_count})")
+                
+                # Try to get the first few rows from the first worksheet
+                first_worksheet = spreadsheet.get_worksheet(0)
+                values = first_worksheet.get_all_values()
+                st.write(f"First worksheet '{first_worksheet.title}' has {len(values)} rows")
                 st.write("First few rows:")
-                for i, row in enumerate(raw_data[:5]):
+                for i, row in enumerate(values[:5]):
                     st.write(f"Row {i}: {row}")
             else:
-                st.error("Could not connect to worksheet")
+                st.error("Could not authenticate")
         except Exception as e:
             st.error(f"Error in raw data fetch: {e}")
     
@@ -216,7 +171,7 @@ if df.empty:
 st.sidebar.header("Filters")
 
 # Date filter - if you have a date range
-if "Ngày SX" in df.columns:
+if "Production_Month" in df.columns:
     production_months = ["All"] + sorted(df["Production_Month"].unique().tolist())
     selected_month = st.sidebar.selectbox("Select Production Month", production_months)
     
