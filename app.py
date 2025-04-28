@@ -3,7 +3,10 @@ import pandas as pd
 import plotly.express as px
 from datetime import datetime
 import time
-from streamlit_gsheets import GSheetsConnection
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+import os
+import json
 
 # Set page configuration
 st.set_page_config(
@@ -16,30 +19,75 @@ st.set_page_config(
 st.title("Customer Complaint Dashboard")
 st.markdown("Real-time dashboard for monitoring customer complaints in FMCG production")
 
-# Create a connection to Google Sheets
-# Note: You need to create a .streamlit/secrets.toml file with your credentials
-conn = st.connection("gsheets", type=GSheetsConnection)
+# Function to connect to Google Sheets
+def connect_to_sheets():
+    # Use credentials stored in GitHub secrets
+    # You can access the credentials from environment variables or from your JSON file
+    try:
+        # Method 1: If you have environment variables set up
+        # client_secret = os.environ.get('CLIENT_SECRET_JSON')
+        # creds_dict = json.loads(client_secret)
+        
+        # Method 2: If you have a client_secret.json file in your repository
+        # Make sure this file is in your .gitignore to keep it private
+        creds_path = "client_secret.json"  # Path to your credentials file
+        
+        # Define the scope
+        scope = ['https://spreadsheets.google.com/feeds',
+                 'https://www.googleapis.com/auth/drive']
+        
+        # Authenticate
+        creds = ServiceAccountCredentials.from_json_keyfile_name(creds_path, scope)
+        client = gspread.authorize(creds)
+        
+        # Open the Google Sheet by URL or key
+        sheet_url = "https://docs.google.com/spreadsheets/d/1d6uGPbJV6BsOB6XSB1IS3NhfeaMyMBcaQPvOnNg2yA4/edit?gid=1495122288#gid=1495122288"
+        # Extract sheet key from URL
+        sheet_key = sheet_url.split('/d/')[1].split('/')[0]
+        
+        # Open the spreadsheet and the first worksheet
+        spreadsheet = client.open_by_key(sheet_key)
+        worksheet = spreadsheet.sheet1  # You can also use spreadsheet.get_worksheet(0)
+        
+        return worksheet
+    except Exception as e:
+        st.error(f"Error connecting to Google Sheets: {e}")
+        return None
 
 # Function to load and process data
 @st.cache_data(ttl=300)  # Cache for 5 minutes
 def load_data():
-    # Read the data from Google Sheets
-    df = conn.read()
-    
-    # Basic data cleaning
-    # Convert date columns to datetime if needed
-    if "Ngày SX" in df.columns:
-        df["Production_Month"] = pd.to_datetime(df["Ngày SX"], format="%d/%m/%Y", errors='coerce')
-        df["Production_Month"] = df["Production_Month"].dt.strftime("%m/%Y")
-    
-    # Make sure numeric columns are properly typed
-    if "SL pack/ cây lỗi" in df.columns:
-        df["SL pack/ cây lỗi"] = pd.to_numeric(df["SL pack/ cây lỗi"], errors='coerce').fillna(0)
-    
-    return df
+    try:
+        worksheet = connect_to_sheets()
+        if worksheet is None:
+            return pd.DataFrame()
+            
+        # Get all values
+        data = worksheet.get_all_records()
+        df = pd.DataFrame(data)
+        
+        # Basic data cleaning
+        # Convert date columns to datetime if needed
+        if "Ngày SX" in df.columns:
+            df["Production_Month"] = pd.to_datetime(df["Ngày SX"], format="%d/%m/%Y", errors='coerce')
+            df["Production_Month"] = df["Production_Month"].dt.strftime("%m/%Y")
+        
+        # Make sure numeric columns are properly typed
+        if "SL pack/ cây lỗi" in df.columns:
+            df["SL pack/ cây lỗi"] = pd.to_numeric(df["SL pack/ cây lỗi"], errors='coerce').fillna(0)
+        
+        return df
+    except Exception as e:
+        st.error(f"Error loading data: {e}")
+        return pd.DataFrame()
 
 # Load the data
 df = load_data()
+
+# Check if dataframe is empty
+if df.empty:
+    st.warning("No data available. Please check your Google Sheet connection.")
+    st.stop()
 
 # Create a sidebar for filters
 st.sidebar.header("Filters")
