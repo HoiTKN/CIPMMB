@@ -329,7 +329,7 @@ def main():
     aql_df['Ngày SX_std'] = aql_df['Ngày SX'].apply(standardize_date)
     
     # Create filter date (December 1, 2024)
-    filter_date = pd.to_datetime('2024-12-01')
+    filter_date = pd.to_datetime('2024-09-01')
     
     # Filter both DataFrames to only include data from December 1, 2024 onwards
     knkh_df = knkh_df[knkh_df['Ngày SX_std'] >= filter_date]
