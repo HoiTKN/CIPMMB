@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import re
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
+from huggingface_hub import login
 import logging
 
 # Configure logging
@@ -22,18 +23,30 @@ logger = logging.getLogger("ComplaintAgent")
 class HuggingFaceComplaintAgent:
     """AI agent for analyzing customer complaint data using Hugging Face models"""
     
-    def __init__(self, model_name="mistralai/Mistral-7B-Instruct-v0.2", knowledge_base_path="complaint_knowledge_base.json"):
+    def __init__(self, model_name="mistralai/Mistral-7B-Instruct-v0.2", knowledge_base_path="complaint_knowledge_base.json", token=None):
         """
         Initialize the complaint analytics agent
         
         Args:
             model_name: Name of the Hugging Face model to use
             knowledge_base_path: Path to the complaint knowledge base JSON file
+            token: Hugging Face API token for accessing gated models
         """
         self.model_name = model_name
         self.knowledge_base_path = knowledge_base_path
         self.df = None
         self.load_knowledge_base()
+        
+        # Authenticate with Hugging Face if token is provided
+        if token:
+            try:
+                logger.info("Authenticating with Hugging Face")
+                login(token=token)
+                logger.info("Successfully authenticated with Hugging Face")
+            except Exception as e:
+                logger.error(f"Error authenticating with Hugging Face: {str(e)}")
+        
+        # Setup model
         self.setup_model()
         logger.info(f"Complaint Analytics Agent initialized with model: {model_name}")
     
@@ -58,7 +71,18 @@ class HuggingFaceComplaintAgent:
                 numeric_columns = ["SL pack/ cây lỗi", "Line", "Máy"]
                 for col in numeric_columns:
                     if col in self.df.columns:
-                        self.df[col] = pd.to_numeric(self.df[col], errors='coerce')
+                        if col == "SL pack/ cây lỗi":
+                            # Special handling for problematic column
+                            self.df[col] = pd.to_numeric(self.df[col].replace('', np.nan), errors='coerce').fillna(0)
+                        else:
+                            self.df[col] = pd.to_numeric(self.df[col], errors='coerce')
+                
+                # Fix the problematic 'Số lượng (ly/hộp/chai/gói/hủ)' column if present
+                if "Số lượng (ly/hộp/chai/gói/hủ)" in self.df.columns:
+                    self.df["Số lượng (ly/hộp/chai/gói/hủ)"] = pd.to_numeric(
+                        self.df["Số lượng (ly/hộp/chai/gói/hủ)"].replace('', np.nan), 
+                        errors='coerce'
+                    ).fillna(0)
             else:
                 logger.warning(f"Knowledge base file not found: {self.knowledge_base_path}")
                 self.df = pd.DataFrame()
@@ -72,61 +96,100 @@ class HuggingFaceComplaintAgent:
         """Set up the Hugging Face model"""
         try:
             logger.info(f"Loading model: {self.model_name}")
-            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
             
-            # For smaller models, load directly
-            if "7B" in self.model_name or "2B" in self.model_name:
-                self.model = AutoModelForCausalLM.from_pretrained(
-                    self.model_name, 
-                    torch_dtype=torch.float16,
-                    device_map="auto"
-                )
-                # Create text generation pipeline
-                self.pipe = pipeline(
-                    "text-generation",
-                    model=self.model,
-                    tokenizer=self.tokenizer,
-                    max_length=2048,
-                    temperature=0.1,
-                    top_p=0.95,
-                    repetition_penalty=1.15
-                )
-            else:
-                # For larger models, use pipeline with device_map
-                self.pipe = pipeline(
-                    "text-generation",
-                    model=self.model_name,
-                    tokenizer=self.tokenizer,
-                    max_length=2048,
-                    temperature=0.1,
-                    top_p=0.95,
-                    device_map="auto"
-                )
-            
-            logger.info("Model loaded successfully")
-        except Exception as e:
-            logger.error(f"Error setting up model: {str(e)}")
-            # Fallback to a simpler model if the initial one fails
+            # Try to load primary model - Mistral-7B (or specified model)
             try:
-                logger.info("Attempting to load fallback model: google/flan-t5-base")
-                self.pipe = pipeline(
-                    "text2text-generation",
-                    model="google/flan-t5-base",
-                    device_map="auto"
-                )
-                logger.info("Fallback model loaded successfully")
-            except:
-                logger.error("Failed to load fallback model")
-                self.pipe = None
+                self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+                
+                # Check if enough resources are available
+                available_memory = torch.cuda.get_device_properties(0).total_memory if torch.cuda.is_available() else 0
+                
+                # For smaller models or if enough resources
+                if "7B" not in self.model_name or available_memory > 14e9:  # 14GB
+                    self.model = AutoModelForCausalLM.from_pretrained(
+                        self.model_name, 
+                        torch_dtype=torch.float16,
+                        device_map="auto",
+                        low_cpu_mem_usage=True
+                    )
+                    # Create text generation pipeline
+                    self.pipe = pipeline(
+                        "text-generation",
+                        model=self.model,
+                        tokenizer=self.tokenizer,
+                        max_length=2048,
+                        temperature=0.1,
+                        top_p=0.95,
+                        repetition_penalty=1.15
+                    )
+                    logger.info(f"Successfully loaded primary model: {self.model_name}")
+                else:
+                    # Fall back to smaller model if not enough resources
+                    logger.warning(f"Insufficient resources for {self.model_name}. Falling back to smaller model")
+                    raise ValueError("Insufficient resources")
+            
+            except Exception as e:
+                logger.warning(f"Could not load primary model: {str(e)}. Trying fallback model...")
+                
+                # Try with TinyLlama (much smaller model)
+                try:
+                    fallback_model = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+                    logger.info(f"Attempting to load fallback model: {fallback_model}")
+                    
+                    self.tokenizer = AutoTokenizer.from_pretrained(fallback_model)
+                    self.model = AutoModelForCausalLM.from_pretrained(
+                        fallback_model,
+                        device_map="auto",
+                        low_cpu_mem_usage=True
+                    )
+                    
+                    # Create text generation pipeline
+                    self.pipe = pipeline(
+                        "text-generation",
+                        model=self.model,
+                        tokenizer=self.tokenizer,
+                        max_length=2048,
+                        temperature=0.1,
+                        top_p=0.95,
+                        repetition_penalty=1.15
+                    )
+                    self.model_name = fallback_model
+                    logger.info(f"Successfully loaded fallback model: {fallback_model}")
+                
+                except Exception as e2:
+                    # Try with even smaller T5 model if TinyLlama fails
+                    logger.warning(f"Could not load TinyLlama: {str(e2)}. Trying smaller T5 model...")
+                    try:
+                        small_model = "google/flan-t5-small"
+                        logger.info(f"Attempting to load small model: {small_model}")
+                        
+                        self.pipe = pipeline(
+                            "text2text-generation",
+                            model=small_model,
+                            device_map="auto"
+                        )
+                        self.model_name = small_model
+                        logger.info(f"Successfully loaded small model: {small_model}")
+                    
+                    except Exception as e3:
+                        logger.error(f"All model loading attempts failed. Last error: {str(e3)}")
+                        self.pipe = None
+        
+        except Exception as e:
+            logger.error(f"Unexpected error in setup_model: {str(e)}")
+            self.pipe = None
     
     def _format_prompt(self, instruction, context=""):
         """Format prompt for the model based on model type"""
         if "mistral" in self.model_name.lower():
             # Mistral instruction format
             return f"<s>[INST] {instruction}\n\n{context} [/INST]"
-        elif "llama" in self.model_name.lower():
-            # Llama2 instruction format
+        elif "llama" in self.model_name.lower() or "tinyllama" in self.model_name.lower():
+            # Llama/TinyLlama instruction format
             return f"<s>[INST] {instruction} [/INST] {context}</s>"
+        elif "flan-t5" in self.model_name.lower():
+            # T5 format
+            return f"Instruction: {instruction}\n\nContext: {context}"
         else:
             # Generic format
             return f"Instruction: {instruction}\n\nContext: {context}\n\nResponse:"
@@ -138,24 +201,42 @@ class HuggingFaceComplaintAgent:
             
         try:
             logger.info("Generating response")
-            outputs = self.pipe(
-                prompt, 
-                max_new_tokens=max_new_tokens,
-                do_sample=True,
-                temperature=0.1,
-                top_p=0.95,
-                repetition_penalty=1.15,
-                return_full_text=False
-            )
             
-            # Extract the generated text
-            if isinstance(outputs, list) and len(outputs) > 0:
-                if isinstance(outputs[0], dict) and "generated_text" in outputs[0]:
-                    response = outputs[0]["generated_text"]
+            # Adjust based on model type
+            if "flan-t5" in self.model_name.lower():
+                outputs = self.pipe(
+                    prompt,
+                    max_length=max_new_tokens,
+                    do_sample=True
+                )
+                
+                # Extract the generated text - T5 models have different output format
+                if isinstance(outputs, list) and len(outputs) > 0:
+                    if isinstance(outputs[0], dict) and "generated_text" in outputs[0]:
+                        response = outputs[0]["generated_text"]
+                    else:
+                        response = outputs[0]
                 else:
-                    response = outputs[0]
+                    response = str(outputs)
             else:
-                response = str(outputs)
+                outputs = self.pipe(
+                    prompt, 
+                    max_new_tokens=max_new_tokens,
+                    do_sample=True,
+                    temperature=0.1,
+                    top_p=0.95,
+                    repetition_penalty=1.15,
+                    return_full_text=False
+                )
+                
+                # Extract the generated text
+                if isinstance(outputs, list) and len(outputs) > 0:
+                    if isinstance(outputs[0], dict) and "generated_text" in outputs[0]:
+                        response = outputs[0]["generated_text"]
+                    else:
+                        response = outputs[0]
+                else:
+                    response = str(outputs)
             
             # Clean up the response
             response = response.strip()
@@ -580,8 +661,24 @@ class HuggingFaceComplaintAgent:
             True if successful, False otherwise
         """
         try:
+            # Fix problematic columns before creating knowledge base
+            df_copy = df.copy()
+            
+            # Fix specific problematic columns
+            if "Số lượng (ly/hộp/chai/gói/hủ)" in df_copy.columns:
+                df_copy["Số lượng (ly/hộp/chai/gói/hủ)"] = pd.to_numeric(
+                    df_copy["Số lượng (ly/hộp/chai/gói/hủ)"].replace('', np.nan), 
+                    errors='coerce'
+                ).fillna(0)
+            
+            if "SL pack/ cây lỗi" in df_copy.columns:
+                df_copy["SL pack/ cây lỗi"] = pd.to_numeric(
+                    df_copy["SL pack/ cây lỗi"].replace('', np.nan), 
+                    errors='coerce'
+                ).fillna(0)
+            
             # Create structured knowledge base
-            complaints_data = df.to_dict('records')
+            complaints_data = df_copy.to_dict('records')
             
             knowledge_base = {
                 "complaints": complaints_data,
@@ -589,12 +686,12 @@ class HuggingFaceComplaintAgent:
                     "last_updated": datetime.now().isoformat(),
                     "total_complaints": len(complaints_data),
                     "date_range": {
-                        "start": str(df['Ngày SX'].min()) if "Ngày SX" in df.columns else None,
-                        "end": str(df['Ngày SX'].max()) if "Ngày SX" in df.columns else None
+                        "start": str(df_copy['Ngày SX'].min()) if "Ngày SX" in df_copy.columns else None,
+                        "end": str(df_copy['Ngày SX'].max()) if "Ngày SX" in df_copy.columns else None
                     },
-                    "products": df['Tên sản phẩm'].unique().tolist() if "Tên sản phẩm" in df.columns else [],
-                    "defect_types": df['Tên lỗi'].unique().tolist() if "Tên lỗi" in df.columns else [],
-                    "lines": df['Line'].unique().tolist() if "Line" in df.columns else []
+                    "products": df_copy['Tên sản phẩm'].unique().tolist() if "Tên sản phẩm" in df_copy.columns else [],
+                    "defect_types": df_copy['Tên lỗi'].unique().tolist() if "Tên lỗi" in df_copy.columns else [],
+                    "lines": df_copy['Line'].unique().tolist() if "Line" in df_copy.columns else []
                 }
             }
             
@@ -604,9 +701,9 @@ class HuggingFaceComplaintAgent:
                 
             # Update instance variables
             self.knowledge_base = knowledge_base
-            self.df = df
+            self.df = df_copy
             
-            logger.info(f"Knowledge base created with {len(df)} complaints")
+            logger.info(f"Knowledge base created with {len(df_copy)} complaints")
             return True
             
         except Exception as e:
@@ -615,7 +712,8 @@ class HuggingFaceComplaintAgent:
 
 # Example usage
 if __name__ == "__main__":
-    agent = HuggingFaceComplaintAgent()
+    token = "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"  # Replace with your actual token
+    agent = HuggingFaceComplaintAgent(token=token)
     
     # Example analysis
     patterns = agent.identify_patterns(days_back=30)
