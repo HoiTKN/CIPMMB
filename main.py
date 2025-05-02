@@ -628,7 +628,6 @@ def send_email_report(updated_values):
             
             other_recipients = [
                 "mmb-ktcncsd@msc.masangroup.com",
-                "haont1@msc.masangroup.com",
                 "datnd@msc.masangroup.com",
                 "chungnt2@msc.masangroup.com",
                 "luannt4@msc.masangroup.com",
