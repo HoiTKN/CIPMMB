@@ -14,7 +14,7 @@ from plotly.subplots import make_subplots
 
 # Set page configuration with improved styling
 st.set_page_config(
-    page_title="Báo cáo chất lượng CF MMB",
+    page_title="FMCG Quality Analytics Dashboard",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -128,9 +128,9 @@ st.markdown("""
         background-color: #1E3A8A;
         color: white;
     }
-    /* Completely hide authentication status */
-    div[data-testid="stExpander"]:has(div:contains("Authentication Status")) {
-        display: none !important;
+    /* Hide authentication status expander */
+    div[data-testid="stExpander"] > div[role="button"]:has(div:contains("Authentication Status")) {
+        display: none;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -145,50 +145,61 @@ SCOPES = [
 def authenticate():
     """Authentication using OAuth token"""
     try:
-        creds = None
+        # Authentication expander is hidden via CSS
+        debug_expander = st.expander("Authentication Status", expanded=False)
         
-        # Check if token.json exists first
-        if os.path.exists('token.json'):
-            try:
-                creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-            except Exception as e:
-                pass
-        # Otherwise create it from the environment variable or Streamlit secrets
-        elif 'GOOGLE_TOKEN_JSON' in os.environ:
-            try:
-                token_info = os.environ.get('GOOGLE_TOKEN_JSON')
-                with open('token.json', 'w') as f:
-                    f.write(token_info)
-                creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-            except Exception as e:
-                pass
-        elif 'GOOGLE_TOKEN_JSON' in st.secrets:
-            try:
-                token_info = st.secrets['GOOGLE_TOKEN_JSON']
-                with open('token.json', 'w') as f:
-                    f.write(token_info)
-                creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-            except Exception as e:
-                pass
-        else:
-            return None
-        
-        # Refresh token if expired
-        if creds and creds.expired and creds.refresh_token:
-            try:
-                creds.refresh(Request())
-                with open('token.json', 'w') as token:
-                    token.write(creds.to_json())
-            except Exception as e:
-                pass
-                
-        # Return authorized client
-        if creds:
-            return gspread.authorize(creds)
-        else:
-            return None
+        with debug_expander:
+            creds = None
+            
+            # Check if token.json exists first
+            if os.path.exists('token.json'):
+                st.success("✅ Found token.json file")
+                try:
+                    creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+                except Exception as e:
+                    st.error(f"Error loading token.json: {e}")
+            # Otherwise create it from the environment variable or Streamlit secrets
+            elif 'GOOGLE_TOKEN_JSON' in os.environ:
+                st.success("✅ Found GOOGLE_TOKEN_JSON in environment variables")
+                try:
+                    token_info = os.environ.get('GOOGLE_TOKEN_JSON')
+                    with open('token.json', 'w') as f:
+                        f.write(token_info)
+                    creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+                except Exception as e:
+                    st.error(f"Error loading from environment variable: {e}")
+            elif 'GOOGLE_TOKEN_JSON' in st.secrets:
+                st.success("✅ Found GOOGLE_TOKEN_JSON in Streamlit secrets")
+                try:
+                    token_info = st.secrets['GOOGLE_TOKEN_JSON']
+                    with open('token.json', 'w') as f:
+                        f.write(token_info)
+                    creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+                except Exception as e:
+                    st.error(f"Error loading from Streamlit secrets: {e}")
+            else:
+                st.error("❌ No token.json file or GOOGLE_TOKEN_JSON found")
+                return None
+            
+            # Refresh token if expired
+            if creds and creds.expired and creds.refresh_token:
+                st.info("🔄 Token expired, refreshing...")
+                try:
+                    creds.refresh(Request())
+                    with open('token.json', 'w') as token:
+                        token.write(creds.to_json())
+                        st.success("✅ Token refreshed and saved")
+                except Exception as e:
+                    st.error(f"Error refreshing token: {e}")
+                    
+            # Return authorized client
+            if creds:
+                return gspread.authorize(creds)
+            else:
+                return None
     
     except Exception as e:
+        st.error(f"❌ Authentication error: {str(e)}")
         return None
 
 # Function to load complaint data
@@ -199,7 +210,7 @@ def load_complaint_data():
         gc = authenticate()
         
         if gc is None:
-            st.error("❌ Không thể xác thực với Google Sheets")
+            st.error("❌ Failed to authenticate with Google Sheets")
             return pd.DataFrame()
         
         # Open the Google Sheet by URL (complaint data)
@@ -210,13 +221,16 @@ def load_complaint_data():
         try:
             spreadsheet = gc.open_by_key(sheet_key)
             connection_status = st.empty()
+            connection_status.success(f"✅ Successfully opened complaints spreadsheet: {spreadsheet.title}")
             
             # Try to get the "Integrated_Data" worksheet
             try:
                 worksheet = spreadsheet.worksheet('Integrated_Data')
+                connection_status.success(f"✅ Connected to: {spreadsheet.title} - Integrated_Data")
             except gspread.exceptions.WorksheetNotFound:
                 # Fall back to first worksheet if Integrated_Data doesn't exist
                 worksheet = spreadsheet.get_worksheet(0)
+                connection_status.warning(f"⚠️ 'Integrated_Data' worksheet not found. Using '{worksheet.title}' instead.")
             
             # Get all records
             data = worksheet.get_all_records()
@@ -232,7 +246,7 @@ def load_complaint_data():
                     df["Production_Month"] = df["Ngày SX"].dt.strftime("%m/%Y")
                     df["Production_Date"] = df["Ngày SX"]
                 except Exception as e:
-                    pass
+                    connection_status.warning(f"⚠️ Could not process date column: {e}")
             
             # Make sure numeric columns are properly typed
             if "SL pack/ cây lỗi" in df.columns:
@@ -252,11 +266,11 @@ def load_complaint_data():
             return df
             
         except Exception as e:
-            st.error(f"❌ Lỗi khi truy cập bảng dữ liệu khiếu nại: {str(e)}")
+            st.error(f"❌ Error accessing complaint spreadsheet: {str(e)}")
             return pd.DataFrame()
         
     except Exception as e:
-        st.error(f"❌ Lỗi khi tải dữ liệu khiếu nại: {str(e)}")
+        st.error(f"❌ Error loading complaint data: {str(e)}")
         return pd.DataFrame()
 
 # Function to load AQL data
@@ -267,7 +281,7 @@ def load_aql_data():
         gc = authenticate()
         
         if gc is None:
-            st.error("❌ Không thể xác thực với Google Sheets")
+            st.error("❌ Failed to authenticate with Google Sheets")
             return pd.DataFrame()
         
         # Open the Google Sheet by URL (AQL data)
@@ -278,12 +292,14 @@ def load_aql_data():
         try:
             spreadsheet = gc.open_by_key(sheet_key)
             connection_status = st.empty()
+            connection_status.success(f"✅ Successfully opened AQL spreadsheet: {spreadsheet.title}")
             
             # Get the ID AQL worksheet
             try:
                 worksheet = spreadsheet.worksheet('ID AQL')
+                connection_status.success(f"✅ Connected to: {spreadsheet.title} - ID AQL")
             except gspread.exceptions.WorksheetNotFound:
-                st.error(f"❌ Không tìm thấy bảng 'ID AQL'")
+                connection_status.error(f"❌ 'ID AQL' worksheet not found")
                 return pd.DataFrame()
             
             # Get all records
@@ -300,7 +316,7 @@ def load_aql_data():
                     df["Production_Month"] = df["Ngày SX"].dt.strftime("%m/%Y")
                     df["Production_Date"] = df["Ngày SX"]
                 except Exception as e:
-                    pass
+                    connection_status.warning(f"⚠️ Could not process date column: {e}")
             
             # Make sure numeric columns are properly typed
             if "Số lượng hold ( gói/thùng)" in df.columns:
@@ -316,14 +332,14 @@ def load_aql_data():
             return df
             
         except Exception as e:
-            st.error(f"❌ Lỗi khi truy cập bảng dữ liệu AQL: {str(e)}")
+            st.error(f"❌ Error accessing AQL spreadsheet: {str(e)}")
             return pd.DataFrame()
         
     except Exception as e:
-        st.error(f"❌ Lỗi khi tải dữ liệu AQL: {str(e)}")
+        st.error(f"❌ Error loading AQL data: {str(e)}")
         return pd.DataFrame()
 
-# Function to load AQL gói data
+# Function to load AQL gói data - NEW
 @st.cache_data(ttl=300)  # Cache for 5 minutes
 def load_aql_goi_data():
     try:
@@ -331,7 +347,7 @@ def load_aql_goi_data():
         gc = authenticate()
         
         if gc is None:
-            st.error("❌ Không thể xác thực với Google Sheets")
+            st.error("❌ Failed to authenticate with Google Sheets")
             return pd.DataFrame()
         
         # Open the Google Sheet by URL (AQL data)
@@ -346,8 +362,9 @@ def load_aql_goi_data():
             # Get the AQL gói worksheet
             try:
                 worksheet = spreadsheet.worksheet('AQL gói')
+                connection_status.success(f"✅ Connected to: {spreadsheet.title} - AQL gói")
             except gspread.exceptions.WorksheetNotFound:
-                st.error(f"❌ Không tìm thấy bảng 'AQL gói'")
+                connection_status.error(f"❌ 'AQL gói' worksheet not found")
                 return pd.DataFrame()
             
             # Get all records
@@ -362,14 +379,14 @@ def load_aql_goi_data():
             return df
             
         except Exception as e:
-            st.error(f"❌ Lỗi khi truy cập bảng AQL gói: {str(e)}")
+            st.error(f"❌ Error accessing AQL gói spreadsheet: {str(e)}")
             return pd.DataFrame()
         
     except Exception as e:
-        st.error(f"❌ Lỗi khi tải dữ liệu AQL gói: {str(e)}")
+        st.error(f"❌ Error loading AQL gói data: {str(e)}")
         return pd.DataFrame()
 
-# Function to load AQL Tô ly data
+# Function to load AQL Tô ly data - NEW
 @st.cache_data(ttl=300)  # Cache for 5 minutes
 def load_aql_to_ly_data():
     try:
@@ -377,7 +394,7 @@ def load_aql_to_ly_data():
         gc = authenticate()
         
         if gc is None:
-            st.error("❌ Không thể xác thực với Google Sheets")
+            st.error("❌ Failed to authenticate with Google Sheets")
             return pd.DataFrame()
         
         # Open the Google Sheet by URL (AQL data)
@@ -392,8 +409,9 @@ def load_aql_to_ly_data():
             # Get the AQL Tô ly worksheet
             try:
                 worksheet = spreadsheet.worksheet('AQL Tô ly')
+                connection_status.success(f"✅ Connected to: {spreadsheet.title} - AQL Tô ly")
             except gspread.exceptions.WorksheetNotFound:
-                st.error(f"❌ Không tìm thấy bảng 'AQL Tô ly'")
+                connection_status.error(f"❌ 'AQL Tô ly' worksheet not found")
                 return pd.DataFrame()
             
             # Get all records
@@ -408,11 +426,11 @@ def load_aql_to_ly_data():
             return df
             
         except Exception as e:
-            st.error(f"❌ Lỗi khi truy cập bảng AQL Tô ly: {str(e)}")
+            st.error(f"❌ Error accessing AQL Tô ly spreadsheet: {str(e)}")
             return pd.DataFrame()
         
     except Exception as e:
-        st.error(f"❌ Lỗi khi tải dữ liệu AQL Tô ly: {str(e)}")
+        st.error(f"❌ Error loading AQL Tô ly data: {str(e)}")
         return pd.DataFrame()
 
 # Function to load production data (Sản lượng)
@@ -423,7 +441,7 @@ def load_production_data():
         gc = authenticate()
         
         if gc is None:
-            st.error("❌ Không thể xác thực với Google Sheets")
+            st.error("❌ Failed to authenticate with Google Sheets")
             return pd.DataFrame()
         
         # Open the Google Sheet by URL (AQL data - same spreadsheet, different worksheet)
@@ -434,12 +452,14 @@ def load_production_data():
         try:
             spreadsheet = gc.open_by_key(sheet_key)
             connection_status = st.empty()
+            connection_status.success(f"✅ Successfully opened production spreadsheet: {spreadsheet.title}")
             
             # Get the Sản lượng worksheet
             try:
                 worksheet = spreadsheet.worksheet('Sản lượng')
+                connection_status.success(f"✅ Connected to: {spreadsheet.title} - Sản lượng")
             except gspread.exceptions.WorksheetNotFound:
-                st.error(f"❌ Không tìm thấy bảng 'Sản lượng'")
+                connection_status.error(f"❌ 'Sản lượng' worksheet not found")
                 return pd.DataFrame()
             
             # Get all records
@@ -456,7 +476,7 @@ def load_production_data():
                     df["Production_Month"] = df["Ngày"].dt.strftime("%m/%Y")
                     df["Production_Date"] = df["Ngày"]
                 except Exception as e:
-                    pass
+                    connection_status.warning(f"⚠️ Could not process date column: {e}")
             
             # Make sure numeric columns are properly typed
             if "Sản lượng" in df.columns:
@@ -472,20 +492,20 @@ def load_production_data():
             return df
             
         except Exception as e:
-            st.error(f"❌ Lỗi khi truy cập bảng Sản lượng: {str(e)}")
+            st.error(f"❌ Error accessing production spreadsheet: {str(e)}")
             return pd.DataFrame()
         
     except Exception as e:
-        st.error(f"❌ Lỗi khi tải dữ liệu sản lượng: {str(e)}")
+        st.error(f"❌ Error loading production data: {str(e)}")
         return pd.DataFrame()
 
-# Function to calculate TEM VÀNG - FIXED VERSION
+# Function to calculate TEM VÀNG - UPDATED with new matching logic
 def calculate_tem_vang(aql_df, production_df):
     """Calculate TEM VÀNG by matching production data with AQL data"""
     try:
         # Check if dataframes are empty
         if aql_df.empty or production_df.empty:
-            st.error("❌ Không thể tính TEM VÀNG - thiếu dữ liệu")
+            st.error("❌ Cannot calculate TEM VÀNG - missing data")
             return pd.DataFrame()
         
         # Create copies to avoid modifying originals
@@ -499,19 +519,7 @@ def calculate_tem_vang(aql_df, production_df):
                 if pd.isna(time_str):
                     return None
                 
-                # Handle different time formats
-                if isinstance(time_str, str):
-                    if ':' in time_str:
-                        hour = int(time_str.split(':')[0])
-                    else:
-                        try:
-                            hour = int(time_str)
-                        except:
-                            return None
-                elif isinstance(time_str, (int, float)):
-                    hour = int(time_str)
-                else:
-                    return None
+                hour = int(time_str.split(':')[0])
                 
                 # Map hour to shift
                 if 6 <= hour < 14:
@@ -527,188 +535,98 @@ def calculate_tem_vang(aql_df, production_df):
         if "Giờ" in aql_copy.columns:
             aql_copy["Shift"] = aql_copy["Giờ"].apply(map_time_to_shift)
         else:
-            st.warning("⚠️ Thiếu cột 'Giờ' trong dữ liệu AQL để ánh xạ ca làm việc")
+            st.warning("⚠️ Missing 'Giờ' column in AQL data for shift mapping")
             return pd.DataFrame()
         
-        # Ensure all line values are strings
-        if "Line" in aql_copy.columns:
-            aql_copy["Line"] = aql_copy["Line"].astype(str)
-        
-        if "Line" in prod_copy.columns:
-            prod_copy["Line"] = prod_copy["Line"].astype(str)
-        
-        # Clean and standardize leader name fields for better matching
-        if "Tên Trưởng ca" in aql_copy.columns:
-            aql_copy["Tên Trưởng ca"] = aql_copy["Tên Trưởng ca"].astype(str).str.strip()
-            
-        if "Người phụ trách" in prod_copy.columns:
-            prod_copy["Người phụ trách"] = prod_copy["Người phụ trách"].astype(str).str.strip()
-            
-        # Direct matching approach - process row by row instead of groupby
+        # Perform the matching and aggregation
         tem_vang_data = []
         
-        # Process each production record individually to find matches
-        for idx, prod_row in prod_copy.iterrows():
-            prod_date = prod_row["Ngày"]
-            prod_line = str(prod_row["Line"])
-            prod_volume = prod_row["Sản lượng"]
+        # Group production data by Date, Line, Shift, Leader
+        if all(col in prod_copy.columns for col in ["Ngày", "Line", "Ca", "Người phụ trách"]):
+            prod_groups = prod_copy.groupby(["Ngày", "Line", "Ca", "Người phụ trách"])
             
-            # Standardize shift format
-            if isinstance(prod_row["Ca"], (int, float)):
-                prod_shift = str(int(prod_row["Ca"]))
-            else:
-                prod_shift = str(prod_row["Ca"]).strip()
+            for (prod_date, prod_line, prod_shift, prod_leader), prod_group in prod_groups:
+                # Find matching AQL records
+                matching_aql = aql_copy[
+                    (aql_copy["Ngày SX"] == prod_date) &
+                    (aql_copy["Line"] == prod_line) &
+                    (aql_copy["Shift"] == prod_shift) &
+                    (aql_copy["Tên Trưởng ca"] == prod_leader)
+                ]
                 
-            prod_leader = str(prod_row["Người phụ trách"]).strip()
-            
-            # Find matching AQL records - more flexible matching for leader
-            matching_records = aql_copy[
-                (aql_copy["Ngày SX"] == prod_date) &
-                (aql_copy["Line"] == prod_line) &
-                (aql_copy["Shift"] == prod_shift)
-            ]
-            
-            # Try exact match for leader first
-            leader_matched = matching_records[matching_records["Tên Trưởng ca"] == prod_leader]
-            
-            # If no match, try more flexible approach
-            if len(leader_matched) == 0:
-                # Try finding if leader name is a substring in either direction
-                for _, aql_row in matching_records.iterrows():
-                    aql_leader = str(aql_row["Tên Trưởng ca"]).strip()
-                    if (aql_leader in prod_leader) or (prod_leader in aql_leader):
-                        leader_matched = pd.concat([leader_matched, aql_row.to_frame().T])
-            
-            # If still no match, use all matching records by other criteria
-            if len(leader_matched) == 0:
-                leader_matched = matching_records
-            
-            # Calculate hold quantity and TEM VÀNG
-            total_hold = leader_matched["Số lượng hold ( gói/thùng)"].sum() if not leader_matched.empty else 0
-            
-            if prod_volume > 0:
-                tem_vang_percent = (total_hold / prod_volume) * 100
+                # If matches found, calculate TEM VÀNG
+                total_production = prod_group["Sản lượng"].sum()
+                total_hold = matching_aql["Số lượng hold ( gói/thùng)"].sum() if not matching_aql.empty else 0
                 
-                tem_vang_data.append({
-                    "Date": prod_date,
-                    "Line": prod_line,
-                    "Shift": prod_shift,
-                    "Leader": prod_leader,
-                    "Production_Volume": prod_volume,
-                    "Hold_Quantity": total_hold,
-                    "TEM_VANG": tem_vang_percent,
-                    "Production_Month": prod_date.strftime("%m/%Y") if isinstance(prod_date, datetime) else pd.to_datetime(prod_date).strftime("%m/%Y")
-                })
+                if total_production > 0:
+                    tem_vang_percent = (total_hold / total_production) * 100
+                    
+                    tem_vang_data.append({
+                        "Date": prod_date,
+                        "Line": prod_line,
+                        "Shift": prod_shift,
+                        "Leader": prod_leader,
+                        "Production_Volume": total_production,
+                        "Hold_Quantity": total_hold,
+                        "TEM_VANG": tem_vang_percent,
+                        "Production_Month": prod_date.strftime("%m/%Y") if isinstance(prod_date, datetime) else pd.to_datetime(prod_date).strftime("%m/%Y")
+                    })
+        else:
+            st.warning("⚠️ Missing required columns in production data for TEM VÀNG calculation")
+            return pd.DataFrame()
         
         # Convert to DataFrame
         tem_vang_df = pd.DataFrame(tem_vang_data)
         
         # Ensure Production_Date is properly set for filtering
-        if not tem_vang_df.empty:
-            tem_vang_df["Production_Date"] = tem_vang_df["Date"]
-            return tem_vang_df
-        else:
-            st.warning("⚠️ Không tìm thấy kết quả phù hợp để tính TEM VÀNG")
-            return pd.DataFrame()
+        tem_vang_df["Production_Date"] = tem_vang_df["Date"]
+        
+        return tem_vang_df
         
     except Exception as e:
-        st.error(f"❌ Lỗi khi tính TEM VÀNG: {str(e)}")
-        import traceback
-        st.error(f"Chi tiết lỗi: {traceback.format_exc()}")
+        st.error(f"❌ Error calculating TEM VÀNG: {str(e)}")
         return pd.DataFrame()
 
-# Function to analyze defect patterns - FIXED VERSION
-def analyze_defect_patterns(aql_df, aql_goi_df, aql_to_ly_df):
-    """Analyze defect patterns in AQL data with proper defect name mapping"""
+# Function to calculate process capability
+def calculate_process_capability(tem_vang_df, target=2.18):
+    """Calculate process capability metrics for TEM VÀNG by line"""
     try:
         # Check if dataframe is empty
-        if aql_df.empty:
-            return {}
+        if tem_vang_df.empty:
+            return pd.DataFrame()
         
-        # Create copy to avoid modifying original
-        df = aql_df.copy()
+        # Group by line to calculate process metrics
+        process_df = tem_vang_df.groupby("Line").agg({
+            "TEM_VANG": ["mean", "std", "count"]
+        }).reset_index()
         
-        # Create defect mapping dictionaries
-        defect_goi_map = {}
-        defect_to_ly_map = {}
+        # Flatten multi-index columns
+        process_df.columns = ["Line", "Mean_TEM_VANG", "Std_TEM_VANG", "Sample_Count"]
         
-        # Build mapping from AQL gói
-        if not aql_goi_df.empty and "Defect code" in aql_goi_df.columns and "Defect Name" in aql_goi_df.columns:
-            for _, row in aql_goi_df.iterrows():
-                key = f"{row['Defect code']}-{row['Type']}" if "Type" in aql_goi_df.columns else row["Defect code"]
-                defect_goi_map[key] = row["Defect Name"]
-        
-        # Build mapping from AQL Tô ly
-        if not aql_to_ly_df.empty and "Defect code" in aql_to_ly_df.columns and "Defect Name" in aql_to_ly_df.columns:
-            for _, row in aql_to_ly_df.iterrows():
-                key = f"{row['Defect code']}-{row['Type']}" if "Type" in aql_to_ly_df.columns else row["Defect code"]
-                defect_to_ly_map[key] = row["Defect Name"]
-        
-        # Add Defect Name column to df
-        df["Defect_Name"] = None
-        
-        # Map defect names based on line
-        for i, row in df.iterrows():
-            line = row["Line"] if "Line" in df.columns else None
-            defect_code = row["Defect code"] if "Defect code" in df.columns else None
-            defect_type = row["Type"] if "Type" in df.columns else None
-            
-            if line is not None and defect_code is not None:
-                key = f"{defect_code}-{defect_type}" if defect_type is not None else defect_code
+        # Calculate Cpk (process capability index)
+        def calc_cpk(row):
+            if row["Std_TEM_VANG"] > 0:
+                # For TEM VÀNG, lower is better, so USL is the target
+                # LSL is 0 (can't have negative TEM VÀNG)
+                usl = target
+                lsl = 0
                 
-                # Modified logic to handle non-numeric Line values
-                try:
-                    # Try to convert line to int for comparison
-                    line_int = int(line) if line and not pd.isna(line) else 0
-                    # Lines 1-6 use AQL gói
-                    if line_int <= 6:
-                        df.at[i, "Defect_Name"] = defect_goi_map.get(key, defect_code)
-                    # Lines 7-8 use AQL Tô ly
-                    else:
-                        df.at[i, "Defect_Name"] = defect_to_ly_map.get(key, defect_code)
-                except (ValueError, TypeError):
-                    # For non-numeric lines, default to AQL gói
-                    df.at[i, "Defect_Name"] = defect_goi_map.get(key, defect_code)
+                cpu = (usl - row["Mean_TEM_VANG"]) / (3 * row["Std_TEM_VANG"])
+                cpl = (row["Mean_TEM_VANG"] - lsl) / (3 * row["Std_TEM_VANG"])
+                
+                return min(cpu, cpl)
+            else:
+                return None
         
-        # Use Defect_Name for analysis if available, otherwise use code
-        defect_col = "Defect_Name" if df["Defect_Name"].notna().any() else "Defect code"
+        # Add Cpk to the dataframe
+        process_df["Cpk"] = process_df.apply(calc_cpk, axis=1)
         
-        # Group by defect to get frequency
-        defect_counts = df.groupby(defect_col).size().reset_index(name="Count")
-        defect_counts = defect_counts.sort_values("Count", ascending=False)
+        return process_df
         
-        # Calculate percentages
-        total_defects = defect_counts["Count"].sum()
-        defect_counts["Percentage"] = (defect_counts["Count"] / total_defects * 100).round(1)
-        defect_counts["Cumulative"] = defect_counts["Percentage"].cumsum()
-        
-        # Identify top defects (80% by Pareto principle)
-        vital_few = defect_counts[defect_counts["Cumulative"] <= 80]
-        
-        # Group by Line and Defect for line-specific patterns
-        line_defects = df.groupby(["Line", defect_col]).size().reset_index(name="Count")
-        pivot_line_defects = line_defects.pivot(index="Line", columns=defect_col, values="Count").fillna(0)
-        
-        # Calculate defect rates by MDG
-        mdg_defects = pd.DataFrame()
-        if "Máy" in df.columns:
-            mdg_defects = df.groupby(["Line", "Máy", defect_col]).size().reset_index(name="Count")
-        
-        # Return the analysis results
-        return {
-            "defect_counts": defect_counts,
-            "vital_few": vital_few,
-            "line_defects": line_defects,
-            "pivot_line_defects": pivot_line_defects,
-            "mdg_defects": mdg_defects,
-            "defect_column": defect_col
-        }
-            
     except Exception as e:
-        st.error(f"❌ Lỗi khi phân tích mẫu lỗi: {str(e)}")
-        import traceback
-        st.error(f"Chi tiết lỗi: {traceback.format_exc()}")
-        return {}
+        st.error(f"❌ Error calculating process capability: {str(e)}")
+        return pd.DataFrame()
+
 # Function to analyze defect patterns - UPDATED with defect name mapping
 def analyze_defect_patterns(aql_df, aql_goi_df, aql_to_ly_df):
     """Analyze defect patterns in AQL data with proper defect name mapping"""
@@ -791,7 +709,7 @@ def analyze_defect_patterns(aql_df, aql_goi_df, aql_to_ly_df):
         }
             
     except Exception as e:
-        st.error(f"❌ Lỗi khi phân tích mẫu lỗi: {str(e)}")
+        st.error(f"❌ Error analyzing defect patterns: {str(e)}")
         return {}
 
 # Function to link internal defects with customer complaints
@@ -812,7 +730,7 @@ def link_defects_with_complaints(aql_df, complaint_df):
             if "Defect code" in aql_copy.columns and "Line" in aql_copy.columns:
                 aql_grouped = aql_copy.groupby(["Production_Date", "Line", "Defect code"]).size().reset_index(name="Defect_Count")
             else:
-                st.warning("⚠️ Thiếu cột cần thiết trong dữ liệu AQL để liên kết")
+                st.warning("⚠️ Missing required columns in AQL data for linking")
                 return pd.DataFrame()
             
             # Group complaints by date, line, and defect type
@@ -823,7 +741,7 @@ def link_defects_with_complaints(aql_df, complaint_df):
                 else:
                     complaint_grouped = complaint_copy.groupby(["Production_Date", "Line", "Tên lỗi"]).size().reset_index(name="Complaint_Count")
             else:
-                st.warning("⚠️ Thiếu cột cần thiết trong dữ liệu khiếu nại để liên kết")
+                st.warning("⚠️ Missing required columns in complaint data for linking")
                 return pd.DataFrame()
             
             # Create mapping between internal defect codes and customer complaint types
@@ -888,11 +806,11 @@ def link_defects_with_complaints(aql_df, complaint_df):
             return linked_defects
             
         else:
-            st.warning("⚠️ Thiếu cột ngày để liên kết lỗi với khiếu nại")
+            st.warning("⚠️ Missing date columns for linking defects with complaints")
             return pd.DataFrame()
             
     except Exception as e:
-        st.error(f"❌ Lỗi khi liên kết lỗi với khiếu nại: {str(e)}")
+        st.error(f"❌ Error linking defects with complaints: {str(e)}")
         return pd.DataFrame()
 
 # Load the data - UPDATED to include new data sources
@@ -905,12 +823,18 @@ def load_all_data():
     aql_df = load_aql_data()
     production_df = load_production_data()
     
-    # Load defect mapping data
+    # Load defect mapping data - NEW
     aql_goi_df = load_aql_goi_data()
     aql_to_ly_df = load_aql_to_ly_data()
     
     # Calculate TEM VÀNG
     tem_vang_df = calculate_tem_vang(aql_df, production_df)
+    
+    # Calculate process capability
+    if not tem_vang_df.empty:
+        process_capability_df = calculate_process_capability(tem_vang_df)
+    else:
+        process_capability_df = pd.DataFrame()
     
     # Analyze defect patterns - UPDATED to use defect mapping
     defect_patterns = analyze_defect_patterns(aql_df, aql_goi_df, aql_to_ly_df)
@@ -925,25 +849,26 @@ def load_all_data():
         "aql_goi_data": aql_goi_df,
         "aql_to_ly_data": aql_to_ly_df,
         "tem_vang_data": tem_vang_df,
+        "process_capability": process_capability_df,
         "defect_patterns": defect_patterns,
         "linked_defects": linked_defects_df
     }
 
 # Title and description
-st.markdown('<div class="main-header">Báo cáo chất lượng CF MMB</div>', unsafe_allow_html=True)
-st.markdown("Báo cáo tổng hợp về chất lượng sản xuất và mức độ hài lòng của khách hàng")
+st.markdown('<div class="main-header">FMCG Quality Analytics Dashboard</div>', unsafe_allow_html=True)
+st.markdown("Comprehensive quality analytics for production monitoring and customer satisfaction")
 
 # Load all data
 data = load_all_data()
 
 # Check if key dataframes are empty
 if data["aql_data"].empty or data["production_data"].empty:
-    st.warning("⚠️ Dữ liệu chưa đầy đủ. Vui lòng kiểm tra kết nối đến Google Sheet.")
+    st.warning("⚠️ Missing essential data. Please check your Google Sheet connection.")
     # Still continue rendering with available data
 
 # Create a sidebar for filters
 with st.sidebar:
-    st.markdown("<h2 style='text-align: center; color: #1E3A8A;'>Bộ lọc</h2>", unsafe_allow_html=True)
+    st.markdown("<h2 style='text-align: center; color: #1E3A8A;'>Filters</h2>", unsafe_allow_html=True)
     
     # Initialize filtered dataframes
     filtered_aql_df = data["aql_data"].copy()
@@ -957,13 +882,13 @@ with st.sidebar:
             min_date = data["aql_data"]["Production_Date"].min().date()
             max_date = data["aql_data"]["Production_Date"].max().date()
             
-            st.subheader("📅 Phạm vi ngày")
+            st.subheader("📅 Date Range")
             # Create date range selector
             col1, col2 = st.columns(2)
             with col1:
-                start_date = st.date_input("Ngày bắt đầu", min_date, min_value=min_date, max_value=max_date)
+                start_date = st.date_input("Start Date", min_date, min_value=min_date, max_value=max_date)
             with col2:
-                end_date = st.date_input("Ngày kết thúc", max_date, min_value=min_date, max_value=max_date)
+                end_date = st.date_input("End Date", max_date, min_value=min_date, max_value=max_date)
             
             # Apply date filter to dataframes
             if "Production_Date" in filtered_aql_df.columns:
@@ -984,15 +909,33 @@ with st.sidebar:
                     (filtered_tem_vang_df["Production_Date"].dt.date <= end_date)
                 ]
         except Exception as e:
-            st.warning(f"Lỗi khi lọc theo ngày: {e}")
+            st.warning(f"Error in date filter: {e}")
+    
+    # Month filter - KEEP for backward compatibility
+    if not data["tem_vang_data"].empty and "Production_Month" in data["tem_vang_data"].columns:
+        try:
+            production_months = ["All"] + sorted(data["tem_vang_data"]["Production_Month"].unique().tolist())
+            selected_month = st.selectbox("📆 Select Production Month", production_months)
+            
+            if selected_month != "All":
+                filtered_tem_vang_df = filtered_tem_vang_df[filtered_tem_vang_df["Production_Month"] == selected_month]
+                
+                # Apply to other dataframes
+                if "Production_Month" in filtered_aql_df.columns:
+                    filtered_aql_df = filtered_aql_df[filtered_aql_df["Production_Month"] == selected_month]
+                
+                if "Production_Month" in filtered_complaint_df.columns:
+                    filtered_complaint_df = filtered_complaint_df[filtered_complaint_df["Production_Month"] == selected_month]
+        except Exception as e:
+            st.warning(f"Error in month filter: {e}")
     
     # Line filter
     if not data["tem_vang_data"].empty and "Line" in data["tem_vang_data"].columns:
         try:
-            lines = ["Tất cả"] + sorted(data["tem_vang_data"]["Line"].unique().tolist())
-            selected_line = st.selectbox("🏭 Chọn line sản xuất", lines)
+            lines = ["All"] + sorted(data["tem_vang_data"]["Line"].unique().tolist())
+            selected_line = st.selectbox("🏭 Select Production Line", lines)
             
-            if selected_line != "Tất cả":
+            if selected_line != "All":
                 filtered_tem_vang_df = filtered_tem_vang_df[filtered_tem_vang_df["Line"] == selected_line]
                 
                 # Apply to other dataframes
@@ -1002,47 +945,47 @@ with st.sidebar:
                 if "Line" in filtered_complaint_df.columns:
                     filtered_complaint_df = filtered_complaint_df[filtered_complaint_df["Line"] == selected_line]
         except Exception as e:
-            st.warning(f"Lỗi khi lọc theo line: {e}")
+            st.warning(f"Error in line filter: {e}")
     
     # Product filter
     if not data["complaint_data"].empty and "Tên sản phẩm" in data["complaint_data"].columns:
         try:
-            products = ["Tất cả"] + sorted(data["complaint_data"]["Tên sản phẩm"].unique().tolist())
-            selected_product = st.selectbox("🍜 Chọn sản phẩm", products)
+            products = ["All"] + sorted(data["complaint_data"]["Tên sản phẩm"].unique().tolist())
+            selected_product = st.selectbox("🍜 Select Product", products)
             
-            if selected_product != "Tất cả":
+            if selected_product != "All":
                 filtered_complaint_df = filtered_complaint_df[filtered_complaint_df["Tên sản phẩm"] == selected_product]
                 
                 # Filter AQL data by item if possible
                 if "Tên sản phẩm" in filtered_aql_df.columns:
                     filtered_aql_df = filtered_aql_df[filtered_aql_df["Tên sản phẩm"] == selected_product]
         except Exception as e:
-            st.warning(f"Lỗi khi lọc theo sản phẩm: {e}")
+            st.warning(f"Error in product filter: {e}")
     
     # Refresh button
-    if st.button("🔄 Làm mới dữ liệu", use_container_width=True):
+    if st.button("🔄 Refresh Data", use_container_width=True):
         st.cache_data.clear()
         st.experimental_rerun()
     
     # Show last update time
-    st.markdown(f"**Cập nhật gần nhất:** {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
+    st.markdown(f"**Last updated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
     # Add auto-refresh checkbox
-    auto_refresh = st.checkbox("⏱️ Tự động làm mới (5p)", value=False)
+    auto_refresh = st.checkbox("⏱️ Enable Auto-Refresh (5m)", value=False)
 
 # Main dashboard layout with tabs for the 3 pages
 tab1, tab2, tab3 = st.tabs([
-    "📈 Phân tích chất lượng sản xuất", 
-    "🔍 Phân tích khiếu nại khách hàng",
-    "🔄 Liên kết chất lượng nội bộ - bên ngoài"
+    "📈 Production Quality Analysis", 
+    "🔍 Customer Complaint Analysis",
+    "🔄 Internal-External Quality Link"
 ])
 
 # Page 1: Production Quality Analysis (TEM VÀNG and defects by line/MDG)
 with tab1:
-    st.markdown('<div class="sub-header">Tổng quan chất lượng sản xuất</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sub-header">Production Quality Overview</div>', unsafe_allow_html=True)
     
     # Key metrics row
-    metrics_col1, metrics_col2, metrics_col3 = st.columns(3)
+    metrics_col1, metrics_col2, metrics_col3, metrics_col4 = st.columns(4)
     
     with metrics_col1:
         if not filtered_tem_vang_df.empty:
@@ -1052,17 +995,17 @@ with tab1:
             
             st.markdown(f"""
             <div class="metric-card">
-                <div class="metric-title">TEM VÀNG trung bình</div>
+                <div class="metric-title">Average TEM VÀNG</div>
                 <div class="metric-value">{avg_tem_vang:.2f}%</div>
                 <div style="color: {'red' if tem_delta > 0 else 'green'};">
-                    {f"{tem_delta:.2f}% {'cao hơn' if tem_delta > 0 else 'thấp hơn'} mục tiêu"}
+                    {f"{tem_delta:.2f}% {'above' if tem_delta > 0 else 'below'} target"}
                 </div>
             </div>
             """, unsafe_allow_html=True)
         else:
             st.markdown(f"""
             <div class="metric-card">
-                <div class="metric-title">TEM VÀNG trung bình</div>
+                <div class="metric-title">Average TEM VÀNG</div>
                 <div class="metric-value">N/A</div>
             </div>
             """, unsafe_allow_html=True)
@@ -1073,38 +1016,61 @@ with tab1:
             
             st.markdown(f"""
             <div class="metric-card">
-                <div class="metric-title">Tổng số lượng hold</div>
+                <div class="metric-title">Total Hold Quantity</div>
                 <div class="metric-value">{total_hold:,.0f}</div>
             </div>
             """, unsafe_allow_html=True)
         else:
             st.markdown(f"""
             <div class="metric-card">
-                <div class="metric-title">Tổng số lượng hold</div>
+                <div class="metric-title">Total Hold Quantity</div>
                 <div class="metric-value">N/A</div>
             </div>
             """, unsafe_allow_html=True)
     
     with metrics_col3:
+        if not data["process_capability"].empty:
+            avg_cpk = data["process_capability"]["Cpk"].mean()
+            cpk_color = "green" if avg_cpk >= 1.33 else ("orange" if avg_cpk >= 1.0 else "red")
+            cpk_status = "Excellent" if avg_cpk >= 1.33 else ("Adequate" if avg_cpk >= 1.0 else "Poor")
+            
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-title">Process Capability</div>
+                <div class="metric-value">{avg_cpk:.2f}</div>
+                <div style="color: {cpk_color};">
+                    {cpk_status} capability
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-title">Process Capability</div>
+                <div class="metric-value">N/A</div>
+            </div>
+            """, unsafe_allow_html=True)
+    
+    with metrics_col4:
         if not filtered_aql_df.empty and "Defect code" in filtered_aql_df.columns:
             defect_types = filtered_aql_df["Defect code"].nunique()
             
             st.markdown(f"""
             <div class="metric-card">
-                <div class="metric-title">Loại lỗi</div>
+                <div class="metric-title">Defect Types</div>
                 <div class="metric-value">{defect_types}</div>
             </div>
             """, unsafe_allow_html=True)
         else:
             st.markdown(f"""
             <div class="metric-card">
-                <div class="metric-title">Loại lỗi</div>
+                <div class="metric-title">Defect Types</div>
                 <div class="metric-value">N/A</div>
             </div>
             """, unsafe_allow_html=True)
     
     # TEM VÀNG Analysis
-    st.markdown('<div class="sub-header">Phân tích TEM VÀNG</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sub-header">TEM VÀNG Analysis</div>', unsafe_allow_html=True)
     
     tem_col1, tem_col2 = st.columns(2)
     
@@ -1136,13 +1102,13 @@ with tab1:
                     y=2.18,
                     line_dash="dash",
                     line_color="red",
-                    annotation_text="Mục tiêu (2.18%)"
+                    annotation_text="Target (2.18%)"
                 )
                 
                 # Update layout
                 fig.update_layout(
-                    title="Xu hướng TEM VÀNG theo thời gian",
-                    xaxis_title="Ngày",
+                    title="TEM VÀNG Trend Over Time",
+                    xaxis_title="Date",
                     yaxis_title="TEM VÀNG (%)",
                     height=350,
                     margin=dict(l=40, r=40, t=40, b=40)
@@ -1150,7 +1116,7 @@ with tab1:
                 
                 st.plotly_chart(fig, use_container_width=True)
             except Exception as e:
-                st.error(f"Lỗi khi tạo biểu đồ xu hướng TEM VÀNG: {str(e)}")
+                st.error(f"Error creating TEM VÀNG trend chart: {str(e)}")
     
     with tem_col2:
         # TEM VÀNG by line
@@ -1180,12 +1146,12 @@ with tab1:
                     y=2.18,
                     line_dash="dash",
                     line_color="red",
-                    annotation_text="Mục tiêu (2.18%)"
+                    annotation_text="Target (2.18%)"
                 )
                 
                 # Update layout
                 fig.update_layout(
-                    title="TEM VÀNG theo Line sản xuất",
+                    title="TEM VÀNG by Production Line",
                     xaxis_title="Line",
                     yaxis_title="TEM VÀNG (%)",
                     height=350,
@@ -1194,10 +1160,58 @@ with tab1:
                 
                 st.plotly_chart(fig, use_container_width=True)
             except Exception as e:
-                st.error(f"Lỗi khi tạo biểu đồ TEM VÀNG theo line: {str(e)}")
+                st.error(f"Error creating TEM VÀNG by line chart: {str(e)}")
+    
+    # Process Capability Analysis
+    st.markdown('<div class="sub-header">Process Capability Analysis</div>', unsafe_allow_html=True)
+    
+    if not data["process_capability"].empty:
+        # Create a table with process capability data
+        cap_df = data["process_capability"].copy()
+        
+        # Add color coding for Cpk values
+        def color_cpk(val):
+            if val >= 1.33:
+                return 'background-color: #d4edda'  # Light green
+            elif val >= 1.0:
+                return 'background-color: #fff3cd'  # Light yellow
+            else:
+                return 'background-color: #f8d7da'  # Light red
+        
+        # Apply styling
+        styled_cap_df = cap_df.style.applymap(color_cpk, subset=['Cpk'])
+        
+        # Format numeric columns
+        formatted_cap_df = styled_cap_df.format({
+            'Mean_TEM_VANG': '{:.2f}%',
+            'Std_TEM_VANG': '{:.2f}%',
+            'Cpk': '{:.2f}'
+        })
+        
+        # Rename columns for display
+        cap_df.columns = ["Line", "Mean TEM VÀNG (%)", "Std Dev (%)", "Sample Count", "Cpk"]
+        
+        # Display the table
+        st.dataframe(formatted_cap_df, use_container_width=True, height=200)
+        
+        # Add interpretation
+        st.markdown("""
+        <div class="insight-card">
+            <div class="insight-title">Process Capability Interpretation</div>
+            <div class="insight-content">
+                <ul>
+                    <li><strong>Cpk ≥ 1.33</strong>: Excellent capability - Process is well controlled and within specifications</li>
+                    <li><strong>1.00 ≤ Cpk < 1.33</strong>: Adequate capability - Process meets specifications but has room for improvement</li>
+                    <li><strong>Cpk < 1.00</strong>: Poor capability - Process is not capable of consistently meeting specifications</li>
+                </ul>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.warning("⚠️ Process capability data not available. Unable to calculate Cpk values.")
     
     # Defect Analysis by Line and MDG
-    st.markdown('<div class="sub-header">Phân tích lỗi theo Line và MDG</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sub-header">Defect Analysis by Line and MDG</div>', unsafe_allow_html=True)
     
     defect_col1, defect_col2 = st.columns(2)
     
@@ -1216,7 +1230,7 @@ with tab1:
                     go.Bar(
                         x=defect_counts[defect_col],
                         y=defect_counts["Count"],
-                        name="Số lượng lỗi",
+                        name="Defect Count",
                         marker_color="steelblue"
                     ),
                     secondary_y=False
@@ -1227,7 +1241,7 @@ with tab1:
                     go.Scatter(
                         x=defect_counts[defect_col],
                         y=defect_counts["Cumulative"],
-                        name="Tích lũy %",
+                        name="Cumulative %",
                         mode="lines+markers",
                         marker=dict(color="firebrick"),
                         line=dict(color="firebrick", width=2)
@@ -1240,21 +1254,21 @@ with tab1:
                     y=80,
                     line_dash="dash",
                     line_color="green",
-                    annotation_text="80% lỗi",
+                    annotation_text="80% of Defects",
                     secondary_y=True
                 )
                 
                 # Update layout
                 fig.update_layout(
-                    title="Phân tích Pareto của các lỗi",
-                    xaxis_title="Loại lỗi",
+                    title="Pareto Analysis of Defects",
+                    xaxis_title="Defect",
                     height=350,
                     margin=dict(l=40, r=40, t=40, b=40)
                 )
                 
                 # Set y-axes titles
-                fig.update_yaxes(title_text="Số lượng lỗi", secondary_y=False)
-                fig.update_yaxes(title_text="Tích lũy %", secondary_y=True)
+                fig.update_yaxes(title_text="Defect Count", secondary_y=False)
+                fig.update_yaxes(title_text="Cumulative %", secondary_y=True)
                 
                 st.plotly_chart(fig, use_container_width=True)
                 
@@ -1264,15 +1278,15 @@ with tab1:
                     
                     st.markdown(f"""
                     <div class="insight-card">
-                        <div class="insight-title">Phân tích Pareto</div>
+                        <div class="insight-title">Pareto Analysis Insight</div>
                         <div class="insight-content">
-                            <p>{len(vital_few)} loại lỗi ({len(vital_few)/len(defect_counts)*100:.0f}% tổng số loại) chiếm 80% tất cả các lỗi.</p>
-                            <p>Tập trung cải thiện chất lượng vào: {', '.join(vital_few[defect_col].tolist()[:5])}</p>
+                            <p>{len(vital_few)} defect types ({len(vital_few)/len(defect_counts)*100:.0f}% of all types) account for 80% of all defects.</p>
+                            <p>Focus quality improvement efforts on: {', '.join(vital_few[defect_col].tolist()[:5])}</p>
                         </div>
                     </div>
                     """, unsafe_allow_html=True)
             except Exception as e:
-                st.error(f"Lỗi khi tạo biểu đồ Pareto: {str(e)}")
+                st.error(f"Error creating Pareto chart: {str(e)}")
     
     with defect_col2:
         # Defects by line heatmap
@@ -1284,7 +1298,7 @@ with tab1:
                     # Create heatmap
                     fig = px.imshow(
                         pivot_df,
-                        labels=dict(x="Loại lỗi", y="Line", color="Số lượng"),
+                        labels=dict(x="Defect", y="Line", color="Count"),
                         x=pivot_df.columns,
                         y=pivot_df.index,
                         color_continuous_scale="YlOrRd",
@@ -1293,19 +1307,19 @@ with tab1:
                     
                     # Update layout
                     fig.update_layout(
-                        title="Phân bố lỗi theo Line",
+                        title="Defect Distribution by Line",
                         height=350,
                         margin=dict(l=40, r=40, t=40, b=40)
                     )
                     
                     st.plotly_chart(fig, use_container_width=True)
                 else:
-                    st.warning("⚠️ Không có dữ liệu lỗi để hiển thị biểu đồ nhiệt")
+                    st.warning("⚠️ No defect data available for heatmap visualization")
             except Exception as e:
-                st.error(f"Lỗi khi tạo biểu đồ nhiệt lỗi: {str(e)}")
+                st.error(f"Error creating defect heatmap: {str(e)}")
     
-    # MDG Analysis
-    st.markdown('<div class="sub-header">Phân tích MDG (Máy)</div>', unsafe_allow_html=True)
+    # MDG Analysis - UPDATED to use data from ID AQL
+    st.markdown('<div class="sub-header">MDG (Machine) Analysis</div>', unsafe_allow_html=True)
     
     if "defect_patterns" in data and "mdg_defects" in data["defect_patterns"] and not data["defect_patterns"]["mdg_defects"].empty:
         try:
@@ -1321,8 +1335,8 @@ with tab1:
                 x="Máy",
                 y="Count",
                 color="Line",
-                title="Lỗi theo MDG (Máy) và Line",
-                labels={"Máy": "MDG (Máy)", "Count": "Số lượng lỗi"},
+                title="Defects by MDG (Machine) and Line",
+                labels={"Máy": "MDG (Machine)", "Count": "Defect Count"},
                 barmode="group"
             )
             
@@ -1335,7 +1349,7 @@ with tab1:
             st.plotly_chart(fig, use_container_width=True)
             
             # Display top MDG-defect combinations
-            st.markdown("#### Top các kết hợp MDG-Lỗi")
+            st.markdown("#### Top MDG-Defect Combinations")
             
             # Group by Line, MDG, and Defect code
             top_mdg_defects = mdg_defects.sort_values("Count", ascending=False).head(10)
@@ -1344,24 +1358,24 @@ with tab1:
             st.dataframe(top_mdg_defects, use_container_width=True, height=250)
             
         except Exception as e:
-            st.error(f"Lỗi trong phân tích MDG: {str(e)}")
+            st.error(f"Error in MDG analysis: {str(e)}")
     else:
-        st.warning("⚠️ Dữ liệu phân tích MDG không có sẵn. Kiểm tra xem cột 'Máy' có tồn tại trong bảng ID AQL không.")
+        st.warning("⚠️ MDG analysis data not available. Check if 'Máy' column exists in ID AQL sheet.")
 
-# Page 2: Customer Complaint Analysis
+# Page 2: Customer Complaint Analysis - UPDATED with line filter and improved visualizations
 with tab2:
-    st.markdown('<div class="sub-header">Tổng quan khiếu nại khách hàng</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sub-header">Customer Complaint Overview</div>', unsafe_allow_html=True)
     
     # Check if complaint dataframe is empty
     if filtered_complaint_df.empty:
-        st.warning("⚠️ Không có dữ liệu khiếu nại khả dụng để phân tích")
+        st.warning("⚠️ No complaint data available for analysis")
     else:
-        # Add Line filter for complaint data specifically
+        # NEW - Add Line filter for complaint data specifically
         if "Line" in filtered_complaint_df.columns:
-            complaint_lines = ["Tất cả"] + sorted(filtered_complaint_df["Line"].unique().tolist())
-            selected_complaint_line = st.selectbox("🏭 Chọn Line sản xuất cho phân tích khiếu nại", complaint_lines)
+            complaint_lines = ["All"] + sorted(filtered_complaint_df["Line"].unique().tolist())
+            selected_complaint_line = st.selectbox("🏭 Select Production Line for Complaint Analysis", complaint_lines)
             
-            if selected_complaint_line != "Tất cả":
+            if selected_complaint_line != "All":
                 filtered_complaint_df = filtered_complaint_df[filtered_complaint_df["Line"] == selected_complaint_line]
         
         # Key metrics row
@@ -1372,51 +1386,51 @@ with tab2:
                 total_complaints = filtered_complaint_df["Mã ticket"].nunique()
                 st.markdown(f"""
                 <div class="metric-card">
-                    <div class="metric-title">Tổng khiếu nại</div>
+                    <div class="metric-title">Total Complaints</div>
                     <div class="metric-value">{total_complaints}</div>
                 </div>
                 """, unsafe_allow_html=True)
             else:
-                st.warning("Thiếu cột 'Mã ticket'")
+                st.warning("Missing 'Mã ticket' column")
         
         with comp_col2:
             if "SL pack/ cây lỗi" in filtered_complaint_df.columns:
                 total_defective_packs = filtered_complaint_df["SL pack/ cây lỗi"].sum()
                 st.markdown(f"""
                 <div class="metric-card">
-                    <div class="metric-title">Gói lỗi</div>
+                    <div class="metric-title">Defective Packs</div>
                     <div class="metric-value">{total_defective_packs:,.0f}</div>
                 </div>
                 """, unsafe_allow_html=True)
             else:
-                st.warning("Thiếu cột 'SL pack/ cây lỗi'")
+                st.warning("Missing 'SL pack/ cây lỗi' column")
         
         with comp_col3:
             if "Tỉnh" in filtered_complaint_df.columns:
                 total_provinces = filtered_complaint_df["Tỉnh"].nunique()
                 st.markdown(f"""
                 <div class="metric-card">
-                    <div class="metric-title">Tỉnh bị ảnh hưởng</div>
+                    <div class="metric-title">Affected Provinces</div>
                     <div class="metric-value">{total_provinces}</div>
                 </div>
                 """, unsafe_allow_html=True)
             else:
-                st.warning("Thiếu cột 'Tỉnh'")
+                st.warning("Missing 'Tỉnh' column")
         
         with comp_col4:
             if "Tên lỗi" in filtered_complaint_df.columns:
                 total_defect_types = filtered_complaint_df["Tên lỗi"].nunique()
                 st.markdown(f"""
                 <div class="metric-card">
-                    <div class="metric-title">Loại lỗi</div>
+                    <div class="metric-title">Defect Types</div>
                     <div class="metric-value">{total_defect_types}</div>
                 </div>
                 """, unsafe_allow_html=True)
             else:
-                st.warning("Thiếu cột 'Tên lỗi'")
+                st.warning("Missing 'Tên lỗi' column")
         
         # Complaint Analysis
-        st.markdown('<div class="sub-header">Phân tích khiếu nại</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sub-header">Complaint Analysis</div>', unsafe_allow_html=True)
         
         comp_col1, comp_col2 = st.columns(2)
         
@@ -1432,14 +1446,14 @@ with tab2:
                     # Sort by complaint count
                     product_complaints = product_complaints.sort_values("Mã ticket", ascending=False).head(10)
                     
-                    # Create figure - IMPROVED VISUALIZATION
+                    # Create figure
                     fig = go.Figure()
                     
-                    # Add bars for complaints - horizontal for better readability of product names
+                    # Add bars for complaints
                     fig.add_trace(go.Bar(
                         y=product_complaints["Tên sản phẩm"],
                         x=product_complaints["Mã ticket"],
-                        name="Khiếu nại",
+                        name="Complaints",
                         orientation='h',
                         marker_color='firebrick',
                         text=product_complaints["Mã ticket"],
@@ -1448,21 +1462,21 @@ with tab2:
                     
                     # Update layout
                     fig.update_layout(
-                        title="Top 10 sản phẩm bị khiếu nại",
-                        xaxis_title="Số lượng khiếu nại",
-                        yaxis_title="Sản phẩm",
+                        title="Top 10 Products by Complaints",
+                        xaxis_title="Complaint Count",
+                        yaxis_title="Product",
                         height=400,
                         margin=dict(l=40, r=40, t=40, b=40)
                     )
                     
                     st.plotly_chart(fig, use_container_width=True)
                 except Exception as e:
-                    st.error(f"Lỗi khi tạo biểu đồ khiếu nại theo sản phẩm: {str(e)}")
+                    st.error(f"Error creating complaints by product chart: {str(e)}")
             else:
-                st.warning("Thiếu cột cần thiết cho biểu đồ sản phẩm")
+                st.warning("Missing required columns for product chart")
         
         with comp_col2:
-            # IMPROVED - Changed to horizontal bar chart for better readability
+            # IMPROVED - Changed pie chart to horizontal bar chart for better readability
             if "Tên lỗi" in filtered_complaint_df.columns and "Mã ticket" in filtered_complaint_df.columns:
                 try:
                     # Group by defect type
@@ -1477,7 +1491,7 @@ with tab2:
                     # Sort by count for better visualization
                     defect_complaints = defect_complaints.sort_values("Mã ticket", ascending=False)
                     
-                    # Create horizontal bar chart
+                    # Create horizontal bar chart instead of pie chart for better readability
                     fig = go.Figure()
                     
                     # Add horizontal bars
@@ -1492,21 +1506,21 @@ with tab2:
                     
                     # Update layout
                     fig.update_layout(
-                        title="Khiếu nại theo loại lỗi",
-                        xaxis_title="Số lượng khiếu nại",
-                        yaxis_title="Loại lỗi",
+                        title="Complaints by Defect Type",
+                        xaxis_title="Number of Complaints",
+                        yaxis_title="Defect Type",
                         height=400,
                         margin=dict(l=40, r=40, t=40, b=40)
                     )
                     
                     st.plotly_chart(fig, use_container_width=True)
                 except Exception as e:
-                    st.error(f"Lỗi khi tạo biểu đồ khiếu nại theo loại lỗi: {str(e)}")
+                    st.error(f"Error creating complaints by defect type chart: {str(e)}")
             else:
-                st.warning("Thiếu cột cần thiết cho biểu đồ lỗi")
+                st.warning("Missing required columns for defect chart")
         
         # Complaint Timeline and Production Analysis
-        st.markdown('<div class="sub-header">Phân tích dòng thời gian khiếu nại</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sub-header">Complaint Timeline Analysis</div>', unsafe_allow_html=True)
         
         time_col1, time_col2 = st.columns(2)
         
@@ -1522,31 +1536,33 @@ with tab2:
                     # Sort by date
                     date_complaints = date_complaints.sort_values("Production_Date")
                     
-                    # Create figure - CHANGED TO COLUMNS instead of line for better visualization
+                    # Create figure
                     fig = go.Figure()
                     
-                    # Add column bars for complaints
-                    fig.add_trace(go.Bar(
+                    # Add line for complaints
+                    fig.add_trace(go.Scatter(
                         x=date_complaints["Production_Date"],
                         y=date_complaints["Mã ticket"],
-                        name="Khiếu nại",
-                        marker_color="royalblue"
+                        name="Complaints",
+                        mode="lines+markers",
+                        line=dict(color="royalblue", width=2),
+                        marker=dict(size=6)
                     ))
                     
                     # Update layout
                     fig.update_layout(
-                        title="Xu hướng khiếu nại theo thời gian",
-                        xaxis_title="Ngày sản xuất",
-                        yaxis_title="Số lượng khiếu nại",
+                        title="Complaint Trend Over Time",
+                        xaxis_title="Production Date",
+                        yaxis_title="Complaint Count",
                         height=400,
                         margin=dict(l=40, r=40, t=40, b=40)
                     )
                     
                     st.plotly_chart(fig, use_container_width=True)
                 except Exception as e:
-                    st.error(f"Lỗi khi tạo biểu đồ dòng thời gian khiếu nại: {str(e)}")
+                    st.error(f"Error creating complaint timeline chart: {str(e)}")
             else:
-                st.warning("Thiếu cột ngày cho biểu đồ dòng thời gian")
+                st.warning("Missing date column for timeline chart")
         
         with time_col2:
             if "Line" in filtered_complaint_df.columns and "Mã ticket" in filtered_complaint_df.columns:
@@ -1567,7 +1583,7 @@ with tab2:
                     fig.add_trace(go.Bar(
                         x=line_complaints["Line"],
                         y=line_complaints["Mã ticket"],
-                        name="Khiếu nại",
+                        name="Complaints",
                         marker_color="navy",
                         text=line_complaints["Mã ticket"],
                         textposition="outside"
@@ -1577,42 +1593,36 @@ with tab2:
                     fig.add_trace(go.Scatter(
                         x=line_complaints["Line"],
                         y=line_complaints["SL pack/ cây lỗi"],
-                        name="Số gói lỗi",
+                        name="Defective Packs",
                         mode="markers",
                         marker=dict(size=12, color="firebrick"),
                         yaxis="y2"
                     ))
                     
                     # Update layout with secondary y-axis
-                    # IMPROVED - Restrict x-axis to lines 1-8 only
                     fig.update_layout(
-                        title="Khiếu nại theo Line sản xuất",
-                        xaxis_title="Line sản xuất",
-                        yaxis_title="Số lượng khiếu nại",
+                        title="Complaints by Production Line",
+                        xaxis_title="Production Line",
+                        yaxis_title="Complaint Count",
                         yaxis2=dict(
-                            title="Số gói lỗi",
+                            title="Defective Packs",
                             anchor="x",
                             overlaying="y",
                             side="right"
                         ),
                         height=400,
                         margin=dict(l=40, r=40, t=40, b=40),
-                        legend=dict(orientation="h", yanchor="bottom", y=1.02),
-                        xaxis=dict(
-                            tickmode='array',
-                            tickvals=list(range(1, 9)),
-                            ticktext=[str(i) for i in range(1, 9)]
-                        )
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02)
                     )
                     
                     st.plotly_chart(fig, use_container_width=True)
                 except Exception as e:
-                    st.error(f"Lỗi khi tạo biểu đồ khiếu nại theo line: {str(e)}")
+                    st.error(f"Error creating complaints by line chart: {str(e)}")
             else:
-                st.warning("Thiếu cột Line cho biểu đồ line")
+                st.warning("Missing Line column for line chart")
         
         # Geographic Distribution of Complaints
-        st.markdown('<div class="sub-header">Phân bố địa lý</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sub-header">Geographic Distribution</div>', unsafe_allow_html=True)
         
         if "Tỉnh" in filtered_complaint_df.columns and "Mã ticket" in filtered_complaint_df.columns:
             try:
@@ -1631,8 +1641,8 @@ with tab2:
                     x="Tỉnh",
                     y="Mã ticket",
                     color="SL pack/ cây lỗi",
-                    title="Top tỉnh theo số lượng khiếu nại",
-                    labels={"Tỉnh": "Tỉnh", "Mã ticket": "Số lượng khiếu nại", "SL pack/ cây lỗi": "Gói lỗi"},
+                    title="Top Provinces by Complaint Count",
+                    labels={"Tỉnh": "Province", "Mã ticket": "Complaint Count", "SL pack/ cây lỗi": "Defective Packs"},
                     color_continuous_scale="Viridis"
                 )
                 
@@ -1653,21 +1663,21 @@ with tab2:
                 # Display insight
                 st.markdown(f"""
                 <div class="insight-card">
-                    <div class="insight-title">Thông tin địa lý</div>
+                    <div class="insight-title">Geographic Insight</div>
                     <div class="insight-content">
-                        <p>Top 5 tỉnh chiếm {top_provinces['Percentage'].sum():.1f}% tổng số khiếu nại.</p>
-                        <p>Tỉnh cao nhất ({top_provinces.iloc[0]['Tỉnh']}) chiếm {top_provinces.iloc[0]['Percentage']:.1f}% tổng số khiếu nại.</p>
-                        <p>Xem xét các chương trình nâng cao chất lượng có mục tiêu ở các khu vực có khiếu nại cao này.</p>
+                        <p>The top 5 provinces account for {top_provinces['Percentage'].sum():.1f}% of all complaints.</p>
+                        <p>Top province ({top_provinces.iloc[0]['Tỉnh']}) has {top_provinces.iloc[0]['Percentage']:.1f}% of all complaints.</p>
+                        <p>Consider targeted quality improvement programs in these high-complaint regions.</p>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
             except Exception as e:
-                st.error(f"Lỗi khi tạo biểu đồ phân bố địa lý: {str(e)}")
+                st.error(f"Error creating geographic distribution chart: {str(e)}")
         else:
-            st.warning("Thiếu cột tỉnh cho phân tích địa lý")
+            st.warning("Missing province column for geographic analysis")
         
         # Personnel Analysis
-        st.markdown('<div class="sub-header">Phân tích nhân sự sản xuất</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sub-header">Production Personnel Analysis</div>', unsafe_allow_html=True)
         
         personnel_col1, personnel_col2 = st.columns(2)
         
@@ -1693,7 +1703,7 @@ with tab2:
                     fig.add_trace(go.Bar(
                         x=qa_complaints["QA"],
                         y=qa_complaints["Mã ticket"],
-                        name="Khiếu nại",
+                        name="Complaints",
                         marker_color="purple",
                         text=qa_complaints["Mã ticket"],
                         textposition="outside"
@@ -1701,9 +1711,9 @@ with tab2:
                     
                     # Update layout
                     fig.update_layout(
-                        title="Khiếu nại theo nhân viên QA",
-                        xaxis_title="Nhân viên QA",
-                        yaxis_title="Số lượng khiếu nại",
+                        title="Complaints by QA Personnel",
+                        xaxis_title="QA Personnel",
+                        yaxis_title="Complaint Count",
                         height=400,
                         margin=dict(l=40, r=40, t=40, b=80),
                         xaxis_tickangle=-45
@@ -1711,9 +1721,9 @@ with tab2:
                     
                     st.plotly_chart(fig, use_container_width=True)
                 except Exception as e:
-                    st.error(f"Lỗi khi tạo biểu đồ khiếu nại theo QA: {str(e)}")
+                    st.error(f"Error creating complaints by QA chart: {str(e)}")
             else:
-                st.warning("Thiếu cột QA cho phân tích nhân sự")
+                st.warning("Missing QA column for personnel analysis")
         
         with personnel_col2:
             if "Tên Trưởng ca" in filtered_complaint_df.columns and "Mã ticket" in filtered_complaint_df.columns:
@@ -1737,7 +1747,7 @@ with tab2:
                     fig.add_trace(go.Bar(
                         x=leader_complaints["Tên Trưởng ca"],
                         y=leader_complaints["Mã ticket"],
-                        name="Khiếu nại",
+                        name="Complaints",
                         marker_color="darkred",
                         text=leader_complaints["Mã ticket"],
                         textposition="outside"
@@ -1745,9 +1755,9 @@ with tab2:
                     
                     # Update layout
                     fig.update_layout(
-                        title="Khiếu nại theo trưởng ca",
-                        xaxis_title="Trưởng ca",
-                        yaxis_title="Số lượng khiếu nại",
+                        title="Complaints by Shift Leader",
+                        xaxis_title="Shift Leader",
+                        yaxis_title="Complaint Count",
                         height=400,
                         margin=dict(l=40, r=40, t=40, b=80),
                         xaxis_tickangle=-45
@@ -1755,12 +1765,12 @@ with tab2:
                     
                     st.plotly_chart(fig, use_container_width=True)
                 except Exception as e:
-                    st.error(f"Lỗi khi tạo biểu đồ khiếu nại theo trưởng ca: {str(e)}")
+                    st.error(f"Error creating complaints by shift leader chart: {str(e)}")
             else:
-                st.warning("Thiếu cột trưởng ca cho phân tích nhân sự")
+                st.warning("Missing shift leader column for personnel analysis")
         
         # Complaint Details Table
-        st.markdown('<div class="sub-header">Chi tiết khiếu nại</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sub-header">Complaint Details</div>', unsafe_allow_html=True)
         
         try:
             # Create a display dataframe with key columns
@@ -1788,13 +1798,13 @@ with tab2:
                 # Display the table
                 st.dataframe(display_df, use_container_width=True, height=400)
             else:
-                st.warning("Không có dữ liệu khiếu nại để hiển thị")
+                st.warning("No complaint data available to display")
         except Exception as e:
-            st.error(f"Lỗi khi hiển thị chi tiết khiếu nại: {str(e)}")
+            st.error(f"Error displaying complaint details: {str(e)}")
 
 # Page 3: Linking Internal and External Quality
 with tab3:
-    st.markdown('<div class="sub-header">Phân tích liên kết chất lượng nội bộ - bên ngoài</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sub-header">Internal-External Quality Link Analysis</div>', unsafe_allow_html=True)
     
     # Check if linked defects data is available
     if "linked_defects" in data and not data["linked_defects"].empty:
@@ -1807,7 +1817,7 @@ with tab3:
             total_linkages = len(linked_df)
             st.markdown(f"""
             <div class="metric-card">
-                <div class="metric-title">Tổng số liên kết</div>
+                <div class="metric-title">Total Linkages</div>
                 <div class="metric-value">{total_linkages}</div>
             </div>
             """, unsafe_allow_html=True)
@@ -1816,7 +1826,7 @@ with tab3:
             avg_ratio = linked_df["Defect_to_Complaint_Ratio"].replace([float('inf'), -float('inf')], np.nan).mean()
             st.markdown(f"""
             <div class="metric-card">
-                <div class="metric-title">Tỷ lệ Lỗi:Khiếu nại TB</div>
+                <div class="metric-title">Avg. Defect:Complaint Ratio</div>
                 <div class="metric-value">{avg_ratio:.1f}</div>
             </div>
             """, unsafe_allow_html=True)
@@ -1825,7 +1835,7 @@ with tab3:
             unique_defect_types = linked_df["Defect_Type"].nunique()
             st.markdown(f"""
             <div class="metric-card">
-                <div class="metric-title">Loại lỗi liên kết</div>
+                <div class="metric-title">Linked Defect Types</div>
                 <div class="metric-value">{unique_defect_types}</div>
             </div>
             """, unsafe_allow_html=True)
@@ -1834,13 +1844,13 @@ with tab3:
             total_lines = linked_df["Line"].nunique()
             st.markdown(f"""
             <div class="metric-card">
-                <div class="metric-title">Line bị ảnh hưởng</div>
+                <div class="metric-title">Affected Lines</div>
                 <div class="metric-value">{total_lines}</div>
             </div>
             """, unsafe_allow_html=True)
         
         # Defect to Complaint Ratio Analysis
-        st.markdown('<div class="sub-header">Phân tích tỷ lệ Lỗi-Khiếu nại</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sub-header">Defect-to-Complaint Ratio Analysis</div>', unsafe_allow_html=True)
         
         ratio_col1, ratio_col2 = st.columns(2)
         
@@ -1873,9 +1883,9 @@ with tab3:
                 
                 # Update layout
                 fig.update_layout(
-                    title="Tỷ lệ Lỗi-Khiếu nại theo loại lỗi",
-                    xaxis_title="Tỷ lệ (Lỗi nội bộ : Khiếu nại khách hàng)",
-                    yaxis_title="Loại lỗi",
+                    title="Defect-to-Complaint Ratio by Defect Type",
+                    xaxis_title="Ratio (Internal Defects : Customer Complaints)",
+                    yaxis_title="Defect Type",
                     height=400,
                     margin=dict(l=40, r=40, t=40, b=40)
                 )
@@ -1885,17 +1895,17 @@ with tab3:
                 # Add interpretation
                 st.markdown(f"""
                 <div class="insight-card">
-                    <div class="insight-title">Diễn giải tỷ lệ</div>
+                    <div class="insight-title">Ratio Interpretation</div>
                     <div class="insight-content">
-                        <p>Tỷ lệ cao hơn cho biết nhiều lỗi nội bộ được phát hiện cho mỗi khiếu nại của khách hàng.</p>
-                        <p>Tỷ lệ thấp hơn cho thấy rằng lỗi không được phát hiện hiệu quả trong quá trình sản xuất.</p>
-                        <p><strong>{defect_type_ratios.iloc[-1]['Defect_Type']}</strong> có tỷ lệ cao nhất ({defect_type_ratios.iloc[-1]['Ratio']:.1f}), cho thấy hiệu quả phát hiện nội bộ.</p>
-                        <p><strong>{defect_type_ratios.iloc[0]['Defect_Type']}</strong> có tỷ lệ thấp nhất ({defect_type_ratios.iloc[0]['Ratio']:.1f}), cho thấy cần cải thiện phát hiện.</p>
+                        <p>A higher ratio indicates more internal defects are caught for each customer complaint.</p>
+                        <p>A lower ratio suggests that defects are not being effectively caught during production.</p>
+                        <p><strong>{defect_type_ratios.iloc[-1]['Defect_Type']}</strong> has the highest ratio ({defect_type_ratios.iloc[-1]['Ratio']:.1f}), indicating effective internal detection.</p>
+                        <p><strong>{defect_type_ratios.iloc[0]['Defect_Type']}</strong> has the lowest ratio ({defect_type_ratios.iloc[0]['Ratio']:.1f}), suggesting improvement needed in detection.</p>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
             except Exception as e:
-                st.error(f"Lỗi khi tạo biểu đồ phân tích tỷ lệ: {str(e)}")
+                st.error(f"Error creating ratio analysis chart: {str(e)}")
         
         with ratio_col2:
             try:
@@ -1917,7 +1927,7 @@ with tab3:
                     color="Line",
                     hover_name="Line",
                     text="Line",
-                    title="Lỗi nội bộ & Khiếu nại khách hàng theo Line"
+                    title="Internal Defects vs. Customer Complaints by Line"
                 )
                 
                 # Update markers
@@ -1933,23 +1943,23 @@ with tab3:
                     y=[0, max_val],
                     mode="lines",
                     line=dict(color="gray", dash="dash"),
-                    name="Tỷ lệ 1:1"
+                    name="1:1 Ratio"
                 ))
                 
                 # Update layout
                 fig.update_layout(
-                    xaxis_title="Số lượng lỗi nội bộ",
-                    yaxis_title="Số lượng khiếu nại khách hàng",
+                    xaxis_title="Internal Defect Count",
+                    yaxis_title="Customer Complaint Count",
                     height=400,
                     margin=dict(l=40, r=40, t=40, b=40)
                 )
                 
                 st.plotly_chart(fig, use_container_width=True)
             except Exception as e:
-                st.error(f"Lỗi khi tạo biểu đồ tỷ lệ theo line: {str(e)}")
+                st.error(f"Error creating line ratio chart: {str(e)}")
         
         # Timeline Analysis
-        st.markdown('<div class="sub-header">Phân tích theo thời gian</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sub-header">Timeline Analysis</div>', unsafe_allow_html=True)
         
         try:
             # Group by date
@@ -1972,7 +1982,7 @@ with tab3:
                 go.Scatter(
                     x=date_analysis["Production_Date"],
                     y=date_analysis["Internal_Defect_Count"],
-                    name="Lỗi nội bộ",
+                    name="Internal Defects",
                     mode="lines+markers",
                     line=dict(color="royalblue", width=2)
                 ),
@@ -1983,7 +1993,7 @@ with tab3:
                 go.Scatter(
                     x=date_analysis["Production_Date"],
                     y=date_analysis["Customer_Complaint_Count"],
-                    name="Khiếu nại khách hàng",
+                    name="Customer Complaints",
                     mode="lines+markers",
                     line=dict(color="firebrick", width=2)
                 ),
@@ -1995,7 +2005,7 @@ with tab3:
                 go.Scatter(
                     x=date_analysis["Production_Date"],
                     y=date_analysis["Ratio"],
-                    name="Tỷ lệ Lỗi:Khiếu nại",
+                    name="Defect:Complaint Ratio",
                     mode="lines",
                     line=dict(color="green", width=2, dash="dash")
                 ),
@@ -2004,16 +2014,16 @@ with tab3:
             
             # Update layout
             fig.update_layout(
-                title="Lỗi nội bộ và khiếu nại khách hàng theo thời gian",
-                xaxis_title="Ngày sản xuất",
+                title="Internal Defects and Customer Complaints Over Time",
+                xaxis_title="Production Date",
                 height=400,
                 margin=dict(l=40, r=40, t=40, b=40),
                 legend=dict(orientation="h", yanchor="bottom", y=1.02)
             )
             
             # Set y-axes titles
-            fig.update_yaxes(title_text="Số lượng", secondary_y=False)
-            fig.update_yaxes(title_text="Tỷ lệ Lỗi:Khiếu nại", secondary_y=True)
+            fig.update_yaxes(title_text="Count", secondary_y=False)
+            fig.update_yaxes(title_text="Defect:Complaint Ratio", secondary_y=True)
             
             st.plotly_chart(fig, use_container_width=True)
             
@@ -2023,18 +2033,18 @@ with tab3:
             # Add insight about correlation
             st.markdown(f"""
             <div class="insight-card">
-                <div class="insight-title">Phân tích tương quan</div>
+                <div class="insight-title">Correlation Analysis</div>
                 <div class="insight-content">
-                    <p>Tương quan giữa lỗi nội bộ và khiếu nại khách hàng là <strong>{correlation:.2f}</strong>.</p>
-                    <p>{'Tương quan dương này cho thấy tăng lỗi nội bộ có liên quan đến tăng khiếu nại của khách hàng, với độ trễ từ vài ngày đến vài tuần.' if correlation > 0 else 'Tương quan này cho thấy lỗi nội bộ và khiếu nại của khách hàng có thể không trực tiếp liên quan hoặc có độ trễ đáng kể giữa vấn đề sản xuất và phản hồi của khách hàng.'}</p>
+                    <p>The correlation between internal defects and customer complaints is <strong>{correlation:.2f}</strong>.</p>
+                    <p>{'This positive correlation suggests that increases in internal defects are associated with increases in customer complaints, with a delay of days to weeks.' if correlation > 0 else 'This correlation suggests that internal defects and customer complaints may not be directly related or that there is a significant delay between production issues and customer feedback.'}</p>
                 </div>
             </div>
             """, unsafe_allow_html=True)
         except Exception as e:
-            st.error(f"Lỗi khi tạo biểu đồ phân tích theo thời gian: {str(e)}")
+            st.error(f"Error creating timeline analysis chart: {str(e)}")
         
         # Detection Effectiveness Analysis
-        st.markdown('<div class="sub-header">Phân tích hiệu quả phát hiện</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sub-header">Detection Effectiveness Analysis</div>', unsafe_allow_html=True)
         
         try:
             # Calculate detection effectiveness for each defect type
@@ -2064,14 +2074,14 @@ with tab3:
             ))
             
             # Add reference lines
-            fig.add_vline(x=75, line_dash="dash", line_color="orange", annotation_text="75% (Chấp nhận được)")
-            fig.add_vline(x=90, line_dash="dash", line_color="green", annotation_text="90% (Xuất sắc)")
+            fig.add_vline(x=75, line_dash="dash", line_color="orange", annotation_text="75% (Acceptable)")
+            fig.add_vline(x=90, line_dash="dash", line_color="green", annotation_text="90% (Excellent)")
             
             # Update layout
             fig.update_layout(
-                title="Hiệu quả phát hiện chất lượng nội bộ theo loại lỗi",
-                xaxis_title="Hiệu quả phát hiện (%)",
-                yaxis_title="Loại lỗi",
+                title="Internal Quality Detection Effectiveness by Defect Type",
+                xaxis_title="Detection Effectiveness (%)",
+                yaxis_title="Defect Type",
                 height=400,
                 margin=dict(l=40, r=40, t=40, b=40),
                 xaxis=dict(range=[0, 100])
@@ -2085,34 +2095,34 @@ with tab3:
             if not poor_detection.empty:
                 st.markdown(f"""
                 <div class="warning-card">
-                    <div class="warning-title">Khu vực phát hiện kém</div>
+                    <div class="warning-title">Poor Detection Areas</div>
                     <div class="insight-content">
-                        <p>Các loại lỗi sau có hiệu quả phát hiện dưới 75%, cho thấy cơ hội cải thiện đáng kể:</p>
+                        <p>The following defect types have detection effectiveness below 75%, indicating significant improvement opportunities:</p>
                         <ul>
-                            {''.join([f"<li><strong>{row['Defect_Type']}</strong>: {row['Detection_Effectiveness']}% hiệu quả</li>" for _, row in poor_detection.iterrows()])}
+                            {''.join([f"<li><strong>{row['Defect_Type']}</strong>: {row['Detection_Effectiveness']}% effective</li>" for _, row in poor_detection.iterrows()])}
                         </ul>
-                        <p>Xem xét thực hiện cải tiến có mục tiêu trong phương pháp phát hiện các loại lỗi này.</p>
+                        <p>Consider implementing targeted improvements in detection methods for these defect types.</p>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
         except Exception as e:
-            st.error(f"Lỗi khi tạo phân tích hiệu quả phát hiện: {str(e)}")
+            st.error(f"Error creating detection effectiveness analysis: {str(e)}")
     else:
         st.warning("""
-        ⚠️ Không có dữ liệu lỗi liên kết. Điều này có thể do:
+        ⚠️ No linked defect data available. This could be due to:
         
-        1. Dữ liệu lịch sử không đủ để thiết lập kết nối
-        2. Mã lỗi không khớp giữa dữ liệu nội bộ và khách hàng
-        3. Vấn đề tích hợp dữ liệu
+        1. Insufficient historical data to establish connections
+        2. Mismatched defect codes between internal and customer data
+        3. Data integration issues
         
-        Vui lòng đảm bảo cả dữ liệu AQL và khiếu nại đều có sẵn và được định dạng đúng.
+        Please ensure both AQL and complaint data are available and properly formatted.
         """)
 
 # Footer with dashboard information
 st.markdown("""
 <div style="text-align: center; padding: 15px; margin-top: 30px; border-top: 1px solid #eee;">
     <p style="color: #555; font-size: 0.9rem;">
-        Báo cáo chất lượng CF MMB | Tạo bởi Phòng Đảm bảo Chất lượng
+        FMCG Quality Analytics Dashboard | Created by Quality Assurance Department
     </p>
 </div>
 """, unsafe_allow_html=True)
