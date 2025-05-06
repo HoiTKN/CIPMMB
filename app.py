@@ -1387,7 +1387,7 @@ with tab2:
                         yaxis=dict(
                             showgrid=True,
                             gridcolor='rgba(200,200,200,0.5)',
-                            range=[0, 100]  # Fixed scale from 0 to 8
+                            range=[0, 120]  # Fixed scale from 0 to 8
                         )
                     )
                     
