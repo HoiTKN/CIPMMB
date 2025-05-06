@@ -610,7 +610,6 @@ def load_all_data():
 
 # Title and description
 st.markdown('<div class="main-header">Báo cáo chất lượng CF MMB</div>', unsafe_allow_html=True)
-st.markdown("Phân tích tổng hợp chất lượng sản xuất và sự hài lòng của khách hàng")
 
 # Load all data
 data = load_all_data()
@@ -704,23 +703,20 @@ with st.sidebar:
                 (filtered_complaint_df["Production_Date"] <= end_datetime)
             ]
     
-    # Line filter
-    if not data["tem_vang_data"].empty and "Line" in data["tem_vang_data"].columns:
-        try:
-            lines = ["Tất cả"] + sorted(data["tem_vang_data"]["Line"].unique().tolist())
-            selected_line = st.selectbox("🏭 Chọn Line sản xuất", lines)
-            
-            if selected_line != "Tất cả":
-                filtered_tem_vang_df = filtered_tem_vang_df[filtered_tem_vang_df["Line"] == selected_line]
-                
-                # Apply to other dataframes
-                if "Line" in filtered_aql_df.columns:
-                    filtered_aql_df = filtered_aql_df[filtered_aql_df["Line"] == selected_line]
-                
-                if "Line" in filtered_complaint_df.columns:
-                    filtered_complaint_df = filtered_complaint_df[filtered_complaint_df["Line"] == selected_line]
-        except Exception as e:
-            st.warning(f"Lỗi ở bộ lọc line: {e}")
+    # Line filter - Always include all lines from 1 to 8 regardless of data
+    all_lines = ["Tất cả"] + [str(i) for i in range(1, 9)]
+    selected_line = st.selectbox("🏭 Chọn Line sản xuất", all_lines)
+    
+    if selected_line != "Tất cả":
+        # Apply filter to dataframes if the line exists in them
+        if not filtered_tem_vang_df.empty and "Line" in filtered_tem_vang_df.columns:
+            filtered_tem_vang_df = filtered_tem_vang_df[filtered_tem_vang_df["Line"] == selected_line]
+        
+        if "Line" in filtered_aql_df.columns:
+            filtered_aql_df = filtered_aql_df[filtered_aql_df["Line"] == selected_line]
+        
+        if "Line" in filtered_complaint_df.columns:
+            filtered_complaint_df = filtered_complaint_df[filtered_complaint_df["Line"] == selected_line]
     
     # Product filter
     if not data["complaint_data"].empty and "Tên sản phẩm" in data["complaint_data"].columns:
@@ -1158,7 +1154,7 @@ with tab2:
                     # Sort by complaint count
                     product_complaints = product_complaints.sort_values("Mã ticket", ascending=False).head(10)
                     
-                    # Create figure
+                    # Create horizontal bar chart with improved styling
                     fig = go.Figure()
                     
                     # Add bars for complaints
@@ -1167,19 +1163,49 @@ with tab2:
                         x=product_complaints["Mã ticket"],
                         name="Số khiếu nại",
                         orientation='h',
-                        marker_color='firebrick',
+                        marker=dict(
+                            color=product_complaints["Mã ticket"],
+                            colorscale='Reds',
+                            line=dict(width=1, color='black')
+                        ),
                         text=product_complaints["Mã ticket"],
-                        textposition="outside"
+                        textposition="outside",
+                        textfont=dict(size=12)
                     ))
                     
-                    # Update layout
+                    # Update layout with better styling
                     fig.update_layout(
-                        title="Top 10 sản phẩm có nhiều khiếu nại nhất",
+                        title={
+                            'text': "Top 10 sản phẩm có nhiều khiếu nại nhất",
+                            'y':0.9,
+                            'x':0.5,
+                            'xanchor': 'center',
+                            'yanchor': 'top'
+                        },
                         xaxis_title="Số lượng khiếu nại",
                         yaxis_title="Sản phẩm",
                         height=400,
-                        margin=dict(l=40, r=40, t=40, b=40)
+                        margin=dict(l=20, r=20, t=60, b=40),
+                        plot_bgcolor='rgba(240,240,240,0.5)',
+                        xaxis=dict(
+                            showgrid=True,
+                            gridcolor='rgba(200,200,200,0.5)'
+                        ),
+                        yaxis=dict(
+                            showgrid=True,
+                            gridcolor='rgba(200,200,200,0.5)'
+                        )
                     )
+                    
+                    # Add value labels on the bars
+                    for i in range(len(product_complaints)):
+                        fig.add_annotation(
+                            x=product_complaints["Mã ticket"].iloc[i] + 1,
+                            y=i,
+                            text=str(product_complaints["Mã ticket"].iloc[i]),
+                            showarrow=False,
+                            font=dict(color="black", size=12)
+                        )
                     
                     st.plotly_chart(fig, use_container_width=True)
                 except Exception as e:
@@ -1198,34 +1224,53 @@ with tab2:
                     
                     # Calculate percentages
                     defect_complaints["Complaint %"] = (defect_complaints["Mã ticket"] / defect_complaints["Mã ticket"].sum() * 100).round(1)
-                    defect_complaints["Label"] = defect_complaints["Tên lỗi"] + " (" + defect_complaints["Complaint %"].astype(str) + "%)"
                     
-                    # Create figure
+                    # Create improved pie chart
                     fig = go.Figure()
                     
-                    # Add pie chart
+                    # Add pie chart with improved styling
                     fig.add_trace(go.Pie(
-                        labels=defect_complaints["Label"],
+                        labels=defect_complaints["Tên lỗi"],
                         values=defect_complaints["Mã ticket"],
                         hole=0.4,
-                        textinfo="percent+label",
-                        insidetextorientation="radial"
+                        textinfo="percent",
+                        hoverinfo="label+value+percent",
+                        textfont=dict(size=12),
+                        marker=dict(
+                            colors=px.colors.qualitative.Set3,
+                            line=dict(color='white', width=2)
+                        ),
+                        pull=[0.05 if i == defect_complaints["Mã ticket"].idxmax() else 0 for i in range(len(defect_complaints))]
                     ))
                     
                     # Add a custom annotation in the center
                     fig.add_annotation(
                         text=f"Tổng số<br>{defect_complaints['Mã ticket'].sum():,.0f}",
-                        font=dict(size=12, color="darkblue", family="Arial"),
+                        font=dict(size=14, color="#1E3A8A", family="Arial", weight="bold"),
                         showarrow=False,
                         x=0.5,
                         y=0.5
                     )
                     
-                    # Update layout
+                    # Update layout with better styling
                     fig.update_layout(
-                        title="Phân tích khiếu nại theo loại lỗi",
+                        title={
+                            'text': "Phân tích khiếu nại theo loại lỗi",
+                            'y':0.9,
+                            'x':0.5,
+                            'xanchor': 'center',
+                            'yanchor': 'top'
+                        },
                         height=400,
-                        margin=dict(l=40, r=40, t=40, b=80)
+                        margin=dict(l=20, r=20, t=60, b=40),
+                        legend=dict(
+                            orientation="v",
+                            yanchor="middle",
+                            y=0.5,
+                            xanchor="left",
+                            x=1.05,
+                            font=dict(size=10)
+                        )
                     )
                     
                     st.plotly_chart(fig, use_container_width=True)
@@ -1251,26 +1296,41 @@ with tab2:
                     # Sort by date
                     date_complaints = date_complaints.sort_values("Production_Date")
                     
-                    # Create figure
+                    # Create figure - Changed to column chart instead of line chart
                     fig = go.Figure()
                     
-                    # Add line for complaints
-                    fig.add_trace(go.Scatter(
+                    # Add bars for complaints
+                    fig.add_trace(go.Bar(
                         x=date_complaints["Production_Date"],
                         y=date_complaints["Mã ticket"],
                         name="Số khiếu nại",
-                        mode="lines+markers",
-                        line=dict(color="royalblue", width=2),
-                        marker=dict(size=6)
+                        marker_color='rgba(70, 130, 180, 0.8)',
+                        text=date_complaints["Mã ticket"],
+                        textposition="outside"
                     ))
                     
-                    # Update layout
+                    # Update layout with better styling
                     fig.update_layout(
-                        title="Xu hướng khiếu nại theo thời gian",
+                        title={
+                            'text': "Xu hướng khiếu nại theo thời gian",
+                            'y':0.9,
+                            'x':0.5,
+                            'xanchor': 'center',
+                            'yanchor': 'top'
+                        },
                         xaxis_title="Ngày sản xuất",
                         yaxis_title="Số lượng khiếu nại",
                         height=400,
-                        margin=dict(l=40, r=40, t=40, b=40)
+                        margin=dict(l=20, r=20, t=60, b=40),
+                        plot_bgcolor='rgba(240,240,240,0.5)',
+                        xaxis=dict(
+                            showgrid=True,
+                            gridcolor='rgba(200,200,200,0.5)'
+                        ),
+                        yaxis=dict(
+                            showgrid=True,
+                            gridcolor='rgba(200,200,200,0.5)'
+                        )
                     )
                     
                     st.plotly_chart(fig, use_container_width=True)
@@ -1288,46 +1348,47 @@ with tab2:
                         "SL pack/ cây lỗi": "sum"
                     }).reset_index()
                     
-                    # Sort by complaint count
-                    line_complaints = line_complaints.sort_values("Mã ticket", ascending=False)
+                    # Sort by line number
+                    line_complaints = line_complaints.sort_values("Line")
                     
                     # Create figure
                     fig = go.Figure()
                     
-                    # Add bars for complaints
+                    # Add bars for complaints with adjusted scale for 8 lines
                     fig.add_trace(go.Bar(
                         x=line_complaints["Line"],
                         y=line_complaints["Mã ticket"],
                         name="Số khiếu nại",
-                        marker_color="navy",
+                        marker_color='rgba(128, 0, 0, 0.8)',
                         text=line_complaints["Mã ticket"],
                         textposition="outside"
                     ))
                     
-                    # Add a secondary y-axis for defective packs
-                    fig.add_trace(go.Scatter(
-                        x=line_complaints["Line"],
-                        y=line_complaints["SL pack/ cây lỗi"],
-                        name="Số gói lỗi",
-                        mode="markers",
-                        marker=dict(size=12, color="firebrick"),
-                        yaxis="y2"
-                    ))
-                    
-                    # Update layout with secondary y-axis
+                    # Update layout with better styling and fixed scale for 8 lines
                     fig.update_layout(
-                        title="Khiếu nại theo Line sản xuất",
+                        title={
+                            'text': "Khiếu nại theo Line sản xuất",
+                            'y':0.9,
+                            'x':0.5,
+                            'xanchor': 'center',
+                            'yanchor': 'top'
+                        },
                         xaxis_title="Line sản xuất",
                         yaxis_title="Số lượng khiếu nại",
-                        yaxis2=dict(
-                            title="Số gói lỗi",
-                            anchor="x",
-                            overlaying="y",
-                            side="right"
-                        ),
                         height=400,
-                        margin=dict(l=40, r=40, t=40, b=40),
-                        legend=dict(orientation="h", yanchor="bottom", y=1.02)
+                        margin=dict(l=20, r=20, t=60, b=40),
+                        plot_bgcolor='rgba(240,240,240,0.5)',
+                        xaxis=dict(
+                            showgrid=True,
+                            gridcolor='rgba(200,200,200,0.5)',
+                            categoryorder='array',
+                            categoryarray=['1', '2', '3', '4', '5', '6', '7', '8']
+                        ),
+                        yaxis=dict(
+                            showgrid=True,
+                            gridcolor='rgba(200,200,200,0.5)',
+                            range=[0, 8]  # Fixed scale from 0 to 8
+                        )
                     )
                     
                     st.plotly_chart(fig, use_container_width=True)
@@ -1814,6 +1875,7 @@ with tab3:
                     <div class="insight-content">
                         <p>Các loại lỗi sau đây có hiệu quả phát hiện dưới 75%, cho thấy cơ hội cải tiến đáng kể:</p>
                         <ul>
+                            {''.join([f"<li><strong>{row['Defect_Type']}</strong>: {row['Detection_Effectiveness']}% hiệu quả<ul>
                             {''.join([f"<li><strong>{row['Defect_Type']}</strong>: {row['Detection_Effectiveness']}% hiệu quả</li>" for _, row in poor_detection.iterrows()])}
                         </ul>
                         <p>Cân nhắc triển khai các cải tiến nhắm mục tiêu trong phương pháp phát hiện cho các loại lỗi này.</p>
