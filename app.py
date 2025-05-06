@@ -128,6 +128,10 @@ st.markdown("""
         background-color: #1E3A8A;
         color: white;
     }
+    /* Hide authentication status expander */
+    div[data-testid="stExpander"] > div[role="button"]:has(div:contains("Authentication Status")) {
+        display: none;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -137,10 +141,11 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive"
 ]
 
-# Authentication function
+# Authentication function - Modified to hide the debug expander
 def authenticate():
     """Authentication using OAuth token"""
     try:
+        # Authentication expander is hidden via CSS
         debug_expander = st.expander("Authentication Status", expanded=False)
         
         with debug_expander:
@@ -334,6 +339,100 @@ def load_aql_data():
         st.error(f"❌ Error loading AQL data: {str(e)}")
         return pd.DataFrame()
 
+# Function to load AQL gói data - NEW
+@st.cache_data(ttl=300)  # Cache for 5 minutes
+def load_aql_goi_data():
+    try:
+        # Authenticate and connect to Google Sheets
+        gc = authenticate()
+        
+        if gc is None:
+            st.error("❌ Failed to authenticate with Google Sheets")
+            return pd.DataFrame()
+        
+        # Open the Google Sheet by URL (AQL data)
+        sheet_url = "https://docs.google.com/spreadsheets/d/1MxvsyZTMMO0L5Cf1FzuXoKD634OClCCefeLjv9B49XU/edit"
+        sheet_key = sheet_url.split('/d/')[1].split('/')[0]
+        
+        # Open the spreadsheet
+        try:
+            spreadsheet = gc.open_by_key(sheet_key)
+            connection_status = st.empty()
+            
+            # Get the AQL gói worksheet
+            try:
+                worksheet = spreadsheet.worksheet('AQL gói')
+                connection_status.success(f"✅ Connected to: {spreadsheet.title} - AQL gói")
+            except gspread.exceptions.WorksheetNotFound:
+                connection_status.error(f"❌ 'AQL gói' worksheet not found")
+                return pd.DataFrame()
+            
+            # Get all records
+            data = worksheet.get_all_records()
+            
+            # Convert to DataFrame
+            df = pd.DataFrame(data)
+            
+            # Hide connection status after successful load
+            connection_status.empty()
+            
+            return df
+            
+        except Exception as e:
+            st.error(f"❌ Error accessing AQL gói spreadsheet: {str(e)}")
+            return pd.DataFrame()
+        
+    except Exception as e:
+        st.error(f"❌ Error loading AQL gói data: {str(e)}")
+        return pd.DataFrame()
+
+# Function to load AQL Tô ly data - NEW
+@st.cache_data(ttl=300)  # Cache for 5 minutes
+def load_aql_to_ly_data():
+    try:
+        # Authenticate and connect to Google Sheets
+        gc = authenticate()
+        
+        if gc is None:
+            st.error("❌ Failed to authenticate with Google Sheets")
+            return pd.DataFrame()
+        
+        # Open the Google Sheet by URL (AQL data)
+        sheet_url = "https://docs.google.com/spreadsheets/d/1MxvsyZTMMO0L5Cf1FzuXoKD634OClCCefeLjv9B49XU/edit"
+        sheet_key = sheet_url.split('/d/')[1].split('/')[0]
+        
+        # Open the spreadsheet
+        try:
+            spreadsheet = gc.open_by_key(sheet_key)
+            connection_status = st.empty()
+            
+            # Get the AQL Tô ly worksheet
+            try:
+                worksheet = spreadsheet.worksheet('AQL Tô ly')
+                connection_status.success(f"✅ Connected to: {spreadsheet.title} - AQL Tô ly")
+            except gspread.exceptions.WorksheetNotFound:
+                connection_status.error(f"❌ 'AQL Tô ly' worksheet not found")
+                return pd.DataFrame()
+            
+            # Get all records
+            data = worksheet.get_all_records()
+            
+            # Convert to DataFrame
+            df = pd.DataFrame(data)
+            
+            # Hide connection status after successful load
+            connection_status.empty()
+            
+            return df
+            
+        except Exception as e:
+            st.error(f"❌ Error accessing AQL Tô ly spreadsheet: {str(e)}")
+            return pd.DataFrame()
+        
+    except Exception as e:
+        st.error(f"❌ Error loading AQL Tô ly data: {str(e)}")
+        return pd.DataFrame()
+
 # Function to load production data (Sản lượng)
 @st.cache_data(ttl=300)  # Cache for 5 minutes
 def load_production_data():
@@ -400,9 +499,9 @@ def load_production_data():
         st.error(f"❌ Error loading production data: {str(e)}")
         return pd.DataFrame()
 
-# Function to calculate TEM VÀNG
+# Function to calculate TEM VÀNG - UPDATED with new matching logic
 def calculate_tem_vang(aql_df, production_df):
-    """Calculate TEM VÀNG by combining AQL hold data with production volume data"""
+    """Calculate TEM VÀNG by matching production data with AQL data"""
     try:
         # Check if dataframes are empty
         if aql_df.empty or production_df.empty:
@@ -413,30 +512,74 @@ def calculate_tem_vang(aql_df, production_df):
         aql_copy = aql_df.copy()
         prod_copy = production_df.copy()
         
-        # Group AQL data by date and line to get total hold quantities
-        if "Production_Date" in aql_copy.columns and "Line" in aql_copy.columns and "Số lượng hold ( gói/thùng)" in aql_copy.columns:
-            aql_grouped = aql_copy.groupby(["Production_Date", "Line"])["Số lượng hold ( gói/thùng)"].sum().reset_index()
-            aql_grouped.columns = ["Date", "Line", "Hold_Quantity"]
+        # Define function to map time to shift
+        def map_time_to_shift(time_str):
+            try:
+                # Extract hour from time string (format expected: "HH:MM")
+                if pd.isna(time_str):
+                    return None
+                
+                hour = int(time_str.split(':')[0])
+                
+                # Map hour to shift
+                if 6 <= hour < 14:
+                    return "1"
+                elif 14 <= hour < 22:
+                    return "2"
+                else:  # 22-6
+                    return "3"
+            except:
+                return None
+        
+        # Add shift column to AQL data based on Giờ
+        if "Giờ" in aql_copy.columns:
+            aql_copy["Shift"] = aql_copy["Giờ"].apply(map_time_to_shift)
         else:
-            st.warning("⚠️ Missing required columns in AQL data for TEM VÀNG calculation")
+            st.warning("⚠️ Missing 'Giờ' column in AQL data for shift mapping")
             return pd.DataFrame()
         
-        # Group production data by date and line to get total production volumes
-        if "Production_Date" in prod_copy.columns and "Line" in prod_copy.columns and "Sản lượng" in prod_copy.columns:
-            prod_grouped = prod_copy.groupby(["Production_Date", "Line"])["Sản lượng"].sum().reset_index()
-            prod_grouped.columns = ["Date", "Line", "Production_Volume"]
+        # Perform the matching and aggregation
+        tem_vang_data = []
+        
+        # Group production data by Date, Line, Shift, Leader
+        if all(col in prod_copy.columns for col in ["Ngày", "Line", "Ca", "Người phụ trách"]):
+            prod_groups = prod_copy.groupby(["Ngày", "Line", "Ca", "Người phụ trách"])
+            
+            for (prod_date, prod_line, prod_shift, prod_leader), prod_group in prod_groups:
+                # Find matching AQL records
+                matching_aql = aql_copy[
+                    (aql_copy["Ngày SX"] == prod_date) &
+                    (aql_copy["Line"] == prod_line) &
+                    (aql_copy["Shift"] == prod_shift) &
+                    (aql_copy["Tên Trưởng ca"] == prod_leader)
+                ]
+                
+                # If matches found, calculate TEM VÀNG
+                total_production = prod_group["Sản lượng"].sum()
+                total_hold = matching_aql["Số lượng hold ( gói/thùng)"].sum() if not matching_aql.empty else 0
+                
+                if total_production > 0:
+                    tem_vang_percent = (total_hold / total_production) * 100
+                    
+                    tem_vang_data.append({
+                        "Date": prod_date,
+                        "Line": prod_line,
+                        "Shift": prod_shift,
+                        "Leader": prod_leader,
+                        "Production_Volume": total_production,
+                        "Hold_Quantity": total_hold,
+                        "TEM_VANG": tem_vang_percent,
+                        "Production_Month": prod_date.strftime("%m/%Y") if isinstance(prod_date, datetime) else pd.to_datetime(prod_date).strftime("%m/%Y")
+                    })
         else:
             st.warning("⚠️ Missing required columns in production data for TEM VÀNG calculation")
             return pd.DataFrame()
         
-        # Merge the grouped data
-        tem_vang_df = pd.merge(aql_grouped, prod_grouped, on=["Date", "Line"], how="inner")
+        # Convert to DataFrame
+        tem_vang_df = pd.DataFrame(tem_vang_data)
         
-        # Calculate TEM VÀNG percentage
-        tem_vang_df["TEM_VANG"] = (tem_vang_df["Hold_Quantity"] / tem_vang_df["Production_Volume"]) * 100
-        
-        # Add month column for filtering
-        tem_vang_df["Production_Month"] = tem_vang_df["Date"].dt.strftime("%m/%Y")
+        # Ensure Production_Date is properly set for filtering
+        tem_vang_df["Production_Date"] = tem_vang_df["Date"]
         
         return tem_vang_df
         
@@ -484,9 +627,9 @@ def calculate_process_capability(tem_vang_df, target=2.18):
         st.error(f"❌ Error calculating process capability: {str(e)}")
         return pd.DataFrame()
 
-# Function to analyze defect patterns
-def analyze_defect_patterns(aql_df):
-    """Analyze defect patterns in AQL data"""
+# Function to analyze defect patterns - UPDATED with defect name mapping
+def analyze_defect_patterns(aql_df, aql_goi_df, aql_to_ly_df):
+    """Analyze defect patterns in AQL data with proper defect name mapping"""
     try:
         # Check if dataframe is empty
         if aql_df.empty:
@@ -495,40 +638,75 @@ def analyze_defect_patterns(aql_df):
         # Create copy to avoid modifying original
         df = aql_df.copy()
         
-        # Group by defect code to get frequency
-        if "Defect code" in df.columns:
-            defect_counts = df.groupby("Defect code").size().reset_index(name="Count")
-            defect_counts = defect_counts.sort_values("Count", ascending=False)
+        # Create defect mapping dictionaries
+        defect_goi_map = {}
+        defect_to_ly_map = {}
+        
+        # Build mapping from AQL gói
+        if not aql_goi_df.empty and "Defect code" in aql_goi_df.columns and "Defect Name" in aql_goi_df.columns:
+            for _, row in aql_goi_df.iterrows():
+                key = f"{row['Defect code']}-{row['Type']}" if "Type" in aql_goi_df.columns else row["Defect code"]
+                defect_goi_map[key] = row["Defect Name"]
+        
+        # Build mapping from AQL Tô ly
+        if not aql_to_ly_df.empty and "Defect code" in aql_to_ly_df.columns and "Defect Name" in aql_to_ly_df.columns:
+            for _, row in aql_to_ly_df.iterrows():
+                key = f"{row['Defect code']}-{row['Type']}" if "Type" in aql_to_ly_df.columns else row["Defect code"]
+                defect_to_ly_map[key] = row["Defect Name"]
+        
+        # Add Defect Name column to df
+        df["Defect_Name"] = None
+        
+        # Map defect names based on line
+        for i, row in df.iterrows():
+            line = row["Line"] if "Line" in df.columns else None
+            defect_code = row["Defect code"] if "Defect code" in df.columns else None
+            defect_type = row["Type"] if "Type" in df.columns else None
             
-            # Calculate percentages
-            total_defects = defect_counts["Count"].sum()
-            defect_counts["Percentage"] = (defect_counts["Count"] / total_defects * 100).round(1)
-            defect_counts["Cumulative"] = defect_counts["Percentage"].cumsum()
-            
-            # Identify top defects (80% by Pareto principle)
-            vital_few = defect_counts[defect_counts["Cumulative"] <= 80]
-            
-            # Group by Line and Defect code to get line-specific patterns
-            line_defects = df.groupby(["Line", "Defect code"]).size().reset_index(name="Count")
-            pivot_line_defects = line_defects.pivot(index="Line", columns="Defect code", values="Count").fillna(0)
-            
-            # Calculate defect rates by MDG (assuming MDG is stored in "Máy" column)
-            if "Máy" in df.columns:
-                mdg_defects = df.groupby(["Line", "Máy", "Defect code"]).size().reset_index(name="Count")
-            else:
-                mdg_defects = pd.DataFrame()
-            
-            # Return the analysis results
-            return {
-                "defect_counts": defect_counts,
-                "vital_few": vital_few,
-                "line_defects": line_defects,
-                "pivot_line_defects": pivot_line_defects,
-                "mdg_defects": mdg_defects
-            }
+            if line is not None and defect_code is not None:
+                key = f"{defect_code}-{defect_type}" if defect_type is not None else defect_code
+                
+                # Lines 1-6 use AQL gói
+                if pd.notna(line) and int(line) <= 6:
+                    df.at[i, "Defect_Name"] = defect_goi_map.get(key, defect_code)
+                # Lines 7-8 use AQL Tô ly
+                elif pd.notna(line) and int(line) >= 7:
+                    df.at[i, "Defect_Name"] = defect_to_ly_map.get(key, defect_code)
+        
+        # Use Defect_Name for analysis if available, otherwise use code
+        defect_col = "Defect_Name" if df["Defect_Name"].notna().any() else "Defect code"
+        
+        # Group by defect to get frequency
+        defect_counts = df.groupby(defect_col).size().reset_index(name="Count")
+        defect_counts = defect_counts.sort_values("Count", ascending=False)
+        
+        # Calculate percentages
+        total_defects = defect_counts["Count"].sum()
+        defect_counts["Percentage"] = (defect_counts["Count"] / total_defects * 100).round(1)
+        defect_counts["Cumulative"] = defect_counts["Percentage"].cumsum()
+        
+        # Identify top defects (80% by Pareto principle)
+        vital_few = defect_counts[defect_counts["Cumulative"] <= 80]
+        
+        # Group by Line and Defect for line-specific patterns
+        line_defects = df.groupby(["Line", defect_col]).size().reset_index(name="Count")
+        pivot_line_defects = line_defects.pivot(index="Line", columns=defect_col, values="Count").fillna(0)
+        
+        # Calculate defect rates by MDG (fixed to use Máy)
+        if "Máy" in df.columns:
+            mdg_defects = df.groupby(["Line", "Máy", defect_col]).size().reset_index(name="Count")
         else:
-            st.warning("⚠️ Missing 'Defect code' column in AQL data for defect pattern analysis")
-            return {}
+            mdg_defects = pd.DataFrame()
+        
+        # Return the analysis results
+        return {
+            "defect_counts": defect_counts,
+            "vital_few": vital_few,
+            "line_defects": line_defects,
+            "pivot_line_defects": pivot_line_defects,
+            "mdg_defects": mdg_defects,
+            "defect_column": defect_col
+        }
             
     except Exception as e:
         st.error(f"❌ Error analyzing defect patterns: {str(e)}")
@@ -635,7 +813,7 @@ def link_defects_with_complaints(aql_df, complaint_df):
         st.error(f"❌ Error linking defects with complaints: {str(e)}")
         return pd.DataFrame()
 
-# Load the data
+# Load the data - UPDATED to include new data sources
 @st.cache_data(ttl=600)  # Cache the combined data for 10 minutes
 def load_all_data():
     """Load and prepare all required data"""
@@ -644,6 +822,10 @@ def load_all_data():
     complaint_df = load_complaint_data()
     aql_df = load_aql_data()
     production_df = load_production_data()
+    
+    # Load defect mapping data - NEW
+    aql_goi_df = load_aql_goi_data()
+    aql_to_ly_df = load_aql_to_ly_data()
     
     # Calculate TEM VÀNG
     tem_vang_df = calculate_tem_vang(aql_df, production_df)
@@ -654,8 +836,8 @@ def load_all_data():
     else:
         process_capability_df = pd.DataFrame()
     
-    # Analyze defect patterns
-    defect_patterns = analyze_defect_patterns(aql_df)
+    # Analyze defect patterns - UPDATED to use defect mapping
+    defect_patterns = analyze_defect_patterns(aql_df, aql_goi_df, aql_to_ly_df)
     
     # Link defects with complaints
     linked_defects_df = link_defects_with_complaints(aql_df, complaint_df)
@@ -664,6 +846,8 @@ def load_all_data():
         "complaint_data": complaint_df,
         "aql_data": aql_df,
         "production_data": production_df,
+        "aql_goi_data": aql_goi_df,
+        "aql_to_ly_data": aql_to_ly_df,
         "tem_vang_data": tem_vang_df,
         "process_capability": process_capability_df,
         "defect_patterns": defect_patterns,
@@ -691,11 +875,47 @@ with st.sidebar:
     filtered_complaint_df = data["complaint_data"].copy()
     filtered_tem_vang_df = data["tem_vang_data"].copy()
     
-    # Date filter
+    # NEW - Date range filter
+    if not data["aql_data"].empty and "Production_Date" in data["aql_data"].columns:
+        try:
+            # Get min and max dates from data
+            min_date = data["aql_data"]["Production_Date"].min().date()
+            max_date = data["aql_data"]["Production_Date"].max().date()
+            
+            st.subheader("📅 Date Range")
+            # Create date range selector
+            col1, col2 = st.columns(2)
+            with col1:
+                start_date = st.date_input("Start Date", min_date, min_value=min_date, max_value=max_date)
+            with col2:
+                end_date = st.date_input("End Date", max_date, min_value=min_date, max_value=max_date)
+            
+            # Apply date filter to dataframes
+            if "Production_Date" in filtered_aql_df.columns:
+                filtered_aql_df = filtered_aql_df[
+                    (filtered_aql_df["Production_Date"].dt.date >= start_date) & 
+                    (filtered_aql_df["Production_Date"].dt.date <= end_date)
+                ]
+            
+            if "Production_Date" in filtered_complaint_df.columns:
+                filtered_complaint_df = filtered_complaint_df[
+                    (filtered_complaint_df["Production_Date"].dt.date >= start_date) & 
+                    (filtered_complaint_df["Production_Date"].dt.date <= end_date)
+                ]
+            
+            if "Production_Date" in filtered_tem_vang_df.columns:
+                filtered_tem_vang_df = filtered_tem_vang_df[
+                    (filtered_tem_vang_df["Production_Date"].dt.date >= start_date) & 
+                    (filtered_tem_vang_df["Production_Date"].dt.date <= end_date)
+                ]
+        except Exception as e:
+            st.warning(f"Error in date filter: {e}")
+    
+    # Month filter - KEEP for backward compatibility
     if not data["tem_vang_data"].empty and "Production_Month" in data["tem_vang_data"].columns:
         try:
             production_months = ["All"] + sorted(data["tem_vang_data"]["Production_Month"].unique().tolist())
-            selected_month = st.selectbox("📅 Select Production Month", production_months)
+            selected_month = st.selectbox("📆 Select Production Month", production_months)
             
             if selected_month != "All":
                 filtered_tem_vang_df = filtered_tem_vang_df[filtered_tem_vang_df["Production_Month"] == selected_month]
@@ -1000,6 +1220,7 @@ with tab1:
         if "defect_patterns" in data and "defect_counts" in data["defect_patterns"]:
             try:
                 defect_counts = data["defect_patterns"]["defect_counts"]
+                defect_col = data["defect_patterns"].get("defect_column", "Defect code")
                 
                 # Create Pareto chart
                 fig = make_subplots(specs=[[{"secondary_y": True}]])
@@ -1007,7 +1228,7 @@ with tab1:
                 # Add bars for defect counts
                 fig.add_trace(
                     go.Bar(
-                        x=defect_counts["Defect code"],
+                        x=defect_counts[defect_col],
                         y=defect_counts["Count"],
                         name="Defect Count",
                         marker_color="steelblue"
@@ -1018,7 +1239,7 @@ with tab1:
                 # Add line for cumulative percentage
                 fig.add_trace(
                     go.Scatter(
-                        x=defect_counts["Defect code"],
+                        x=defect_counts[defect_col],
                         y=defect_counts["Cumulative"],
                         name="Cumulative %",
                         mode="lines+markers",
@@ -1040,7 +1261,7 @@ with tab1:
                 # Update layout
                 fig.update_layout(
                     title="Pareto Analysis of Defects",
-                    xaxis_title="Defect Code",
+                    xaxis_title="Defect",
                     height=350,
                     margin=dict(l=40, r=40, t=40, b=40)
                 )
@@ -1060,7 +1281,7 @@ with tab1:
                         <div class="insight-title">Pareto Analysis Insight</div>
                         <div class="insight-content">
                             <p>{len(vital_few)} defect types ({len(vital_few)/len(defect_counts)*100:.0f}% of all types) account for 80% of all defects.</p>
-                            <p>Focus quality improvement efforts on: {', '.join(vital_few['Defect code'].tolist())}</p>
+                            <p>Focus quality improvement efforts on: {', '.join(vital_few[defect_col].tolist()[:5])}</p>
                         </div>
                     </div>
                     """, unsafe_allow_html=True)
@@ -1077,7 +1298,7 @@ with tab1:
                     # Create heatmap
                     fig = px.imshow(
                         pivot_df,
-                        labels=dict(x="Defect Code", y="Line", color="Count"),
+                        labels=dict(x="Defect", y="Line", color="Count"),
                         x=pivot_df.columns,
                         y=pivot_df.index,
                         color_continuous_scale="YlOrRd",
@@ -1097,12 +1318,13 @@ with tab1:
             except Exception as e:
                 st.error(f"Error creating defect heatmap: {str(e)}")
     
-    # MDG Analysis
+    # MDG Analysis - UPDATED to use data from ID AQL
     st.markdown('<div class="sub-header">MDG (Machine) Analysis</div>', unsafe_allow_html=True)
     
     if "defect_patterns" in data and "mdg_defects" in data["defect_patterns"] and not data["defect_patterns"]["mdg_defects"].empty:
         try:
             mdg_defects = data["defect_patterns"]["mdg_defects"].copy()
+            defect_col = data["defect_patterns"].get("defect_column", "Defect code")
             
             # Group by Line and MDG to get total defects
             line_mdg_summary = mdg_defects.groupby(["Line", "Máy"])["Count"].sum().reset_index()
@@ -1113,7 +1335,7 @@ with tab1:
                 x="Máy",
                 y="Count",
                 color="Line",
-                title="Defects by MDG and Line",
+                title="Defects by MDG (Machine) and Line",
                 labels={"Máy": "MDG (Machine)", "Count": "Defect Count"},
                 barmode="group"
             )
@@ -1138,9 +1360,9 @@ with tab1:
         except Exception as e:
             st.error(f"Error in MDG analysis: {str(e)}")
     else:
-        st.warning("⚠️ MDG analysis data not available")
+        st.warning("⚠️ MDG analysis data not available. Check if 'Máy' column exists in ID AQL sheet.")
 
-# Page 2: Customer Complaint Analysis
+# Page 2: Customer Complaint Analysis - UPDATED with line filter and improved visualizations
 with tab2:
     st.markdown('<div class="sub-header">Customer Complaint Overview</div>', unsafe_allow_html=True)
     
@@ -1148,6 +1370,14 @@ with tab2:
     if filtered_complaint_df.empty:
         st.warning("⚠️ No complaint data available for analysis")
     else:
+        # NEW - Add Line filter for complaint data specifically
+        if "Line" in filtered_complaint_df.columns:
+            complaint_lines = ["All"] + sorted(filtered_complaint_df["Line"].unique().tolist())
+            selected_complaint_line = st.selectbox("🏭 Select Production Line for Complaint Analysis", complaint_lines)
+            
+            if selected_complaint_line != "All":
+                filtered_complaint_df = filtered_complaint_df[filtered_complaint_df["Line"] == selected_complaint_line]
+        
         # Key metrics row
         comp_col1, comp_col2, comp_col3, comp_col4 = st.columns(4)
         
@@ -1246,6 +1476,7 @@ with tab2:
                 st.warning("Missing required columns for product chart")
         
         with comp_col2:
+            # IMPROVED - Changed pie chart to horizontal bar chart for better readability
             if "Tên lỗi" in filtered_complaint_df.columns and "Mã ticket" in filtered_complaint_df.columns:
                 try:
                     # Group by defect type
@@ -1256,34 +1487,30 @@ with tab2:
                     
                     # Calculate percentages
                     defect_complaints["Complaint %"] = (defect_complaints["Mã ticket"] / defect_complaints["Mã ticket"].sum() * 100).round(1)
-                    defect_complaints["Label"] = defect_complaints["Tên lỗi"] + " (" + defect_complaints["Complaint %"].astype(str) + "%)"
                     
-                    # Create figure
+                    # Sort by count for better visualization
+                    defect_complaints = defect_complaints.sort_values("Mã ticket", ascending=False)
+                    
+                    # Create horizontal bar chart instead of pie chart for better readability
                     fig = go.Figure()
                     
-                    # Add pie chart
-                    fig.add_trace(go.Pie(
-                        labels=defect_complaints["Label"],
-                        values=defect_complaints["Mã ticket"],
-                        hole=0.4,
-                        textinfo="percent+label",
-                        insidetextorientation="radial"
+                    # Add horizontal bars
+                    fig.add_trace(go.Bar(
+                        y=defect_complaints["Tên lỗi"],
+                        x=defect_complaints["Mã ticket"],
+                        orientation='h',
+                        marker_color='firebrick',
+                        text=defect_complaints["Complaint %"].astype(str) + "%",
+                        textposition="auto"
                     ))
-                    
-                    # Add a custom annotation in the center
-                    fig.add_annotation(
-                        text=f"Total Complaints:<br>{defect_complaints['Mã ticket'].sum():,.0f}",
-                        font=dict(size=12, color="darkblue", family="Arial"),
-                        showarrow=False,
-                        x=0.5,
-                        y=0.5
-                    )
                     
                     # Update layout
                     fig.update_layout(
                         title="Complaints by Defect Type",
+                        xaxis_title="Number of Complaints",
+                        yaxis_title="Defect Type",
                         height=400,
-                        margin=dict(l=40, r=40, t=40, b=80)
+                        margin=dict(l=40, r=40, t=40, b=40)
                     )
                     
                     st.plotly_chart(fig, use_container_width=True)
