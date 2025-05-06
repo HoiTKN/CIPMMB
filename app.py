@@ -1806,89 +1806,86 @@ with tab3:
             # Calculate correlation
             correlation = date_analysis["Internal_Defect_Count"].corr(date_analysis["Customer_Complaint_Count"])
             
-            # Add insight about correlation
+               # Detection Effectiveness Analysis
+    st.markdown('<div class="sub-header">Phân tích hiệu quả phát hiện lỗi</div>', unsafe_allow_html=True)
+    
+    try:
+        # Calculate detection effectiveness for each defect type
+        effectiveness_df = linked_df.groupby("Defect_Type").agg({
+            "Internal_Defect_Count": "sum",
+            "Customer_Complaint_Count": "sum"
+        }).reset_index()
+        
+        # Calculate effectiveness percentage
+        effectiveness_df["Total_Issues"] = (
+            effectiveness_df["Internal_Defect_Count"]
+            + effectiveness_df["Customer_Complaint_Count"]
+        )
+        effectiveness_df["Detection_Effectiveness"] = (
+            effectiveness_df["Internal_Defect_Count"]
+            / effectiveness_df["Total_Issues"]
+            * 100
+        ).round(1)
+        
+        # Sort by effectiveness
+        effectiveness_df = effectiveness_df.sort_values("Detection_Effectiveness")
+        
+        # Create figure
+        fig = go.Figure()
+        
+        # Add bars for effectiveness
+        fig.add_trace(go.Bar(
+            y=effectiveness_df["Defect_Type"],
+            x=effectiveness_df["Detection_Effectiveness"],
+            orientation="h",
+            marker_color=effectiveness_df["Detection_Effectiveness"].map(
+                lambda x: "green" if x >= 90 else ("orange" if x >= 75 else "red")
+            ),
+            text=effectiveness_df["Detection_Effectiveness"].astype(str) + "%",
+            textposition="outside"
+        ))
+        
+        # Add reference lines
+        fig.add_vline(x=75, line_dash="dash", line_color="orange", annotation_text="75% (Chấp nhận được)")
+        fig.add_vline(x=90, line_dash="dash", line_color="green", annotation_text="90% (Xuất sắc)")
+        
+        # Update layout
+        fig.update_layout(
+            title="Hiệu quả phát hiện lỗi nội bộ theo loại lỗi",
+            xaxis_title="Hiệu quả phát hiện (%)",
+            yaxis_title="Loại lỗi",
+            height=400,
+            margin=dict(l=40, r=40, t=40, b=40),
+            xaxis=dict(range=[0, 100])
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Identify poor detection areas
+        poor_detection = effectiveness_df[effectiveness_df["Detection_Effectiveness"] < 75]
+        
+        if not poor_detection.empty:
+            # Build a list of <li> elements for each defect type with low detection
+            low_items = "".join([
+                f"<li><strong>{row['Defect_Type']}</strong>: {row['Detection_Effectiveness']}% hiệu quả</li>"
+                for _, row in poor_detection.iterrows()
+            ])
+            
             st.markdown(f"""
-            <div class="insight-card">
-                <div class="insight-title">Phân tích tương quan</div>
+            <div class="warning-card">
+                <div class="warning-title">Khu vực phát hiện lỗi kém</div>
                 <div class="insight-content">
-                    <p>Tương quan giữa lỗi nội bộ và khiếu nại khách hàng là <strong>{correlation:.2f}</strong>.</p>
-                    <p>{'Tương quan dương này cho thấy sự gia tăng lỗi nội bộ có liên quan đến sự gia tăng khiếu nại khách hàng, với độ trễ từ vài ngày đến vài tuần.' if correlation > 0 else 'Tương quan này cho thấy lỗi nội bộ và khiếu nại khách hàng có thể không liên quan trực tiếp hoặc có độ trễ đáng kể giữa vấn đề sản xuất và phản hồi của khách hàng.'}</p>
+                    <p>Các loại lỗi sau đây có hiệu quả phát hiện dưới 75%, cho thấy cơ hội cải tiến đáng kể:</p>
+                    <ul>
+                        {low_items}
+                    </ul>
+                    <p>Cân nhắc triển khai các cải tiến nhắm mục tiêu trong phương pháp phát hiện cho các loại lỗi này.</p>
                 </div>
             </div>
             """, unsafe_allow_html=True)
-        except Exception as e:
-            st.error(f"Lỗi tạo biểu đồ phân tích thời gian: {str(e)}")
-        
-        # Detection Effectiveness Analysis
-        st.markdown('<div class="sub-header">Phân tích hiệu quả phát hiện lỗi</div>', unsafe_allow_html=True)
-        
-        try:
-            # Calculate detection effectiveness for each defect type
-            effectiveness_df = linked_df.groupby("Defect_Type").agg({
-                "Internal_Defect_Count": "sum",
-                "Customer_Complaint_Count": "sum"
-            }).reset_index()
             
-            # Calculate effectiveness percentage
-            effectiveness_df["Total_Issues"] = effectiveness_df["Internal_Defect_Count"] + effectiveness_df["Customer_Complaint_Count"]
-            effectiveness_df["Detection_Effectiveness"] = (effectiveness_df["Internal_Defect_Count"] / effectiveness_df["Total_Issues"] * 100).round(1)
-            
-            # Sort by effectiveness
-            effectiveness_df = effectiveness_df.sort_values("Detection_Effectiveness")
-            
-            # Create figure
-            fig = go.Figure()
-            
-            # Add bars for effectiveness
-            fig.add_trace(go.Bar(
-                y=effectiveness_df["Defect_Type"],
-                x=effectiveness_df["Detection_Effectiveness"],
-                orientation="h",
-                marker_color=effectiveness_df["Detection_Effectiveness"].map(lambda x: "green" if x >= 90 else ("orange" if x >= 75 else "red")),
-                text=effectiveness_df["Detection_Effectiveness"].astype(str) + "%",
-                textposition="outside"
-            ))
-            
-            # Add reference lines
-            fig.add_vline(x=75, line_dash="dash", line_color="orange", annotation_text="75% (Chấp nhận được)")
-            fig.add_vline(x=90, line_dash="dash", line_color="green", annotation_text="90% (Xuất sắc)")
-            
-            # Update layout
-            fig.update_layout(
-                title="Hiệu quả phát hiện lỗi nội bộ theo loại lỗi",
-                xaxis_title="Hiệu quả phát hiện (%)",
-                yaxis_title="Loại lỗi",
-                height=400,
-                margin=dict(l=40, r=40, t=40, b=40),
-                xaxis=dict(range=[0, 100])
-            )
-            
-            st.plotly_chart(fig, use_container_width=True)
-            
-            # Identify poor detection areas
-            poor_detection = effectiveness_df[effectiveness_df["Detection_Effectiveness"] < 75]
-            
-            if not poor_detection.empty:
-    # Build a list of <li> elements for each defect type with low detection
-    low_items = ''.join([
-        f"<li><strong>{row['Defect_Type']}</strong>: {row['Detection_Effectiveness']}% hiệu quả</li>"
-        for _, row in poor_detection.iterrows()
-    ])
-
-    st.markdown(f"""
-    <div class="warning-card">
-        <div class="warning-title">Khu vực phát hiện lỗi kém</div>
-        <div class="insight-content">
-            <p>Các loại lỗi sau đây có hiệu quả phát hiện dưới 75%, cho thấy cơ hội cải tiến đáng kể:</p>
-            <ul>
-                {low_items}
-            </ul>
-            <p>Cân nhắc triển khai các cải tiến nhắm mục tiêu trong phương pháp phát hiện cho các loại lỗi này.</p>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-        except Exception as e:
-            st.error(f"Lỗi tạo phân tích hiệu quả phát hiện: {str(e)}")
+    except Exception as e:
+        st.error(f"Lỗi tạo phân tích hiệu quả phát hiện: {str(e)}")
     else:
         st.warning("""
         ⚠️ Không có dữ liệu lỗi liên kết. Điều này có thể do:
