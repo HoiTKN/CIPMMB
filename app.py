@@ -479,7 +479,7 @@ def load_production_data():
         st.error(f"❌ Lỗi khi tải dữ liệu sản lượng: {str(e)}")
         return pd.DataFrame()
 
-# Function to calculate TEM VÀNG - IMPROVED
+# Function to calculate TEM VÀNG - FIXED VERSION
 def calculate_tem_vang(aql_df, production_df):
     """Calculate TEM VÀNG by matching production data with AQL data"""
     try:
@@ -499,12 +499,11 @@ def calculate_tem_vang(aql_df, production_df):
                 if pd.isna(time_str):
                     return None
                 
-                # Handle different time formats - ensure we extract the hour correctly
+                # Handle different time formats
                 if isinstance(time_str, str):
                     if ':' in time_str:
                         hour = int(time_str.split(':')[0])
                     else:
-                        # Try to convert to int directly if no colon
                         try:
                             hour = int(time_str)
                         except:
@@ -538,107 +537,78 @@ def calculate_tem_vang(aql_df, production_df):
         if "Line" in prod_copy.columns:
             prod_copy["Line"] = prod_copy["Line"].astype(str)
         
-        # Clean and standardize Tên Trưởng ca and Người phụ trách fields
-        # This helps with matching by handling different formats, capitalization, etc.
+        # Clean and standardize leader name fields for better matching
         if "Tên Trưởng ca" in aql_copy.columns:
-            # Convert to string and strip whitespace
             aql_copy["Tên Trưởng ca"] = aql_copy["Tên Trưởng ca"].astype(str).str.strip()
             
         if "Người phụ trách" in prod_copy.columns:
-            # Convert to string and strip whitespace
             prod_copy["Người phụ trách"] = prod_copy["Người phụ trách"].astype(str).str.strip()
-        
-        # Print unique values for debugging (can remove later)
-        st.write("Debug - Unique Trưởng ca values in AQL data:", aql_copy["Tên Trưởng ca"].unique())
-        st.write("Debug - Unique Người phụ trách values in production data:", prod_copy["Người phụ trách"].unique())
-        
-        # Perform the matching and aggregation
+            
+        # Direct matching approach - process row by row instead of groupby
         tem_vang_data = []
         
-        # Group production data by Date, Line, Shift, Leader
-        if all(col in prod_copy.columns for col in ["Ngày", "Line", "Ca", "Người phụ trách"]):
-            # Let's avoid using groupby initially to debug the matching
-            for idx, prod_row in prod_copy.iterrows():
-                prod_date = prod_row["Ngày"]
-                prod_line = prod_row["Line"]
-                
-                # Convert shift to string format
-                if isinstance(prod_row["Ca"], (int, float)):
-                    prod_shift = str(int(prod_row["Ca"]))
-                else:
-                    prod_shift = str(prod_row["Ca"]).strip()
-                
-                prod_leader = str(prod_row["Người phụ trách"]).strip()
-                prod_volume = prod_row["Sản lượng"]
-                
-                # Find matching AQL records - more tolerant matching
-                matching_aql = aql_copy[
-                    (aql_copy["Ngày SX"] == prod_date) &
-                    (aql_copy["Line"] == prod_line) &
-                    (aql_copy["Shift"] == prod_shift)
-                ]
-                
-                # Additional filter for leader matching
-                if len(matching_aql) > 0:
-                    # Try exact match first
-                    leader_match = matching_aql[matching_aql["Tên Trưởng ca"] == prod_leader]
-                    
-                    # If no match, check if leader appears as a substring
-                    if len(leader_match) == 0:
-                        leader_match = matching_aql[matching_aql["Tên Trưởng ca"].str.contains(prod_leader, case=False, na=False)]
-                    
-                    # If still no match, check if prod_leader contains any of the AQL leaders
-                    if len(leader_match) == 0:
-                        for aql_leader in matching_aql["Tên Trưởng ca"].unique():
-                            if str(aql_leader) in str(prod_leader):
-                                leader_match = matching_aql[matching_aql["Tên Trưởng ca"] == aql_leader]
-                                break
-                    
-                    matching_aql = leader_match
-                
-                # Calculate hold quantity for this production record
-                total_hold = matching_aql["Số lượng hold ( gói/thùng)"].sum() if not matching_aql.empty else 0
-                
-                # Calculate TEM VÀNG if production volume exists
-                if prod_volume > 0:
-                    tem_vang_percent = (total_hold / prod_volume) * 100
-                    
-                    tem_vang_data.append({
-                        "Date": prod_date,
-                        "Line": prod_line,
-                        "Shift": prod_shift,
-                        "Leader": prod_leader,
-                        "Production_Volume": prod_volume,
-                        "Hold_Quantity": total_hold,
-                        "TEM_VANG": tem_vang_percent,
-                        "Production_Month": prod_date.strftime("%m/%Y") if isinstance(prod_date, datetime) else pd.to_datetime(prod_date).strftime("%m/%Y")
-                    })
+        # Process each production record individually to find matches
+        for idx, prod_row in prod_copy.iterrows():
+            prod_date = prod_row["Ngày"]
+            prod_line = str(prod_row["Line"])
+            prod_volume = prod_row["Sản lượng"]
             
-            # Now group and aggregate the resulting data for overall metrics
-            if tem_vang_data:
-                tem_vang_df = pd.DataFrame(tem_vang_data)
-                
-                # Group by date, line, shift, leader to combine records with the same keys
-                aggregated_df = tem_vang_df.groupby(["Date", "Line", "Shift", "Leader"]).agg({
-                    "Production_Volume": "sum",
-                    "Hold_Quantity": "sum"
-                }).reset_index()
-                
-                # Recalculate TEM VÀNG
-                aggregated_df["TEM_VANG"] = (aggregated_df["Hold_Quantity"] / aggregated_df["Production_Volume"]) * 100
-                
-                # Add Production_Date and Production_Month columns
-                aggregated_df["Production_Date"] = aggregated_df["Date"]
-                aggregated_df["Production_Month"] = aggregated_df["Date"].apply(
-                    lambda x: x.strftime("%m/%Y") if isinstance(x, datetime) else pd.to_datetime(x).strftime("%m/%Y")
-                )
-                
-                return aggregated_df
+            # Standardize shift format
+            if isinstance(prod_row["Ca"], (int, float)):
+                prod_shift = str(int(prod_row["Ca"]))
             else:
-                st.warning("⚠️ Không tìm thấy dữ liệu trùng khớp giữa sản xuất và AQL")
-                return pd.DataFrame()
+                prod_shift = str(prod_row["Ca"]).strip()
+                
+            prod_leader = str(prod_row["Người phụ trách"]).strip()
+            
+            # Find matching AQL records - more flexible matching for leader
+            matching_records = aql_copy[
+                (aql_copy["Ngày SX"] == prod_date) &
+                (aql_copy["Line"] == prod_line) &
+                (aql_copy["Shift"] == prod_shift)
+            ]
+            
+            # Try exact match for leader first
+            leader_matched = matching_records[matching_records["Tên Trưởng ca"] == prod_leader]
+            
+            # If no match, try more flexible approach
+            if len(leader_matched) == 0:
+                # Try finding if leader name is a substring in either direction
+                for _, aql_row in matching_records.iterrows():
+                    aql_leader = str(aql_row["Tên Trưởng ca"]).strip()
+                    if (aql_leader in prod_leader) or (prod_leader in aql_leader):
+                        leader_matched = pd.concat([leader_matched, aql_row.to_frame().T])
+            
+            # If still no match, use all matching records by other criteria
+            if len(leader_matched) == 0:
+                leader_matched = matching_records
+            
+            # Calculate hold quantity and TEM VÀNG
+            total_hold = leader_matched["Số lượng hold ( gói/thùng)"].sum() if not leader_matched.empty else 0
+            
+            if prod_volume > 0:
+                tem_vang_percent = (total_hold / prod_volume) * 100
+                
+                tem_vang_data.append({
+                    "Date": prod_date,
+                    "Line": prod_line,
+                    "Shift": prod_shift,
+                    "Leader": prod_leader,
+                    "Production_Volume": prod_volume,
+                    "Hold_Quantity": total_hold,
+                    "TEM_VANG": tem_vang_percent,
+                    "Production_Month": prod_date.strftime("%m/%Y") if isinstance(prod_date, datetime) else pd.to_datetime(prod_date).strftime("%m/%Y")
+                })
+        
+        # Convert to DataFrame
+        tem_vang_df = pd.DataFrame(tem_vang_data)
+        
+        # Ensure Production_Date is properly set for filtering
+        if not tem_vang_df.empty:
+            tem_vang_df["Production_Date"] = tem_vang_df["Date"]
+            return tem_vang_df
         else:
-            st.warning("⚠️ Thiếu cột cần thiết trong dữ liệu sản xuất để tính TEM VÀNG")
+            st.warning("⚠️ Không tìm thấy kết quả phù hợp để tính TEM VÀNG")
             return pd.DataFrame()
         
     except Exception as e:
@@ -647,7 +617,7 @@ def calculate_tem_vang(aql_df, production_df):
         st.error(f"Chi tiết lỗi: {traceback.format_exc()}")
         return pd.DataFrame()
 
-# Function to analyze defect patterns - UPDATED to handle non-numeric Line values
+# Function to analyze defect patterns - FIXED VERSION
 def analyze_defect_patterns(aql_df, aql_goi_df, aql_to_ly_df):
     """Analyze defect patterns in AQL data with proper defect name mapping"""
     try:
@@ -689,7 +659,7 @@ def analyze_defect_patterns(aql_df, aql_goi_df, aql_to_ly_df):
                 # Modified logic to handle non-numeric Line values
                 try:
                     # Try to convert line to int for comparison
-                    line_int = int(line)
+                    line_int = int(line) if line and not pd.isna(line) else 0
                     # Lines 1-6 use AQL gói
                     if line_int <= 6:
                         df.at[i, "Defect_Name"] = defect_goi_map.get(key, defect_code)
