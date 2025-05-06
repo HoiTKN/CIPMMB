@@ -1734,7 +1734,7 @@ with tab3:
             except Exception as e:
                 st.error(f"Lỗi tạo biểu đồ tỷ lệ theo line: {str(e)}")
         
-        # Timeline Analysis
+                # Timeline Analysis
         st.markdown('<div class="sub-header">Phân tích theo thời gian</div>', unsafe_allow_html=True)
         
         try:
@@ -1745,7 +1745,10 @@ with tab3:
             }).reset_index()
             
             # Calculate ratio
-            date_analysis["Ratio"] = date_analysis["Internal_Defect_Count"] / date_analysis["Customer_Complaint_Count"]
+            date_analysis["Ratio"] = (
+                date_analysis["Internal_Defect_Count"]
+                / date_analysis["Customer_Complaint_Count"]
+            )
             
             # Sort by date
             date_analysis = date_analysis.sort_values("Production_Date")
@@ -1764,7 +1767,6 @@ with tab3:
                 ),
                 secondary_y=False
             )
-            
             fig.add_trace(
                 go.Scatter(
                     x=date_analysis["Production_Date"],
@@ -1775,7 +1777,6 @@ with tab3:
                 ),
                 secondary_y=False
             )
-            
             # Add ratio line
             fig.add_trace(
                 go.Scatter(
@@ -1796,117 +1797,109 @@ with tab3:
                 margin=dict(l=40, r=40, t=40, b=40),
                 legend=dict(orientation="h", yanchor="bottom", y=1.02)
             )
-            
-            # Set y-axes titles
             fig.update_yaxes(title_text="Số lượng", secondary_y=False)
             fig.update_yaxes(title_text="Tỷ lệ Lỗi:Khiếu nại", secondary_y=True)
             
             st.plotly_chart(fig, use_container_width=True)
             
-            # Calculate correlation
-            correlation = date_analysis["Internal_Defect_Count"].corr(date_analysis["Customer_Complaint_Count"])
-            
-               # Detection Effectiveness Analysis
-    st.markdown('<div class="sub-header">Phân tích hiệu quả phát hiện lỗi</div>', unsafe_allow_html=True)
-    
-    try:
-        # Calculate detection effectiveness for each defect type
-        effectiveness_df = linked_df.groupby("Defect_Type").agg({
-            "Internal_Defect_Count": "sum",
-            "Customer_Complaint_Count": "sum"
-        }).reset_index()
-        
-        # Calculate effectiveness percentage
-        effectiveness_df["Total_Issues"] = (
-            effectiveness_df["Internal_Defect_Count"]
-            + effectiveness_df["Customer_Complaint_Count"]
-        )
-        effectiveness_df["Detection_Effectiveness"] = (
-            effectiveness_df["Internal_Defect_Count"]
-            / effectiveness_df["Total_Issues"]
-            * 100
-        ).round(1)
-        
-        # Sort by effectiveness
-        effectiveness_df = effectiveness_df.sort_values("Detection_Effectiveness")
-        
-        # Create figure
-        fig = go.Figure()
-        
-        # Add bars for effectiveness
-        fig.add_trace(go.Bar(
-            y=effectiveness_df["Defect_Type"],
-            x=effectiveness_df["Detection_Effectiveness"],
-            orientation="h",
-            marker_color=effectiveness_df["Detection_Effectiveness"].map(
-                lambda x: "green" if x >= 90 else ("orange" if x >= 75 else "red")
-            ),
-            text=effectiveness_df["Detection_Effectiveness"].astype(str) + "%",
-            textposition="outside"
-        ))
-        
-        # Add reference lines
-        fig.add_vline(x=75, line_dash="dash", line_color="orange", annotation_text="75% (Chấp nhận được)")
-        fig.add_vline(x=90, line_dash="dash", line_color="green", annotation_text="90% (Xuất sắc)")
-        
-        # Update layout
-        fig.update_layout(
-            title="Hiệu quả phát hiện lỗi nội bộ theo loại lỗi",
-            xaxis_title="Hiệu quả phát hiện (%)",
-            yaxis_title="Loại lỗi",
-            height=400,
-            margin=dict(l=40, r=40, t=40, b=40),
-            xaxis=dict(range=[0, 100])
-        )
-        
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # Identify poor detection areas
-        poor_detection = effectiveness_df[effectiveness_df["Detection_Effectiveness"] < 75]
-        
-        if not poor_detection.empty:
-            # Build a list of <li> elements for each defect type with low detection
-            low_items = "".join([
-                f"<li><strong>{row['Defect_Type']}</strong>: {row['Detection_Effectiveness']}% hiệu quả</li>"
-                for _, row in poor_detection.iterrows()
-            ])
-            
+            # Calculate correlation and display insight
+            correlation = date_analysis["Internal_Defect_Count"].corr(
+                date_analysis["Customer_Complaint_Count"]
+            )
             st.markdown(f"""
-            <div class="warning-card">
-                <div class="warning-title">Khu vực phát hiện lỗi kém</div>
+            <div class="insight-card">
+                <div class="insight-title">Phân tích tương quan</div>
                 <div class="insight-content">
-                    <p>Các loại lỗi sau đây có hiệu quả phát hiện dưới 75%, cho thấy cơ hội cải tiến đáng kể:</p>
-                    <ul>
-                        {low_items}
-                    </ul>
-                    <p>Cân nhắc triển khai các cải tiến nhắm mục tiêu trong phương pháp phát hiện cho các loại lỗi này.</p>
+                    <p>Tương quan giữa lỗi nội bộ và khiếu nại khách hàng là <strong>{correlation:.2f}</strong>.</p>
+                    <p>{'Tương quan dương này cho thấy sự gia tăng lỗi nội bộ có liên quan đến sự gia tăng khiếu nại khách hàng, với độ trễ từ vài ngày đến vài tuần.' if correlation > 0 else 'Tương quan này cho thấy lỗi nội bộ và khiếu nại khách hàng có thể không liên quan trực tiếp hoặc có độ trễ đáng kể giữa vấn đề sản xuất và phản hồi của khách hàng.'}</p>
                 </div>
             </div>
             """, unsafe_allow_html=True)
             
-    except Exception as e:
-        st.error(f"Lỗi tạo phân tích hiệu quả phát hiện: {str(e)}")
-    else:
-        st.warning("""
-        ⚠️ Không có dữ liệu lỗi liên kết. Điều này có thể do:
+        except Exception as e:
+            st.error(f"Lỗi tạo biểu đồ phân tích thời gian: {str(e)}")
         
-        1. Không đủ dữ liệu lịch sử để thiết lập kết nối
-        2. Không khớp mã lỗi giữa dữ liệu nội bộ và dữ liệu khách hàng
-        3. Vấn đề tích hợp dữ liệu
         
-        Vui lòng đảm bảo cả dữ liệu AQL và khiếu nại đều có sẵn và được định dạng đúng.
-        """)
+        # Detection Effectiveness Analysis
+        st.markdown('<div class="sub-header">Phân tích hiệu quả phát hiện lỗi</div>', unsafe_allow_html=True)
+        
+        try:
+            # Calculate detection effectiveness for each defect type
+            effectiveness_df = linked_df.groupby("Defect_Type").agg({
+                "Internal_Defect_Count": "sum",
+                "Customer_Complaint_Count": "sum"
+            }).reset_index()
+            
+            # Calculate effectiveness percentage
+            effectiveness_df["Total_Issues"] = (
+                effectiveness_df["Internal_Defect_Count"]
+                + effectiveness_df["Customer_Complaint_Count"]
+            )
+            effectiveness_df["Detection_Effectiveness"] = (
+                effectiveness_df["Internal_Defect_Count"]
+                / effectiveness_df["Total_Issues"]
+                * 100
+            ).round(1)
+            
+            # Sort by effectiveness
+            effectiveness_df = effectiveness_df.sort_values("Detection_Effectiveness")
+            
+            # Create figure
+            fig = go.Figure()
+            fig.add_trace(go.Bar(
+                y=effectiveness_df["Defect_Type"],
+                x=effectiveness_df["Detection_Effectiveness"],
+                orientation="h",
+                marker_color=effectiveness_df["Detection_Effectiveness"].map(
+                    lambda x: "green" if x >= 90 else ("orange" if x >= 75 else "red")
+                ),
+                text=effectiveness_df["Detection_Effectiveness"].astype(str) + "%",
+                textposition="outside"
+            ))
+            fig.add_vline(x=75, line_dash="dash", line_color="orange", annotation_text="75% (Chấp nhận được)")
+            fig.add_vline(x=90, line_dash="dash", line_color="green", annotation_text="90% (Xuất sắc)")
+            fig.update_layout(
+                title="Hiệu quả phát hiện lỗi nội bộ theo loại lỗi",
+                xaxis_title="Hiệu quả phát hiện (%)",
+                yaxis_title="Loại lỗi",
+                height=400,
+                margin=dict(l=40, r=40, t=40, b=40),
+                xaxis=dict(range=[0, 100])
+            )
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Identify poor detection areas
+            poor_detection = effectiveness_df[
+                effectiveness_df["Detection_Effectiveness"] < 75
+            ]
+            if not poor_detection.empty:
+                low_items = "".join([
+                    f"<li><strong>{row['Defect_Type']}</strong>: {row['Detection_Effectiveness']}% hiệu quả</li>"
+                    for _, row in poor_detection.iterrows()
+                ])
+                st.markdown(f"""
+                <div class="warning-card">
+                    <div class="warning-title">Khu vực phát hiện lỗi kém</div>
+                    <div class="insight-content">
+                        <p>Các loại lỗi sau đây có hiệu quả phát hiện dưới 75%, cho thấy cơ hội cải tiến đáng kể:</p>
+                        <ul>
+                            {low_items}
+                        </ul>
+                        <p>Cân nhắc triển khai các cải tiến nhắm mục tiêu trong phương pháp phát hiện cho các loại lỗi này.</p>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+            
+        except Exception as e:
+            st.error(f"Lỗi tạo phân tích hiệu quả phát hiện: {str(e)}")
+        else:
+            st.warning("""
+            ⚠️ Không có dữ liệu lỗi liên kết. Điều này có thể do:
+            
+            1. Không đủ dữ liệu lịch sử để thiết lập kết nối
+            2. Không khớp mã lỗi giữa dữ liệu nội bộ và dữ liệu khách hàng
+            3. Vấn đề tích hợp dữ liệu
+            
+            Vui lòng đảm bảo cả dữ liệu AQL và khiếu nại đều có sẵn và được định dạng đúng.
+            """)
 
-# Footer with dashboard information
-st.markdown("""
-<div style="text-align: center; padding: 15px; margin-top: 30px; border-top: 1px solid #eee;">
-    <p style="color: #555; font-size: 0.9rem;">
-        Báo cáo chất lượng CF MMB | Được tạo bởi Phòng Đảm bảo Chất lượng
-    </p>
-</div>
-""", unsafe_allow_html=True)
-
-# Auto-refresh mechanism
-if auto_refresh:
-    time.sleep(300)  # Wait for 5 minutes
-    st.experimental_rerun()
