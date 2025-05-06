@@ -1869,19 +1869,24 @@ with tab3:
             poor_detection = effectiveness_df[effectiveness_df["Detection_Effectiveness"] < 75]
             
             if not poor_detection.empty:
-                st.markdown(f"""
-                <div class="warning-card">
-                    <div class="warning-title">Khu vực phát hiện lỗi kém</div>
-                    <div class="insight-content">
-                        <p>Các loại lỗi sau đây có hiệu quả phát hiện dưới 75%, cho thấy cơ hội cải tiến đáng kể:</p>
-                        <ul>
-                            {''.join([f"<li><strong>{row['Defect_Type']}</strong>: {row['Detection_Effectiveness']}% hiệu quả<ul>
-                            {''.join([f"<li><strong>{row['Defect_Type']}</strong>: {row['Detection_Effectiveness']}% hiệu quả</li>" for _, row in poor_detection.iterrows()])}
-                        </ul>
-                        <p>Cân nhắc triển khai các cải tiến nhắm mục tiêu trong phương pháp phát hiện cho các loại lỗi này.</p>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
+    # Build a list of <li> elements for each defect type with low detection
+    low_items = ''.join([
+        f"<li><strong>{row['Defect_Type']}</strong>: {row['Detection_Effectiveness']}% hiệu quả</li>"
+        for _, row in poor_detection.iterrows()
+    ])
+
+    st.markdown(f"""
+    <div class="warning-card">
+        <div class="warning-title">Khu vực phát hiện lỗi kém</div>
+        <div class="insight-content">
+            <p>Các loại lỗi sau đây có hiệu quả phát hiện dưới 75%, cho thấy cơ hội cải tiến đáng kể:</p>
+            <ul>
+                {low_items}
+            </ul>
+            <p>Cân nhắc triển khai các cải tiến nhắm mục tiêu trong phương pháp phát hiện cho các loại lỗi này.</p>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
         except Exception as e:
             st.error(f"Lỗi tạo phân tích hiệu quả phát hiện: {str(e)}")
     else:
