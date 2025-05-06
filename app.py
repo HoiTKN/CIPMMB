@@ -479,7 +479,7 @@ def load_production_data():
         st.error(f"❌ Lỗi khi tải dữ liệu sản lượng: {str(e)}")
         return pd.DataFrame()
 
-# Function to calculate TEM VÀNG
+# Function to calculate TEM VÀNG - FIXED
 def calculate_tem_vang(aql_df, production_df):
     """Calculate TEM VÀNG by matching production data with AQL data"""
     try:
@@ -499,7 +499,20 @@ def calculate_tem_vang(aql_df, production_df):
                 if pd.isna(time_str):
                     return None
                 
-                hour = int(time_str.split(':')[0])
+                # Handle different time formats - ensure we extract the hour correctly
+                if isinstance(time_str, str):
+                    if ':' in time_str:
+                        hour = int(time_str.split(':')[0])
+                    else:
+                        # Try to convert to int directly if no colon
+                        try:
+                            hour = int(time_str)
+                        except:
+                            return None
+                elif isinstance(time_str, (int, float)):
+                    hour = int(time_str)
+                else:
+                    return None
                 
                 # Map hour to shift
                 if 6 <= hour < 14:
@@ -518,6 +531,13 @@ def calculate_tem_vang(aql_df, production_df):
             st.warning("⚠️ Thiếu cột 'Giờ' trong dữ liệu AQL để ánh xạ ca làm việc")
             return pd.DataFrame()
         
+        # Ensure all line values are strings
+        if "Line" in aql_copy.columns:
+            aql_copy["Line"] = aql_copy["Line"].astype(str)
+        
+        if "Line" in prod_copy.columns:
+            prod_copy["Line"] = prod_copy["Line"].astype(str)
+        
         # Perform the matching and aggregation
         tem_vang_data = []
         
@@ -526,6 +546,12 @@ def calculate_tem_vang(aql_df, production_df):
             prod_groups = prod_copy.groupby(["Ngày", "Line", "Ca", "Người phụ trách"])
             
             for (prod_date, prod_line, prod_shift, prod_leader), prod_group in prod_groups:
+                # Convert to ensure consistent comparison
+                if isinstance(prod_shift, (int, float)):
+                    prod_shift = str(int(prod_shift))
+                else:
+                    prod_shift = str(prod_shift)
+                
                 # Find matching AQL records
                 matching_aql = aql_copy[
                     (aql_copy["Ngày SX"] == prod_date) &
