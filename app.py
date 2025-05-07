@@ -189,74 +189,6 @@ def authenticate():
         st.error(f"❌ Lỗi xác thực: {str(e)}")
         return None
 
-# Function to load complaint data
-@st.cache_data(ttl=300)  # Cache for 5 minutes
-def load_complaint_data():
-    try:
-        # Authenticate and connect to Google Sheets
-        gc = authenticate()
-        
-        if gc is None:
-            st.error("❌ Không thể xác thực với Google Sheets")
-            return pd.DataFrame()
-        
-        # Open the Google Sheet by URL (complaint data)
-        sheet_url = "https://docs.google.com/spreadsheets/d/1d6uGPbJV6BsOB6XSB1IS3NhfeaMyMBcaQPvOnNg2yA4/edit"
-        sheet_key = sheet_url.split('/d/')[1].split('/')[0]
-        
-        # Open the spreadsheet and get the worksheet
-        try:
-            spreadsheet = gc.open_by_key(sheet_key)
-            connection_status = st.empty()
-            
-            # Try to get the "Integrated_Data" worksheet
-            try:
-                worksheet = spreadsheet.worksheet('Integrated_Data')
-            except gspread.exceptions.WorksheetNotFound:
-                # Fall back to first worksheet if Integrated_Data doesn't exist
-                worksheet = spreadsheet.get_worksheet(0)
-            
-            # Get all records
-            data = worksheet.get_all_records()
-            
-            # Convert to DataFrame
-            df = pd.DataFrame(data)
-            
-            # Basic data cleaning
-            # Convert date columns to datetime if needed
-            if "Ngày SX" in df.columns:
-                try:
-                    df["Ngày SX"] = pd.to_datetime(df["Ngày SX"], format="%d/%m/%Y", errors='coerce')
-                    df["Production_Month"] = df["Ngày SX"].dt.strftime("%m/%Y")
-                    df["Production_Date"] = df["Ngày SX"]
-                except Exception as e:
-                    connection_status.warning(f"⚠️ Không thể xử lý cột ngày: {e}")
-            
-            # Make sure numeric columns are properly typed
-            if "SL pack/ cây lỗi" in df.columns:
-                df["SL pack/ cây lỗi"] = pd.to_numeric(df["SL pack/ cây lỗi"], errors='coerce').fillna(0)
-            
-            # Ensure Line column is converted to string for consistent filtering
-            if "Line" in df.columns:
-                df["Line"] = df["Line"].astype(str)
-            
-            # Ensure Máy column is converted to string
-            if "Máy" in df.columns:
-                df["Máy"] = df["Máy"].astype(str)
-            
-            # Hide connection status after successful load
-            connection_status.empty()
-            
-            return df
-            
-        except Exception as e:
-            st.error(f"❌ Lỗi truy cập bảng dữ liệu khiếu nại: {str(e)}")
-            return pd.DataFrame()
-        
-    except Exception as e:
-        st.error(f"❌ Lỗi tải dữ liệu khiếu nại: {str(e)}")
-        return pd.DataFrame()
-
 # Function to load AQL data
 @st.cache_data(ttl=300)  # Cache for 5 minutes
 def load_aql_data():
@@ -307,6 +239,25 @@ def load_aql_data():
             # Ensure Line column is converted to string for consistent filtering
             if "Line" in df.columns:
                 df["Line"] = df["Line"].astype(str)
+            
+            # Process shift information based on hour
+            if "Giờ" in df.columns:
+                # Convert to numeric if not already
+                df["Giờ"] = pd.to_numeric(df["Giờ"], errors='coerce')
+                
+                # Define shifts based on hour ranges
+                df["Shift"] = pd.cut(
+                    df["Giờ"],
+                    bins=[-0.1, 6, 14, 22, 24],
+                    labels=["3", "1", "2", "3"],
+                    include_lowest=True
+                )
+                
+                # Handle any NaN values in Shift
+                df["Shift"] = df["Shift"].fillna("Unknown")
+                
+                # Convert Shift to string
+                df["Shift"] = df["Shift"].astype(str)
             
             # Hide connection status after successful load
             connection_status.empty()
@@ -372,6 +323,10 @@ def load_production_data():
             if "Line" in df.columns:
                 df["Line"] = df["Line"].astype(str)
             
+            # Ensure Ca column is properly formatted
+            if "Ca" in df.columns:
+                df["Ca"] = df["Ca"].astype(str)
+            
             # Hide connection status after successful load
             connection_status.empty()
             
@@ -383,6 +338,106 @@ def load_production_data():
         
     except Exception as e:
         st.error(f"❌ Lỗi tải dữ liệu sản lượng: {str(e)}")
+        return pd.DataFrame()
+
+# Function to load AQL gói data for defect name mapping
+@st.cache_data(ttl=300)  # Cache for 5 minutes
+def load_aql_goi_data():
+    try:
+        # Authenticate and connect to Google Sheets
+        gc = authenticate()
+        
+        if gc is None:
+            st.error("❌ Không thể xác thực với Google Sheets")
+            return pd.DataFrame()
+        
+        # Open the Google Sheet by URL
+        sheet_url = "https://docs.google.com/spreadsheets/d/1MxvsyZTMMO0L5Cf1FzuXoKD634OClCCefeLjv9B49XU/edit"
+        sheet_key = sheet_url.split('/d/')[1].split('/')[0]
+        
+        # Open the spreadsheet
+        try:
+            spreadsheet = gc.open_by_key(sheet_key)
+            
+            # Get the AQL gói worksheet
+            try:
+                worksheet = spreadsheet.worksheet('AQL gói')
+            except gspread.exceptions.WorksheetNotFound:
+                st.error(f"❌ Không tìm thấy bảng 'AQL gói'")
+                return pd.DataFrame()
+            
+            # Get all records
+            data = worksheet.get_all_records()
+            
+            # Convert to DataFrame
+            df = pd.DataFrame(data)
+            
+            # Return only defect code and name columns if they exist
+            defect_code_col = next((col for col in df.columns if "code" in col.lower()), None)
+            defect_name_col = next((col for col in df.columns if "name" in col.lower() or "tên" in col.lower()), None)
+            
+            if defect_code_col and defect_name_col:
+                return df[[defect_code_col, defect_name_col]]
+            else:
+                # If specific columns not found, return the full dataframe
+                return df
+            
+        except Exception as e:
+            st.error(f"❌ Lỗi truy cập bảng AQL gói: {str(e)}")
+            return pd.DataFrame()
+            
+    except Exception as e:
+        st.error(f"❌ Lỗi tải dữ liệu AQL gói: {str(e)}")
+        return pd.DataFrame()
+
+# Function to load AQL Tô ly data for defect name mapping
+@st.cache_data(ttl=300)  # Cache for 5 minutes
+def load_aql_to_ly_data():
+    try:
+        # Authenticate and connect to Google Sheets
+        gc = authenticate()
+        
+        if gc is None:
+            st.error("❌ Không thể xác thực với Google Sheets")
+            return pd.DataFrame()
+        
+        # Open the Google Sheet by URL
+        sheet_url = "https://docs.google.com/spreadsheets/d/1MxvsyZTMMO0L5Cf1FzuXoKD634OClCCefeLjv9B49XU/edit"
+        sheet_key = sheet_url.split('/d/')[1].split('/')[0]
+        
+        # Open the spreadsheet
+        try:
+            spreadsheet = gc.open_by_key(sheet_key)
+            
+            # Get the AQL Tô ly worksheet
+            try:
+                worksheet = spreadsheet.worksheet('AQL Tô ly')
+            except gspread.exceptions.WorksheetNotFound:
+                st.error(f"❌ Không tìm thấy bảng 'AQL Tô ly'")
+                return pd.DataFrame()
+            
+            # Get all records
+            data = worksheet.get_all_records()
+            
+            # Convert to DataFrame
+            df = pd.DataFrame(data)
+            
+            # Return only defect code and name columns if they exist
+            defect_code_col = next((col for col in df.columns if "code" in col.lower()), None)
+            defect_name_col = next((col for col in df.columns if "name" in col.lower() or "tên" in col.lower()), None)
+            
+            if defect_code_col and defect_name_col:
+                return df[[defect_code_col, defect_name_col]]
+            else:
+                # If specific columns not found, return the full dataframe
+                return df
+            
+        except Exception as e:
+            st.error(f"❌ Lỗi truy cập bảng AQL Tô ly: {str(e)}")
+            return pd.DataFrame()
+            
+    except Exception as e:
+        st.error(f"❌ Lỗi tải dữ liệu AQL Tô ly: {str(e)}")
         return pd.DataFrame()
 
 # Function to calculate TEM VÀNG
@@ -429,20 +484,271 @@ def calculate_tem_vang(aql_df, production_df):
         st.error(f"❌ Lỗi tính toán TEM VÀNG: {str(e)}")
         return pd.DataFrame()
 
-# Function to analyze defect patterns
-def analyze_defect_patterns(aql_df):
-    """Analyze defect patterns in AQL data"""
+# Function to calculate TEM VÀNG by shift
+def calculate_tem_vang_by_shift(aql_df, production_df):
+    """Calculate TEM VÀNG by shift using AQL and production data"""
+    try:
+        # Check if dataframes are empty or missing required columns
+        if aql_df.empty or production_df.empty:
+            st.error("❌ Không thể tính TEM VÀNG theo ca - thiếu dữ liệu")
+            return pd.DataFrame()
+        
+        if not all(col in aql_df.columns for col in ["Production_Date", "Line", "Số lượng hold ( gói/thùng)", "Shift"]):
+            st.warning("⚠️ Thiếu cột cần thiết trong dữ liệu AQL để tính TEM VÀNG theo ca")
+            return pd.DataFrame()
+        
+        if not all(col in production_df.columns for col in ["Production_Date", "Line", "Sản lượng", "Ca"]):
+            st.warning("⚠️ Thiếu cột cần thiết trong dữ liệu sản lượng để tính TEM VÀNG theo ca")
+            return pd.DataFrame()
+        
+        # Create copies to avoid modifying originals
+        aql_copy = aql_df.copy()
+        prod_copy = production_df.copy()
+        
+        # Group AQL data by date, line, and shift to get total hold quantities
+        aql_grouped = aql_copy.groupby(["Production_Date", "Line", "Shift"])["Số lượng hold ( gói/thùng)"].sum().reset_index()
+        aql_grouped.columns = ["Date", "Line", "Shift", "Hold_Quantity"]
+        
+        # Rename Ca to Shift in production data for consistent naming
+        prod_copy.rename(columns={"Ca": "Shift"}, inplace=True)
+        
+        # Group production data by date, line, and shift to get total production volumes
+        prod_grouped = prod_copy.groupby(["Production_Date", "Line", "Shift"])["Sản lượng"].sum().reset_index()
+        prod_grouped.columns = ["Date", "Line", "Shift", "Production_Volume"]
+        
+        # Merge the grouped data
+        tem_vang_shift_df = pd.merge(
+            aql_grouped, 
+            prod_grouped, 
+            on=["Date", "Line", "Shift"], 
+            how="inner"
+        )
+        
+        # Calculate TEM VÀNG percentage
+        tem_vang_shift_df["TEM_VANG"] = (tem_vang_shift_df["Hold_Quantity"] / tem_vang_shift_df["Production_Volume"]) * 100
+        
+        # Add month column for filtering
+        tem_vang_shift_df["Production_Month"] = tem_vang_shift_df["Date"].dt.strftime("%m/%Y")
+        
+        return tem_vang_shift_df
+        
+    except Exception as e:
+        st.error(f"❌ Lỗi tính toán TEM VÀNG theo ca: {str(e)}")
+        return pd.DataFrame()
+
+# Function to calculate TEM VÀNG by shift leader
+def calculate_tem_vang_by_leader(aql_df, production_df):
+    """Calculate TEM VÀNG by shift leader using AQL and production data"""
+    try:
+        # Check if dataframes are empty or missing required columns
+        if aql_df.empty or production_df.empty:
+            st.error("❌ Không thể tính TEM VÀNG theo trưởng ca - thiếu dữ liệu")
+            return pd.DataFrame()
+        
+        if not all(col in aql_df.columns for col in ["Production_Date", "Line", "Số lượng hold ( gói/thùng)", "Tên Trưởng ca"]):
+            st.warning("⚠️ Thiếu cột cần thiết trong dữ liệu AQL để tính TEM VÀNG theo trưởng ca")
+            return pd.DataFrame()
+        
+        if not all(col in production_df.columns for col in ["Production_Date", "Line", "Sản lượng", "Người phụ trách"]):
+            st.warning("⚠️ Thiếu cột cần thiết trong dữ liệu sản lượng để tính TEM VÀNG theo trưởng ca")
+            return pd.DataFrame()
+        
+        # Create copies to avoid modifying originals
+        aql_copy = aql_df.copy()
+        prod_copy = production_df.copy()
+        
+        # Group AQL data by date, line, and shift leader to get total hold quantities
+        aql_grouped = aql_copy.groupby(["Production_Date", "Line", "Tên Trưởng ca"])["Số lượng hold ( gói/thùng)"].sum().reset_index()
+        aql_grouped.columns = ["Date", "Line", "Leader", "Hold_Quantity"]
+        
+        # Rename column in production data for consistent naming
+        prod_copy.rename(columns={"Người phụ trách": "Leader"}, inplace=True)
+        
+        # Group production data by date, line, and leader to get total production volumes
+        prod_grouped = prod_copy.groupby(["Production_Date", "Line", "Leader"])["Sản lượng"].sum().reset_index()
+        prod_grouped.columns = ["Date", "Line", "Leader", "Production_Volume"]
+        
+        # Merge the grouped data
+        tem_vang_leader_df = pd.merge(
+            aql_grouped, 
+            prod_grouped, 
+            on=["Date", "Line", "Leader"], 
+            how="inner"
+        )
+        
+        # Calculate TEM VÀNG percentage
+        tem_vang_leader_df["TEM_VANG"] = (tem_vang_leader_df["Hold_Quantity"] / tem_vang_leader_df["Production_Volume"]) * 100
+        
+        # Add month column for filtering
+        tem_vang_leader_df["Production_Month"] = tem_vang_leader_df["Date"].dt.strftime("%m/%Y")
+        
+        return tem_vang_leader_df
+        
+    except Exception as e:
+        st.error(f"❌ Lỗi tính toán TEM VÀNG theo trưởng ca: {str(e)}")
+        return pd.DataFrame()
+
+# Function to calculate TEM VÀNG by hour
+def calculate_tem_vang_by_hour(aql_df, production_df):
+    """Calculate TEM VÀNG by hour using AQL and production data"""
+    try:
+        # Check if dataframes are empty or missing required columns
+        if aql_df.empty or production_df.empty:
+            st.error("❌ Không thể tính TEM VÀNG theo giờ - thiếu dữ liệu")
+            return pd.DataFrame()
+        
+        if not all(col in aql_df.columns for col in ["Production_Date", "Line", "Số lượng hold ( gói/thùng)", "Giờ"]):
+            st.warning("⚠️ Thiếu cột cần thiết trong dữ liệu AQL để tính TEM VÀNG theo giờ")
+            return pd.DataFrame()
+        
+        # Create copies to avoid modifying originals
+        aql_copy = aql_df.copy()
+        
+        # Ensure Giờ is numeric
+        aql_copy["Giờ"] = pd.to_numeric(aql_copy["Giờ"], errors='coerce')
+        
+        # Group AQL data by hour to get total hold quantities
+        aql_grouped = aql_copy.groupby("Giờ")["Số lượng hold ( gói/thùng)"].sum().reset_index()
+        aql_grouped.columns = ["Hour", "Hold_Quantity"]
+        
+        # Map hours to shifts to get production volumes
+        hour_to_shift = {
+            h: "1" if 6 <= h < 14 else ("2" if 14 <= h < 22 else "3")
+            for h in range(24)
+        }
+        
+        aql_grouped["Shift"] = aql_grouped["Hour"].map(hour_to_shift)
+        
+        # Calculate total production by shift
+        prod_copy = production_df.copy()
+        prod_copy.rename(columns={"Ca": "Shift"}, inplace=True)
+        
+        shift_production = prod_copy.groupby("Shift")["Sản lượng"].sum().reset_index()
+        
+        # Merge to get production volume for each hour
+        # We'll distribute the shift production evenly across hours in that shift
+        hours_per_shift = {
+            "1": 8,  # 6-14 (8 hours)
+            "2": 8,  # 14-22 (8 hours)
+            "3": 8   # 22-6 (8 hours)
+        }
+        
+        # Join shift production to hours
+        tem_vang_hour_df = pd.merge(
+            aql_grouped,
+            shift_production,
+            on="Shift",
+            how="left"
+        )
+        
+        # Distribute production evenly by hours in shift
+        tem_vang_hour_df["Hourly_Production"] = tem_vang_hour_df.apply(
+            lambda row: row["Sản lượng"] / hours_per_shift[row["Shift"]] 
+            if row["Shift"] in hours_per_shift and row["Sản lượng"] > 0
+            else 0,
+            axis=1
+        )
+        
+        # Calculate TEM VÀNG percentage
+        tem_vang_hour_df["TEM_VANG"] = (tem_vang_hour_df["Hold_Quantity"] / tem_vang_hour_df["Hourly_Production"]) * 100
+        
+        # Sort by hour
+        tem_vang_hour_df = tem_vang_hour_df.sort_values("Hour")
+        
+        return tem_vang_hour_df
+        
+    except Exception as e:
+        st.error(f"❌ Lỗi tính toán TEM VÀNG theo giờ: {str(e)}")
+        return pd.DataFrame()
+
+# Function to map defect codes to defect names
+def map_defect_codes_to_names(aql_df, aql_goi_df, aql_to_ly_df):
+    """Map defect codes to proper defect names based on line number"""
+    try:
+        # Check if dataframes are empty
+        if aql_df.empty:
+            st.error("❌ Không thể ánh xạ mã lỗi - thiếu dữ liệu")
+            return pd.DataFrame()
+        
+        # Create a copy to avoid modifying the original
+        df = aql_df.copy()
+        
+        # Create a Defect_Name column
+        df["Defect_Name"] = ""
+        
+        # Get defect code column from AQL data
+        defect_code_col = "Defect code" if "Defect code" in df.columns else None
+        
+        if not defect_code_col:
+            st.warning("⚠️ Không tìm thấy cột mã lỗi trong dữ liệu AQL")
+            return df
+        
+        # Get mapping columns from AQL gói and AQL Tô ly data
+        if not aql_goi_df.empty:
+            goi_code_col = aql_goi_df.columns[0]
+            goi_name_col = aql_goi_df.columns[1]
+            
+            # Create a mapping dictionary for gói
+            goi_mapping = dict(zip(aql_goi_df[goi_code_col], aql_goi_df[goi_name_col]))
+        else:
+            goi_mapping = {}
+        
+        if not aql_to_ly_df.empty:
+            to_ly_code_col = aql_to_ly_df.columns[0]
+            to_ly_name_col = aql_to_ly_df.columns[1]
+            
+            # Create a mapping dictionary for tô ly
+            to_ly_mapping = dict(zip(aql_to_ly_df[to_ly_code_col], aql_to_ly_df[to_ly_name_col]))
+        else:
+            to_ly_mapping = {}
+        
+        # Function to map defect code to name based on line
+        def map_defect_name(row):
+            line = row["Line"] if "Line" in row else ""
+            defect_code = row[defect_code_col] if defect_code_col in row else ""
+            
+            # Convert line to string and check range
+            try:
+                line_str = str(line)
+                if line_str in ["1", "2", "3", "4", "5", "6"]:
+                    return goi_mapping.get(defect_code, defect_code)
+                elif line_str in ["7", "8"]:
+                    return to_ly_mapping.get(defect_code, defect_code)
+                else:
+                    return defect_code
+            except:
+                return defect_code
+        
+        # Apply the mapping function
+        df["Defect_Name"] = df.apply(map_defect_name, axis=1)
+        
+        return df
+        
+    except Exception as e:
+        st.error(f"❌ Lỗi ánh xạ mã lỗi: {str(e)}")
+        return aql_df.copy()
+
+# Function to analyze defect patterns (revised to use defect names)
+def analyze_defect_patterns(aql_df_with_names):
+    """Analyze defect patterns in AQL data using defect names instead of codes"""
     try:
         # Check if dataframe is empty
-        if aql_df.empty:
+        if aql_df_with_names.empty:
             return {}
         
         # Create copy to avoid modifying original
-        df = aql_df.copy()
+        df = aql_df_with_names.copy()
         
-        # Group by defect code to get frequency
-        if "Defect code" in df.columns:
-            defect_counts = df.groupby("Defect code").size().reset_index(name="Count")
+        # Group by defect name to get frequency
+        if "Defect_Name" in df.columns:
+            defect_counts = df.groupby("Defect_Name").size().reset_index(name="Count")
+            
+            # Add additional metric: total hold quantity by defect
+            if "Số lượng hold ( gói/thùng)" in df.columns:
+                hold_by_defect = df.groupby("Defect_Name")["Số lượng hold ( gói/thùng)"].sum().reset_index(name="Hold_Quantity")
+                defect_counts = pd.merge(defect_counts, hold_by_defect, on="Defect_Name", how="left")
+            
+            # Sort by count
             defect_counts = defect_counts.sort_values("Count", ascending=False)
             
             # Calculate percentages
@@ -453,159 +759,59 @@ def analyze_defect_patterns(aql_df):
             # Identify top defects (80% by Pareto principle)
             vital_few = defect_counts[defect_counts["Cumulative"] <= 80]
             
-            # Group by Line and Defect code to get line-specific patterns
-            line_defects = df.groupby(["Line", "Defect code"]).size().reset_index(name="Count")
-            pivot_line_defects = line_defects.pivot(index="Line", columns="Defect code", values="Count").fillna(0)
-            
-            # Calculate defect rates by MDG (assuming MDG is stored in "Máy" column)
-            if "Máy" in df.columns:
-                mdg_defects = df.groupby(["Line", "Máy", "Defect code"]).size().reset_index(name="Count")
-            else:
-                mdg_defects = pd.DataFrame()
+            # Group by Line and Defect name to get line-specific patterns
+            line_defects = df.groupby(["Line", "Defect_Name"]).size().reset_index(name="Count")
+            line_defects_hold = df.groupby(["Line", "Defect_Name"])["Số lượng hold ( gói/thùng)"].sum().reset_index(name="Hold_Quantity")
+            line_defects = pd.merge(line_defects, line_defects_hold, on=["Line", "Defect_Name"], how="left")
+            pivot_line_defects = line_defects.pivot(index="Line", columns="Defect_Name", values="Count").fillna(0)
             
             # Return the analysis results
             return {
                 "defect_counts": defect_counts,
                 "vital_few": vital_few,
                 "line_defects": line_defects,
-                "pivot_line_defects": pivot_line_defects,
-                "mdg_defects": mdg_defects
+                "pivot_line_defects": pivot_line_defects
             }
         else:
-            st.warning("⚠️ Thiếu cột 'Defect code' trong dữ liệu AQL để phân tích mẫu lỗi")
+            st.warning("⚠️ Thiếu cột 'Defect_Name' trong dữ liệu AQL để phân tích mẫu lỗi")
             return {}
             
     except Exception as e:
         st.error(f"❌ Lỗi phân tích mẫu lỗi: {str(e)}")
         return {}
 
-# Function to link internal defects with customer complaints
-def link_defects_with_complaints(aql_df, complaint_df):
-    """Link internal defects (AQL) with customer complaints"""
-    try:
-        # Check if dataframes are empty
-        if aql_df.empty or complaint_df.empty:
-            return pd.DataFrame()
-        
-        # Create copies to avoid modifying originals
-        aql_copy = aql_df.copy()
-        complaint_copy = complaint_df.copy()
-        
-        # Standardize date columns for joining
-        if "Production_Date" in aql_copy.columns and "Production_Date" in complaint_copy.columns:
-            # Group AQL defects by date, line, and defect code
-            if "Defect code" in aql_copy.columns and "Line" in aql_copy.columns:
-                aql_grouped = aql_copy.groupby(["Production_Date", "Line", "Defect code"]).size().reset_index(name="Defect_Count")
-            else:
-                st.warning("⚠️ Thiếu cột cần thiết trong dữ liệu AQL để liên kết")
-                return pd.DataFrame()
-            
-            # Group complaints by date, line, and defect type
-            if "Tên lỗi" in complaint_copy.columns and "Line" in complaint_copy.columns:
-                # Count unique ticket IDs for each group
-                if "Mã ticket" in complaint_copy.columns:
-                    complaint_grouped = complaint_copy.groupby(["Production_Date", "Line", "Tên lỗi"])["Mã ticket"].nunique().reset_index(name="Complaint_Count")
-                else:
-                    complaint_grouped = complaint_copy.groupby(["Production_Date", "Line", "Tên lỗi"]).size().reset_index(name="Complaint_Count")
-            else:
-                st.warning("⚠️ Thiếu cột cần thiết trong dữ liệu khiếu nại để liên kết")
-                return pd.DataFrame()
-            
-            # Create mapping between internal defect codes and customer complaint types
-            # This mapping should be customized based on your specific defect codes and complaint types
-            defect_map = {
-                # Example mapping - update with your actual codes
-                "NQ-133": "Hở nắp",
-                "NQ-124": "Rách OPP",
-                "HE-022": "Mất date",
-                "HE-023": "Thiếu gia vị",
-                "NE-023": "Hở nắp",
-                "KK-032": "Dị vật"
-            }
-            
-            # Add mapped complaint type to AQL data
-            aql_grouped["Mapped_Complaint_Type"] = aql_grouped["Defect code"].map(defect_map)
-            
-            # Group AQL data by date, line, and mapped complaint type
-            aql_grouped_mapped = aql_grouped.groupby(["Production_Date", "Line", "Mapped_Complaint_Type"])["Defect_Count"].sum().reset_index()
-            
-            # Rename complaint type column for joining
-            complaint_grouped_renamed = complaint_grouped.rename(columns={"Tên lỗi": "Mapped_Complaint_Type"})
-            
-            # Join AQL and complaint data
-            # Use a window of +/- 7 days to account for lag between production and complaint
-            linked_defects = pd.DataFrame()
-            
-            for _, aql_row in aql_grouped_mapped.iterrows():
-                prod_date = aql_row["Production_Date"]
-                line = aql_row["Line"]
-                complaint_type = aql_row["Mapped_Complaint_Type"]
-                
-                # Skip if complaint type mapping is null
-                if pd.isna(complaint_type):
-                    continue
-                
-                # Find complaints within the window
-                date_min = prod_date - timedelta(days=1)  # 1 day before production
-                date_max = prod_date + timedelta(days=14)  # Up to 14 days after production
-                
-                matching_complaints = complaint_grouped_renamed[
-                    (complaint_grouped_renamed["Production_Date"] >= date_min) &
-                    (complaint_grouped_renamed["Production_Date"] <= date_max) &
-                    (complaint_grouped_renamed["Line"] == line) &
-                    (complaint_grouped_renamed["Mapped_Complaint_Type"] == complaint_type)
-                ]
-                
-                if not matching_complaints.empty:
-                    total_complaints = matching_complaints["Complaint_Count"].sum()
-                    
-                    linked_row = pd.DataFrame({
-                        "Production_Date": [prod_date],
-                        "Line": [line],
-                        "Defect_Type": [complaint_type],
-                        "Internal_Defect_Count": [aql_row["Defect_Count"]],
-                        "Customer_Complaint_Count": [total_complaints],
-                        "Defect_to_Complaint_Ratio": [aql_row["Defect_Count"] / total_complaints if total_complaints > 0 else float('inf')]
-                    })
-                    
-                    linked_defects = pd.concat([linked_defects, linked_row], ignore_index=True)
-            
-            return linked_defects
-            
-        else:
-            st.warning("⚠️ Thiếu cột ngày để liên kết lỗi với khiếu nại")
-            return pd.DataFrame()
-            
-    except Exception as e:
-        st.error(f"❌ Lỗi liên kết lỗi với khiếu nại: {str(e)}")
-        return pd.DataFrame()
-
-# Load the data
+# Load all data needed
 @st.cache_data(ttl=600)  # Cache the combined data for 10 minutes
 def load_all_data():
     """Load and prepare all required data"""
     
     # Load raw data
-    complaint_df = load_complaint_data()
     aql_df = load_aql_data()
     production_df = load_production_data()
+    aql_goi_df = load_aql_goi_data()  
+    aql_to_ly_df = load_aql_to_ly_data()
     
-    # Calculate TEM VÀNG
+    # Map defect codes to names
+    aql_df_with_names = map_defect_codes_to_names(aql_df, aql_goi_df, aql_to_ly_df)
+    
+    # Calculate TEM VÀNG metrics
     tem_vang_df = calculate_tem_vang(aql_df, production_df)
+    tem_vang_shift_df = calculate_tem_vang_by_shift(aql_df, production_df)
+    tem_vang_leader_df = calculate_tem_vang_by_leader(aql_df, production_df)
+    tem_vang_hour_df = calculate_tem_vang_by_hour(aql_df, production_df)
     
-    # Analyze defect patterns
-    defect_patterns = analyze_defect_patterns(aql_df)
-    
-    # Link defects with complaints
-    linked_defects_df = link_defects_with_complaints(aql_df, complaint_df)
+    # Analyze defect patterns with names
+    defect_patterns = analyze_defect_patterns(aql_df_with_names)
     
     return {
-        "complaint_data": complaint_df,
         "aql_data": aql_df,
+        "aql_data_with_names": aql_df_with_names,
         "production_data": production_df,
         "tem_vang_data": tem_vang_df,
-        "defect_patterns": defect_patterns,
-        "linked_defects": linked_defects_df
+        "tem_vang_shift_data": tem_vang_shift_df,
+        "tem_vang_leader_data": tem_vang_leader_df,
+        "tem_vang_hour_data": tem_vang_hour_df,
+        "defect_patterns": defect_patterns
     }
 
 # Title and description
@@ -624,9 +830,11 @@ with st.sidebar:
     st.markdown("<h2 style='text-align: center; color: #1E3A8A;'>Bộ lọc</h2>", unsafe_allow_html=True)
     
     # Initialize filtered dataframes
-    filtered_aql_df = data["aql_data"].copy()
-    filtered_complaint_df = data["complaint_data"].copy()
+    filtered_aql_df = data["aql_data_with_names"].copy()
     filtered_tem_vang_df = data["tem_vang_data"].copy()
+    filtered_tem_vang_shift_df = data["tem_vang_shift_data"].copy()
+    filtered_tem_vang_leader_df = data["tem_vang_leader_data"].copy()
+    filtered_tem_vang_hour_df = data["tem_vang_hour_data"].copy()
     
     # Date filter for production data
     st.subheader("Khoảng thời gian sản xuất")
@@ -668,39 +876,19 @@ with st.sidebar:
                 (filtered_tem_vang_df["Date"] >= start_datetime) & 
                 (filtered_tem_vang_df["Date"] <= end_datetime)
             ]
-    
-    # Date filter for complaint data
-    st.subheader("Khoảng thời gian khiếu nại")
-    
-    # Get min and max dates from complaint data
-    if not data["complaint_data"].empty and "Production_Date" in data["complaint_data"].columns:
-        min_complaint_date = data["complaint_data"]["Production_Date"].min().date()
-        max_complaint_date = data["complaint_data"]["Production_Date"].max().date()
-    else:
-        min_complaint_date = datetime.now().date() - timedelta(days=365)
-        max_complaint_date = datetime.now().date()
-    
-    # Create date range selector for complaint data
-    complaint_date_range = st.date_input(
-        "Chọn khoảng thời gian khiếu nại",
-        value=(min_complaint_date, max_complaint_date),
-        min_value=min_complaint_date - timedelta(days=365),
-        max_value=max_complaint_date + timedelta(days=30)
-    )
-    
-    # Apply complaint date filter if a range is selected
-    if len(complaint_date_range) == 2:
-        start_date, end_date = complaint_date_range
-        
-        # Convert to datetime for filtering
-        start_datetime = pd.Timestamp(start_date)
-        end_datetime = pd.Timestamp(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
-        
-        # Apply to complaint data
-        if "Production_Date" in filtered_complaint_df.columns:
-            filtered_complaint_df = filtered_complaint_df[
-                (filtered_complaint_df["Production_Date"] >= start_datetime) & 
-                (filtered_complaint_df["Production_Date"] <= end_datetime)
+            
+        # Apply to TEM VÀNG by shift data
+        if not filtered_tem_vang_shift_df.empty and "Date" in filtered_tem_vang_shift_df.columns:
+            filtered_tem_vang_shift_df = filtered_tem_vang_shift_df[
+                (filtered_tem_vang_shift_df["Date"] >= start_datetime) & 
+                (filtered_tem_vang_shift_df["Date"] <= end_datetime)
+            ]
+            
+        # Apply to TEM VÀNG by leader data
+        if not filtered_tem_vang_leader_df.empty and "Date" in filtered_tem_vang_leader_df.columns:
+            filtered_tem_vang_leader_df = filtered_tem_vang_leader_df[
+                (filtered_tem_vang_leader_df["Date"] >= start_datetime) & 
+                (filtered_tem_vang_leader_df["Date"] <= end_datetime)
             ]
     
     # Line filter - Always include all lines from 1 to 8 regardless of data
@@ -714,24 +902,24 @@ with st.sidebar:
         
         if "Line" in filtered_aql_df.columns:
             filtered_aql_df = filtered_aql_df[filtered_aql_df["Line"] == selected_line]
-        
-        if "Line" in filtered_complaint_df.columns:
-            filtered_complaint_df = filtered_complaint_df[filtered_complaint_df["Line"] == selected_line]
-    
-    # Product filter
-    if not data["complaint_data"].empty and "Tên sản phẩm" in data["complaint_data"].columns:
-        try:
-            products = ["Tất cả"] + sorted(data["complaint_data"]["Tên sản phẩm"].unique().tolist())
-            selected_product = st.selectbox("🍜 Chọn sản phẩm", products)
             
-            if selected_product != "Tất cả":
-                filtered_complaint_df = filtered_complaint_df[filtered_complaint_df["Tên sản phẩm"] == selected_product]
-                
-                # Filter AQL data by item if possible
-                if "Tên sản phẩm" in filtered_aql_df.columns:
-                    filtered_aql_df = filtered_aql_df[filtered_aql_df["Tên sản phẩm"] == selected_product]
-        except Exception as e:
-            st.warning(f"Lỗi ở bộ lọc sản phẩm: {e}")
+        if not filtered_tem_vang_shift_df.empty and "Line" in filtered_tem_vang_shift_df.columns:
+            filtered_tem_vang_shift_df = filtered_tem_vang_shift_df[filtered_tem_vang_shift_df["Line"] == selected_line]
+            
+        if not filtered_tem_vang_leader_df.empty and "Line" in filtered_tem_vang_leader_df.columns:
+            filtered_tem_vang_leader_df = filtered_tem_vang_leader_df[filtered_tem_vang_leader_df["Line"] == selected_line]
+    
+    # Shift filter
+    all_shifts = ["Tất cả", "1", "2", "3"]
+    selected_shift = st.selectbox("⏱️ Chọn Ca", all_shifts)
+    
+    if selected_shift != "Tất cả":
+        # Apply filter to shift-related dataframes
+        if not filtered_tem_vang_shift_df.empty and "Shift" in filtered_tem_vang_shift_df.columns:
+            filtered_tem_vang_shift_df = filtered_tem_vang_shift_df[filtered_tem_vang_shift_df["Shift"] == selected_shift]
+        
+        if "Shift" in filtered_aql_df.columns:
+            filtered_aql_df = filtered_aql_df[filtered_aql_df["Shift"] == selected_shift]
     
     # Refresh button
     if st.button("🔄 Làm mới dữ liệu", use_container_width=True):
@@ -744,1162 +932,576 @@ with st.sidebar:
     # Add auto-refresh checkbox
     auto_refresh = st.checkbox("⏱️ Tự động làm mới (5p)", value=False)
 
-# Main dashboard layout with tabs for the 3 pages
-tab1, tab2, tab3 = st.tabs([
-    "📈 Phân tích chất lượng sản xuất", 
-    "🔍 Phân tích khiếu nại khách hàng",
-    "🔄 Liên kết chất lượng trong và ngoài"
-])
+# Production Quality Analysis (just the first tab)
+st.markdown('<div class="sub-header">Tổng quan chất lượng sản xuất</div>', unsafe_allow_html=True)
 
-# Page 1: Production Quality Analysis (TEM VÀNG and defects by line/MDG)
-with tab1:
-    st.markdown('<div class="sub-header">Tổng quan chất lượng sản xuất</div>', unsafe_allow_html=True)
-    
-    # Key metrics row
-    metrics_col1, metrics_col2, metrics_col3, metrics_col4 = st.columns(4)
-    
-    with metrics_col1:
-        if not filtered_tem_vang_df.empty:
-            avg_tem_vang = filtered_tem_vang_df["TEM_VANG"].mean()
-            tem_target = 2.18  # TEM VÀNG target
-            tem_delta = avg_tem_vang - tem_target
-            
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-title">TEM VÀNG trung bình</div>
-                <div class="metric-value">{avg_tem_vang:.2f}%</div>
-                <div style="color: {'red' if tem_delta > 0 else 'green'};">
-                    {f"{tem_delta:.2f}% {'cao hơn' if tem_delta > 0 else 'thấp hơn'} mục tiêu"}
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+# Key metrics row
+metrics_col1, metrics_col2, metrics_col3, metrics_col4 = st.columns(4)
+
+with metrics_col1:
+    if not filtered_tem_vang_df.empty:
+        avg_tem_vang = filtered_tem_vang_df["TEM_VANG"].mean()
+        
+        # Target TEM VÀNG now depends on line selection
+        if selected_line in ["7", "8"]:
+            tem_target = 2.18
+        elif selected_line in ["1", "2", "3", "4", "5", "6"]:
+            tem_target = 0.29
         else:
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-title">TEM VÀNG trung bình</div>
-                <div class="metric-value">N/A</div>
-            </div>
-            """, unsafe_allow_html=True)
-    
-    with metrics_col2:
-        if not filtered_tem_vang_df.empty:
-            total_hold = filtered_tem_vang_df["Hold_Quantity"].sum()
+            tem_target = 0.41  # Total/all lines target
             
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-title">Tổng số lượng hold</div>
-                <div class="metric-value">{total_hold:,.0f}</div>
+        tem_delta = avg_tem_vang - tem_target
+        
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-title">TEM VÀNG trung bình</div>
+            <div class="metric-value">{avg_tem_vang:.2f}%</div>
+            <div style="color: {'red' if tem_delta > 0 else 'green'};">
+                {f"{tem_delta:.2f}% {'cao hơn' if tem_delta > 0 else 'thấp hơn'} mục tiêu"}
             </div>
-            """, unsafe_allow_html=True)
-        else:
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-title">Tổng số lượng hold</div>
-                <div class="metric-value">N/A</div>
-            </div>
-            """, unsafe_allow_html=True)
-    
-    with metrics_col3:
-        if not filtered_aql_df.empty and "Defect code" in filtered_aql_df.columns:
-            defect_types = filtered_aql_df["Defect code"].nunique()
-            
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-title">Số loại lỗi</div>
-                <div class="metric-value">{defect_types}</div>
-            </div>
-            """, unsafe_allow_html=True)
-        else:
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-title">Số loại lỗi</div>
-                <div class="metric-value">N/A</div>
-            </div>
-            """, unsafe_allow_html=True)
-            
-    with metrics_col4:
-        if not filtered_tem_vang_df.empty:
-            total_production = filtered_tem_vang_df["Production_Volume"].sum()
-            
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-title">Tổng sản lượng</div>
-                <div class="metric-value">{total_production:,.0f}</div>
-            </div>
-            """, unsafe_allow_html=True)
-        else:
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-title">Tổng sản lượng</div>
-                <div class="metric-value">N/A</div>
-            </div>
-            """, unsafe_allow_html=True)
-    
-    # TEM VÀNG Analysis
-    st.markdown('<div class="sub-header">Phân tích TEM VÀNG</div>', unsafe_allow_html=True)
-    
-    tem_col1, tem_col2 = st.columns(2)
-    
-    with tem_col1:
-        # TEM VÀNG trend over time
-        if not filtered_tem_vang_df.empty:
-            try:
-                # Group by date to get daily average TEM VÀNG
-                daily_tem_vang = filtered_tem_vang_df.groupby("Date")[["TEM_VANG", "Hold_Quantity"]].mean().reset_index()
-                
-                # Sort by date
-                daily_tem_vang = daily_tem_vang.sort_values("Date")
-                
-                # Create figure
-                fig = go.Figure()
-                
-                # Add TEM VÀNG line
-                fig.add_trace(go.Scatter(
-                    x=daily_tem_vang["Date"],
-                    y=daily_tem_vang["TEM_VANG"],
-                    mode="lines+markers",
-                    name="TEM VÀNG",
-                    line=dict(color="royalblue", width=2),
-                    marker=dict(size=6)
-                ))
-                
-                # Add target line
-                fig.add_hline(
-                    y=2.18,
-                    line_dash="dash",
-                    line_color="red",
-                    annotation_text="Mục tiêu (2.18%)"
-                )
-                
-                # Update layout
-                fig.update_layout(
-                    title="Xu hướng TEM VÀNG theo thời gian",
-                    xaxis_title="Ngày",
-                    yaxis_title="TEM VÀNG (%)",
-                    height=350,
-                    margin=dict(l=40, r=40, t=40, b=40)
-                )
-                
-                st.plotly_chart(fig, use_container_width=True)
-            except Exception as e:
-                st.error(f"Lỗi tạo biểu đồ xu hướng TEM VÀNG: {str(e)}")
-    
-    with tem_col2:
-        # TEM VÀNG by line
-        if not filtered_tem_vang_df.empty:
-            try:
-                # Group by line to get average TEM VÀNG per line
-                line_tem_vang = filtered_tem_vang_df.groupby("Line")[["TEM_VANG", "Hold_Quantity"]].mean().reset_index()
-                
-                # Sort by TEM VÀNG value
-                line_tem_vang = line_tem_vang.sort_values("TEM_VANG", ascending=False)
-                
-                # Create figure
-                fig = go.Figure()
-                
-                # Add TEM VÀNG bars
-                fig.add_trace(go.Bar(
-                    x=line_tem_vang["Line"],
-                    y=line_tem_vang["TEM_VANG"],
-                    name="TEM VÀNG",
-                    marker_color="royalblue",
-                    text=line_tem_vang["TEM_VANG"].round(2).astype(str) + "%",
-                    textposition="auto"
-                ))
-                
-                # Add target line
-                fig.add_hline(
-                    y=2.18,
-                    line_dash="dash",
-                    line_color="red",
-                    annotation_text="Mục tiêu (2.18%)"
-                )
-                
-                # Update layout
-                fig.update_layout(
-                    title="TEM VÀNG theo Line sản xuất",
-                    xaxis_title="Line",
-                    yaxis_title="TEM VÀNG (%)",
-                    height=350,
-                    margin=dict(l=40, r=40, t=40, b=40)
-                )
-                
-                st.plotly_chart(fig, use_container_width=True)
-            except Exception as e:
-                st.error(f"Lỗi tạo biểu đồ TEM VÀNG theo line: {str(e)}")
-    
-    # Defect Analysis by Line and MDG
-    st.markdown('<div class="sub-header">Phân tích lỗi theo Line và MDG</div>', unsafe_allow_html=True)
-    
-    defect_col1, defect_col2 = st.columns(2)
-    
-    with defect_col1:
-        # Pareto chart of defects
-        if "defect_patterns" in data and "defect_counts" in data["defect_patterns"]:
-            try:
-                defect_counts = data["defect_patterns"]["defect_counts"]
-                
-                # Create Pareto chart
-                fig = make_subplots(specs=[[{"secondary_y": True}]])
-                
-                # Add bars for defect counts
-                fig.add_trace(
-                    go.Bar(
-                        x=defect_counts["Defect code"],
-                        y=defect_counts["Count"],
-                        name="Số lỗi",
-                        marker_color="steelblue"
-                    ),
-                    secondary_y=False
-                )
-                
-                # Add line for cumulative percentage
-                fig.add_trace(
-                    go.Scatter(
-                        x=defect_counts["Defect code"],
-                        y=defect_counts["Cumulative"],
-                        name="Tích lũy %",
-                        mode="lines+markers",
-                        marker=dict(color="firebrick"),
-                        line=dict(color="firebrick", width=2)
-                    ),
-                    secondary_y=True
-                )
-                
-                # Add 80% reference line
-                fig.add_hline(
-                    y=80,
-                    line_dash="dash",
-                    line_color="green",
-                    annotation_text="80% lỗi",
-                    secondary_y=True
-                )
-                
-                # Update layout
-                fig.update_layout(
-                    title="Phân tích Pareto các loại lỗi",
-                    xaxis_title="Mã lỗi",
-                    height=350,
-                    margin=dict(l=40, r=40, t=40, b=40)
-                )
-                
-                # Set y-axes titles
-                fig.update_yaxes(title_text="Số lỗi", secondary_y=False)
-                fig.update_yaxes(title_text="Tích lũy %", secondary_y=True)
-                
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # Add Pareto analysis insight
-                if "vital_few" in data["defect_patterns"]:
-                    vital_few = data["defect_patterns"]["vital_few"]
-                    
-                    st.markdown(f"""
-                    <div class="insight-card">
-                        <div class="insight-title">Phân tích Pareto</div>
-                        <div class="insight-content">
-                            <p>{len(vital_few)} loại lỗi ({len(vital_few)/len(defect_counts)*100:.0f}% tổng số loại) chiếm 80% số lỗi.</p>
-                            <p>Tập trung cải tiến chất lượng vào: {', '.join(vital_few['Defect code'].tolist())}</p>
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
-            except Exception as e:
-                st.error(f"Lỗi tạo biểu đồ Pareto: {str(e)}")
-    
-    with defect_col2:
-        # Defects by line heatmap
-        if "defect_patterns" in data and "pivot_line_defects" in data["defect_patterns"]:
-            try:
-                pivot_df = data["defect_patterns"]["pivot_line_defects"]
-                
-                if not pivot_df.empty:
-                    # Create heatmap
-                    fig = px.imshow(
-                        pivot_df,
-                        labels=dict(x="Mã lỗi", y="Line", color="Số lỗi"),
-                        x=pivot_df.columns,
-                        y=pivot_df.index,
-                        color_continuous_scale="YlOrRd",
-                        aspect="auto"
-                    )
-                    
-                    # Update layout
-                    fig.update_layout(
-                        title="Phân bố lỗi theo Line",
-                        height=350,
-                        margin=dict(l=40, r=40, t=40, b=40)
-                    )
-                    
-                    st.plotly_chart(fig, use_container_width=True)
-                else:
-                    st.warning("⚠️ Không có dữ liệu lỗi để hiển thị biểu đồ nhiệt")
-            except Exception as e:
-                st.error(f"Lỗi tạo bản đồ nhiệt lỗi: {str(e)}")
-    
-    # MDG Analysis
-    st.markdown('<div class="sub-header">Phân tích theo MDG (Máy)</div>', unsafe_allow_html=True)
-    
-    if "defect_patterns" in data and "mdg_defects" in data["defect_patterns"] and not data["defect_patterns"]["mdg_defects"].empty:
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-title">TEM VÀNG trung bình</div>
+            <div class="metric-value">N/A</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+with metrics_col2:
+    if not filtered_tem_vang_df.empty:
+        total_hold = filtered_tem_vang_df["Hold_Quantity"].sum()
+        
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-title">Tổng số lượng hold</div>
+            <div class="metric-value">{total_hold:,.0f}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-title">Tổng số lượng hold</div>
+            <div class="metric-value">N/A</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+with metrics_col3:
+    if "defect_patterns" in data and "defect_counts" in data["defect_patterns"]:
+        defect_types = len(data["defect_patterns"]["defect_counts"])
+        
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-title">Số loại lỗi</div>
+            <div class="metric-value">{defect_types}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-title">Số loại lỗi</div>
+            <div class="metric-value">N/A</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+with metrics_col4:
+    if not filtered_tem_vang_df.empty:
+        total_production = filtered_tem_vang_df["Production_Volume"].sum()
+        
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-title">Tổng sản lượng</div>
+            <div class="metric-value">{total_production:,.0f}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-title">Tổng sản lượng</div>
+            <div class="metric-value">N/A</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+# TEM VÀNG Analysis
+st.markdown('<div class="sub-header">Phân tích TEM VÀNG</div>', unsafe_allow_html=True)
+
+tem_col1, tem_col2 = st.columns(2)
+
+with tem_col1:
+    # TEM VÀNG trend over time
+    if not filtered_tem_vang_df.empty:
         try:
-            mdg_defects = data["defect_patterns"]["mdg_defects"].copy()
+            # Group by date to get daily average TEM VÀNG
+            daily_tem_vang = filtered_tem_vang_df.groupby("Date")[["TEM_VANG", "Hold_Quantity"]].mean().reset_index()
             
-            # Group by Line and MDG to get total defects
-            line_mdg_summary = mdg_defects.groupby(["Line", "Máy"])["Count"].sum().reset_index()
+            # Sort by date
+            daily_tem_vang = daily_tem_vang.sort_values("Date")
             
-            # Create bar chart
-            fig = px.bar(
-                line_mdg_summary,
-                x="Máy",
-                y="Count",
-                color="Line",
-                title="Phân tích lỗi theo MDG và Line",
-                labels={"Máy": "MDG (Máy)", "Count": "Số lỗi"},
-                barmode="group"
+            # Create figure
+            fig = go.Figure()
+            
+            # Add TEM VÀNG line
+            fig.add_trace(go.Scatter(
+                x=daily_tem_vang["Date"],
+                y=daily_tem_vang["TEM_VANG"],
+                mode="lines+markers",
+                name="TEM VÀNG",
+                line=dict(color="royalblue", width=2),
+                marker=dict(size=6)
+            ))
+            
+            # Set the appropriate target based on line selection
+            if selected_line in ["7", "8"]:
+                target_value = 2.18
+                target_label = "Mục tiêu Line 7-8 (2.18%)"
+            elif selected_line in ["1", "2", "3", "4", "5", "6"]:
+                target_value = 0.29
+                target_label = "Mục tiêu Line 1-6 (0.29%)"
+            else:
+                target_value = 0.41
+                target_label = "Mục tiêu tổng (0.41%)"
+            
+            # Add target line
+            fig.add_hline(
+                y=target_value,
+                line_dash="dash",
+                line_color="red",
+                annotation_text=target_label
             )
             
             # Update layout
             fig.update_layout(
-                height=400,
+                title="Xu hướng TEM VÀNG theo thời gian",
+                xaxis_title="Ngày",
+                yaxis_title="TEM VÀNG (%)",
+                height=350,
                 margin=dict(l=40, r=40, t=40, b=40)
             )
             
             st.plotly_chart(fig, use_container_width=True)
-            
-            # Display top MDG-defect combinations
-            st.markdown("#### Những tổ hợp MDG-Loại lỗi phổ biến nhất")
-            
-            # Group by Line, MDG, and Defect code
-            top_mdg_defects = mdg_defects.sort_values("Count", ascending=False).head(10)
-            
-            # Create a styled dataframe
-            st.dataframe(top_mdg_defects, use_container_width=True, height=250)
-            
         except Exception as e:
-            st.error(f"Lỗi trong phân tích MDG: {str(e)}")
-    else:
-        st.warning("⚠️ Dữ liệu phân tích MDG không có sẵn")
+            st.error(f"Lỗi tạo biểu đồ xu hướng TEM VÀNG: {str(e)}")
 
-# Page 2: Customer Complaint Analysis
-with tab2:
-    st.markdown('<div class="sub-header">Tổng quan khiếu nại khách hàng</div>', unsafe_allow_html=True)
-    
-    # Check if complaint dataframe is empty
-    if filtered_complaint_df.empty:
-        st.warning("⚠️ Không có dữ liệu khiếu nại để phân tích")
-    else:
-        # Key metrics row
-        comp_col1, comp_col2, comp_col3, comp_col4 = st.columns(4)
-        
-        with comp_col1:
-            if "Mã ticket" in filtered_complaint_df.columns:
-                total_complaints = filtered_complaint_df["Mã ticket"].nunique()
-                st.markdown(f"""
-                <div class="metric-card">
-                    <div class="metric-title">Tổng số khiếu nại</div>
-                    <div class="metric-value">{total_complaints}</div>
-                </div>
-                """, unsafe_allow_html=True)
-            else:
-                st.warning("Thiếu cột 'Mã ticket'")
-        
-        with comp_col2:
-            if "SL pack/ cây lỗi" in filtered_complaint_df.columns:
-                total_defective_packs = filtered_complaint_df["SL pack/ cây lỗi"].sum()
-                st.markdown(f"""
-                <div class="metric-card">
-                    <div class="metric-title">Số lượng gói lỗi</div>
-                    <div class="metric-value">{total_defective_packs:,.0f}</div>
-                </div>
-                """, unsafe_allow_html=True)
-            else:
-                st.warning("Thiếu cột 'SL pack/ cây lỗi'")
-        
-        with comp_col3:
-            if "Tỉnh" in filtered_complaint_df.columns:
-                total_provinces = filtered_complaint_df["Tỉnh"].nunique()
-                st.markdown(f"""
-                <div class="metric-card">
-                    <div class="metric-title">Số tỉnh/thành bị ảnh hưởng</div>
-                    <div class="metric-value">{total_provinces}</div>
-                </div>
-                """, unsafe_allow_html=True)
-            else:
-                st.warning("Thiếu cột 'Tỉnh'")
-        
-        with comp_col4:
-            if "Tên lỗi" in filtered_complaint_df.columns:
-                total_defect_types = filtered_complaint_df["Tên lỗi"].nunique()
-                st.markdown(f"""
-                <div class="metric-card">
-                    <div class="metric-title">Số loại lỗi được báo cáo</div>
-                    <div class="metric-value">{total_defect_types}</div>
-                </div>
-                """, unsafe_allow_html=True)
-            else:
-                st.warning("Thiếu cột 'Tên lỗi'")
-        
-        # Complaint Analysis
-        st.markdown('<div class="sub-header">Phân tích khiếu nại</div>', unsafe_allow_html=True)
-        
-        comp_col1, comp_col2 = st.columns(2)
-        
-        with comp_col1:
-            if "Tên sản phẩm" in filtered_complaint_df.columns and "Mã ticket" in filtered_complaint_df.columns:
-                try:
-                    # Group by product
-                    product_complaints = filtered_complaint_df.groupby("Tên sản phẩm").agg({
-                        "Mã ticket": "nunique",
-                        "SL pack/ cây lỗi": "sum"
-                    }).reset_index()
-                    
-                    # Sort by complaint count
-                    product_complaints = product_complaints.sort_values("Mã ticket", ascending=False).head(10)
-                    
-                    # Create horizontal bar chart with improved styling
-                    fig = go.Figure()
-                    
-                    # Add bars for complaints
-                    fig.add_trace(go.Bar(
-                        y=product_complaints["Tên sản phẩm"],
-                        x=product_complaints["Mã ticket"],
-                        name="Số khiếu nại",
-                        orientation='h',
-                        marker=dict(
-                            color=product_complaints["Mã ticket"],
-                            colorscale='Reds',
-                            line=dict(width=1, color='black')
-                        ),
-                        text=product_complaints["Mã ticket"],
-                        textposition="outside",
-                        textfont=dict(size=12)
-                    ))
-                    
-                    # Update layout with better styling
-                    fig.update_layout(
-                        title={
-                            'text': "Top 10 sản phẩm có nhiều khiếu nại nhất",
-                            'y':0.9,
-                            'x':0.5,
-                            'xanchor': 'center',
-                            'yanchor': 'top'
-                        },
-                        xaxis_title="Số lượng khiếu nại",
-                        yaxis_title="Sản phẩm",
-                        height=400,
-                        margin=dict(l=20, r=20, t=60, b=40),
-                        plot_bgcolor='rgba(240,240,240,0.5)',
-                        xaxis=dict(
-                            showgrid=True,
-                            gridcolor='rgba(200,200,200,0.5)'
-                        ),
-                        yaxis=dict(
-                            showgrid=True,
-                            gridcolor='rgba(200,200,200,0.5)'
-                        )
-                    )
-                    
-                    # Add value labels on the bars
-                    for i in range(len(product_complaints)):
-                        fig.add_annotation(
-                            x=product_complaints["Mã ticket"].iloc[i] + 1,
-                            y=i,
-                            text=str(product_complaints["Mã ticket"].iloc[i]),
-                            showarrow=False,
-                            font=dict(color="black", size=12)
-                        )
-                    
-                    st.plotly_chart(fig, use_container_width=True)
-                except Exception as e:
-                    st.error(f"Lỗi tạo biểu đồ khiếu nại theo sản phẩm: {str(e)}")
-            else:
-                st.warning("Thiếu cột cần thiết cho biểu đồ sản phẩm")
-        
-        with comp_col2:
-            if "Tên lỗi" in filtered_complaint_df.columns and "Mã ticket" in filtered_complaint_df.columns:
-                try:
-                    # Group by defect type
-                    defect_complaints = filtered_complaint_df.groupby("Tên lỗi").agg({
-                        "Mã ticket": "nunique",
-                        "SL pack/ cây lỗi": "sum"
-                    }).reset_index()
-                    
-                    # Calculate percentages
-                    defect_complaints["Complaint %"] = (defect_complaints["Mã ticket"] / defect_complaints["Mã ticket"].sum() * 100).round(1)
-                    
-                    # Create improved pie chart
-                    fig = go.Figure()
-                    
-                    # Add pie chart with improved styling
-                    fig.add_trace(go.Pie(
-                        labels=defect_complaints["Tên lỗi"],
-                        values=defect_complaints["Mã ticket"],
-                        hole=0.4,
-                        textinfo="percent",
-                        hoverinfo="label+value+percent",
-                        textfont=dict(size=12),
-                        marker=dict(
-                            colors=px.colors.qualitative.Set3,
-                            line=dict(color='white', width=2)
-                        ),
-                        pull=[0.05 if i == defect_complaints["Mã ticket"].idxmax() else 0 for i in range(len(defect_complaints))]
-                    ))
-                    
-                    # Add a custom annotation in the center
-                    fig.add_annotation(
-                        text=f"Tổng số<br>{defect_complaints['Mã ticket'].sum():,.0f}",
-                        font=dict(size=14, color="#1E3A8A", family="Arial", weight="bold"),
-                        showarrow=False,
-                        x=0.5,
-                        y=0.5
-                    )
-                    
-                    # Update layout with better styling
-                    fig.update_layout(
-                        title={
-                            'text': "Phân tích khiếu nại theo loại lỗi",
-                            'y':0.9,
-                            'x':0.5,
-                            'xanchor': 'center',
-                            'yanchor': 'top'
-                        },
-                        height=400,
-                        margin=dict(l=20, r=20, t=60, b=40),
-                        legend=dict(
-                            orientation="v",
-                            yanchor="middle",
-                            y=0.5,
-                            xanchor="left",
-                            x=1.05,
-                            font=dict(size=10)
-                        )
-                    )
-                    
-                    st.plotly_chart(fig, use_container_width=True)
-                except Exception as e:
-                    st.error(f"Lỗi tạo biểu đồ khiếu nại theo loại lỗi: {str(e)}")
-            else:
-                st.warning("Thiếu cột cần thiết cho biểu đồ loại lỗi")
-        
-        # Complaint Timeline and Production Analysis
-        st.markdown('<div class="sub-header">Phân tích xu hướng khiếu nại theo thời gian</div>', unsafe_allow_html=True)
-        
-        time_col1, time_col2 = st.columns(2)
-        
-        with time_col1:
-            if "Production_Date" in filtered_complaint_df.columns and "Mã ticket" in filtered_complaint_df.columns:
-                try:
-                    # Group by date
-                    date_complaints = filtered_complaint_df.groupby("Production_Date").agg({
-                        "Mã ticket": "nunique",
-                        "SL pack/ cây lỗi": "sum"
-                    }).reset_index()
-                    
-                    # Sort by date
-                    date_complaints = date_complaints.sort_values("Production_Date")
-                    
-                    # Create figure - Changed to column chart instead of line chart
-                    fig = go.Figure()
-                    
-                    # Add bars for complaints
-                    fig.add_trace(go.Bar(
-                        x=date_complaints["Production_Date"],
-                        y=date_complaints["Mã ticket"],
-                        name="Số khiếu nại",
-                        marker_color='rgba(70, 130, 180, 0.8)',
-                        text=date_complaints["Mã ticket"],
-                        textposition="outside"
-                    ))
-                    
-                    # Update layout with better styling
-                    fig.update_layout(
-                        title={
-                            'text': "Xu hướng khiếu nại theo thời gian",
-                            'y':0.9,
-                            'x':0.5,
-                            'xanchor': 'center',
-                            'yanchor': 'top'
-                        },
-                        xaxis_title="Ngày sản xuất",
-                        yaxis_title="Số lượng khiếu nại",
-                        height=400,
-                        margin=dict(l=20, r=20, t=60, b=40),
-                        plot_bgcolor='rgba(240,240,240,0.5)',
-                        xaxis=dict(
-                            showgrid=True,
-                            gridcolor='rgba(200,200,200,0.5)'
-                        ),
-                        yaxis=dict(
-                            showgrid=True,
-                            gridcolor='rgba(200,200,200,0.5)'
-                        )
-                    )
-                    
-                    st.plotly_chart(fig, use_container_width=True)
-                except Exception as e:
-                    st.error(f"Lỗi tạo biểu đồ xu hướng khiếu nại: {str(e)}")
-            else:
-                st.warning("Thiếu cột ngày cho biểu đồ xu hướng")
-        
-        with time_col2:
-            if "Line" in filtered_complaint_df.columns and "Mã ticket" in filtered_complaint_df.columns:
-                try:
-                    # Group by line
-                    line_complaints = filtered_complaint_df.groupby("Line").agg({
-                        "Mã ticket": "nunique",
-                        "SL pack/ cây lỗi": "sum"
-                    }).reset_index()
-                    
-                    # Sort by line number
-                    line_complaints = line_complaints.sort_values("Line")
-                    
-                    # Create figure
-                    fig = go.Figure()
-                    
-                    # Add bars for complaints with adjusted scale for 8 lines
-                    fig.add_trace(go.Bar(
-                        x=line_complaints["Line"],
-                        y=line_complaints["Mã ticket"],
-                        name="Số khiếu nại",
-                        marker_color='rgba(128, 0, 0, 0.8)',
-                        text=line_complaints["Mã ticket"],
-                        textposition="outside"
-                    ))
-                    
-                    # Update layout with better styling and fixed scale for 8 lines
-                    fig.update_layout(
-                        title={
-                            'text': "Khiếu nại theo Line sản xuất",
-                            'y':0.9,
-                            'x':0.5,
-                            'xanchor': 'center',
-                            'yanchor': 'top'
-                        },
-                        xaxis_title="Line sản xuất",
-                        yaxis_title="Số lượng khiếu nại",
-                        height=400,
-                        margin=dict(l=20, r=20, t=60, b=40),
-                        plot_bgcolor='rgba(240,240,240,0.5)',
-                        xaxis=dict(
-                            showgrid=True,
-                            gridcolor='rgba(200,200,200,0.5)',
-                            categoryorder='array',
-                            categoryarray=['1', '2', '3', '4', '5', '6', '7', '8']
-                        ),
-                        yaxis=dict(
-                            showgrid=True,
-                            gridcolor='rgba(200,200,200,0.5)',
-                            range=[0, 120]  # Fixed scale from 0 to 8
-                        )
-                    )
-                    
-                    st.plotly_chart(fig, use_container_width=True)
-                except Exception as e:
-                    st.error(f"Lỗi tạo biểu đồ khiếu nại theo line: {str(e)}")
-            else:
-                st.warning("Thiếu cột Line cho biểu đồ line")
-        
-        # Geographic Distribution of Complaints
-        st.markdown('<div class="sub-header">Phân bố địa lý của khiếu nại</div>', unsafe_allow_html=True)
-        
-        if "Tỉnh" in filtered_complaint_df.columns and "Mã ticket" in filtered_complaint_df.columns:
-            try:
-                # Group by province
-                province_complaints = filtered_complaint_df.groupby("Tỉnh").agg({
-                    "Mã ticket": "nunique",
-                    "SL pack/ cây lỗi": "sum"
-                }).reset_index()
-                
-                # Sort by complaint count
-                province_complaints = province_complaints.sort_values("Mã ticket", ascending=False)
-                
-                # Create figure
-                fig = px.bar(
-                    province_complaints.head(15),  # Top 15 provinces
-                    x="Tỉnh",
-                    y="Mã ticket",
-                    color="SL pack/ cây lỗi",
-                    title="Top các tỉnh/thành theo số lượng khiếu nại",
-                    labels={"Tỉnh": "Tỉnh/Thành", "Mã ticket": "Số lượng khiếu nại", "SL pack/ cây lỗi": "Số gói lỗi"},
-                    color_continuous_scale="Viridis"
-                )
-                
-                # Update layout
-                fig.update_layout(
-                    height=400,
-                    margin=dict(l=40, r=40, t=40, b=100),
-                    xaxis_tickangle=-45
-                )
-                
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # Calculate percentages for top provinces
-                top_provinces = province_complaints.head(5)
-                total_complaints = province_complaints["Mã ticket"].sum()
-                top_provinces["Percentage"] = (top_provinces["Mã ticket"] / total_complaints * 100).round(1)
-                
-                # Display insight
-                st.markdown(f"""
-                <div class="insight-card">
-                    <div class="insight-title">Phân tích địa lý</div>
-                    <div class="insight-content">
-                        <p>Top 5 tỉnh/thành chiếm {top_provinces['Percentage'].sum():.1f}% tổng số khiếu nại.</p>
-                        <p>Tỉnh/thành cao nhất ({top_provinces.iloc[0]['Tỉnh']}) chiếm {top_provinces.iloc[0]['Percentage']:.1f}% tổng số khiếu nại.</p>
-                        <p>Cân nhắc chương trình cải tiến chất lượng tại các khu vực này.</p>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-            except Exception as e:
-                st.error(f"Lỗi tạo biểu đồ phân bố địa lý: {str(e)}")
-        else:
-            st.warning("Thiếu cột tỉnh/thành để phân tích địa lý")
-        
-        # Personnel Analysis
-        st.markdown('<div class="sub-header">Phân tích nhân sự sản xuất</div>', unsafe_allow_html=True)
-        
-        personnel_col1, personnel_col2 = st.columns(2)
-        
-        with personnel_col1:
-            if "QA" in filtered_complaint_df.columns and "Mã ticket" in filtered_complaint_df.columns:
-                try:
-                    # Group by QA
-                    qa_complaints = filtered_complaint_df.groupby("QA").agg({
-                        "Mã ticket": "nunique",
-                        "SL pack/ cây lỗi": "sum"
-                    }).reset_index()
-                    
-                    # Remove NaN values
-                    qa_complaints = qa_complaints.dropna(subset=["QA"])
-                    
-                    # Sort by complaint count
-                    qa_complaints = qa_complaints.sort_values("Mã ticket", ascending=False)
-                    
-                    # Create figure
-                    fig = go.Figure()
-                    
-                    # Add bars for complaints
-                    fig.add_trace(go.Bar(
-                        x=qa_complaints["QA"],
-                        y=qa_complaints["Mã ticket"],
-                        name="Số khiếu nại",
-                        marker_color="purple",
-                        text=qa_complaints["Mã ticket"],
-                        textposition="outside"
-                    ))
-                    
-                    # Update layout
-                    fig.update_layout(
-                        title="Khiếu nại theo nhân viên QA",
-                        xaxis_title="Nhân viên QA",
-                        yaxis_title="Số lượng khiếu nại",
-                        height=400,
-                        margin=dict(l=40, r=40, t=40, b=80),
-                        xaxis_tickangle=-45
-                    )
-                    
-                    st.plotly_chart(fig, use_container_width=True)
-                except Exception as e:
-                    st.error(f"Lỗi tạo biểu đồ khiếu nại theo QA: {str(e)}")
-            else:
-                st.warning("Thiếu cột QA cho phân tích nhân sự")
-        
-        with personnel_col2:
-            if "Tên Trưởng ca" in filtered_complaint_df.columns and "Mã ticket" in filtered_complaint_df.columns:
-                try:
-                    # Group by shift leader
-                    leader_complaints = filtered_complaint_df.groupby("Tên Trưởng ca").agg({
-                        "Mã ticket": "nunique",
-                        "SL pack/ cây lỗi": "sum"
-                    }).reset_index()
-                    
-                    # Remove NaN values
-                    leader_complaints = leader_complaints.dropna(subset=["Tên Trưởng ca"])
-                    
-                    # Sort by complaint count
-                    leader_complaints = leader_complaints.sort_values("Mã ticket", ascending=False)
-                    
-                    # Create figure
-                    fig = go.Figure()
-                    
-                    # Add bars for complaints
-                    fig.add_trace(go.Bar(
-                        x=leader_complaints["Tên Trưởng ca"],
-                        y=leader_complaints["Mã ticket"],
-                        name="Số khiếu nại",
-                        marker_color="darkred",
-                        text=leader_complaints["Mã ticket"],
-                        textposition="outside"
-                    ))
-                    
-                    # Update layout
-                    fig.update_layout(
-                        title="Khiếu nại theo Trưởng ca",
-                        xaxis_title="Trưởng ca",
-                        yaxis_title="Số lượng khiếu nại",
-                        height=400,
-                        margin=dict(l=40, r=40, t=40, b=80),
-                        xaxis_tickangle=-45
-                    )
-                    
-                    st.plotly_chart(fig, use_container_width=True)
-                except Exception as e:
-                    st.error(f"Lỗi tạo biểu đồ khiếu nại theo trưởng ca: {str(e)}")
-            else:
-                st.warning("Thiếu cột trưởng ca cho phân tích nhân sự")
-        
-        # Complaint Details Table
-        st.markdown('<div class="sub-header">Chi tiết khiếu nại</div>', unsafe_allow_html=True)
-        
+with tem_col2:
+    # TEM VÀNG by line
+    if not filtered_tem_vang_df.empty:
         try:
-            # Create a display dataframe with key columns
-            if not filtered_complaint_df.empty:
-                display_cols = [
-                    "Mã ticket", "Ngày tiếp nhận", "Tỉnh", "Ngày SX", "Tên sản phẩm",
-                    "SL pack/ cây lỗi", "Tên lỗi", "Line", "QA", "Tên Trưởng ca"
-                ]
-                
-                # Only include columns that exist in the dataframe
-                display_cols = [col for col in display_cols if col in filtered_complaint_df.columns]
-                
-                # Create display dataframe
-                display_df = filtered_complaint_df[display_cols].copy()
-                
-                # Sort by most recent complaints first
-                if "Ngày tiếp nhận" in display_df.columns:
-                    display_df = display_df.sort_values("Ngày tiếp nhận", ascending=False)
-                
-                # Format dates for display
-                for date_col in ["Ngày tiếp nhận", "Ngày SX"]:
-                    if date_col in display_df.columns and pd.api.types.is_datetime64_any_dtype(display_df[date_col]):
-                        display_df[date_col] = display_df[date_col].dt.strftime("%d/%m/%Y")
-                
-                # Display the table
-                st.dataframe(display_df, use_container_width=True, height=400)
-            else:
-                st.warning("Không có dữ liệu khiếu nại để hiển thị")
-        except Exception as e:
-            st.error(f"Lỗi hiển thị chi tiết khiếu nại: {str(e)}")
-
-# Page 3: Linking Internal and External Quality
-with tab3:
-    st.markdown('<div class="sub-header">Phân tích liên kết chất lượng trong và ngoài</div>', unsafe_allow_html=True)
-    
-    # Check if linked defects data is available
-    if "linked_defects" in data and not data["linked_defects"].empty:
-        # Key metrics row
-        link_col1, link_col2, link_col3, link_col4 = st.columns(4)
-        
-        linked_df = data["linked_defects"].copy()
-        
-        with link_col1:
-            total_linkages = len(linked_df)
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-title">Tổng số liên kết</div>
-                <div class="metric-value">{total_linkages}</div>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        with link_col2:
-            avg_ratio = linked_df["Defect_to_Complaint_Ratio"].replace([float('inf'), -float('inf')], np.nan).mean()
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-title">Tỷ lệ trung bình Lỗi:Khiếu nại</div>
-                <div class="metric-value">{avg_ratio:.1f}</div>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        with link_col3:
-            unique_defect_types = linked_df["Defect_Type"].nunique()
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-title">Số loại lỗi liên kết</div>
-                <div class="metric-value">{unique_defect_types}</div>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        with link_col4:
-            total_lines = linked_df["Line"].nunique()
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-title">Số Line bị ảnh hưởng</div>
-                <div class="metric-value">{total_lines}</div>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        # Defect to Complaint Ratio Analysis
-        st.markdown('<div class="sub-header">Phân tích tỷ lệ Lỗi-Khiếu nại</div>', unsafe_allow_html=True)
-        
-        ratio_col1, ratio_col2 = st.columns(2)
-        
-        with ratio_col1:
-            try:
-                # Group by defect type
-                defect_type_ratios = linked_df.groupby("Defect_Type").agg({
-                    "Internal_Defect_Count": "sum",
-                    "Customer_Complaint_Count": "sum"
-                }).reset_index()
-                
-                # Calculate overall ratio
-                defect_type_ratios["Ratio"] = defect_type_ratios["Internal_Defect_Count"] / defect_type_ratios["Customer_Complaint_Count"]
-                
-                # Sort by ratio
-                defect_type_ratios = defect_type_ratios.sort_values("Ratio")
-                
-                # Create figure
-                fig = go.Figure()
-                
-                # Add bars for ratio
-                fig.add_trace(go.Bar(
-                    y=defect_type_ratios["Defect_Type"],
-                    x=defect_type_ratios["Ratio"],
-                    orientation="h",
-                    marker_color="teal",
-                    text=defect_type_ratios["Ratio"].round(1),
-                    textposition="outside"
-                ))
-                
-                # Update layout
-                fig.update_layout(
-                    title="Tỷ lệ Lỗi-Khiếu nại theo loại lỗi",
-                    xaxis_title="Tỷ lệ (Lỗi nội bộ : Khiếu nại khách hàng)",
-                    yaxis_title="Loại lỗi",
-                    height=400,
-                    margin=dict(l=40, r=40, t=40, b=40)
-                )
-                
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # Add interpretation
-                st.markdown(f"""
-                <div class="insight-card">
-                    <div class="insight-title">Diễn giải tỷ lệ</div>
-                    <div class="insight-content">
-                        <p>Tỷ lệ cao hơn cho thấy nhiều lỗi nội bộ được phát hiện cho mỗi khiếu nại khách hàng.</p>
-                        <p>Tỷ lệ thấp hơn cho thấy lỗi không được phát hiện hiệu quả trong quá trình sản xuất.</p>
-                        <p><strong>{defect_type_ratios.iloc[-1]['Defect_Type']}</strong> có tỷ lệ cao nhất ({defect_type_ratios.iloc[-1]['Ratio']:.1f}), cho thấy phát hiện nội bộ hiệu quả.</p>
-                        <p><strong>{defect_type_ratios.iloc[0]['Defect_Type']}</strong> có tỷ lệ thấp nhất ({defect_type_ratios.iloc[0]['Ratio']:.1f}), cần cải thiện phát hiện lỗi.</p>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-            except Exception as e:
-                st.error(f"Lỗi tạo biểu đồ phân tích tỷ lệ: {str(e)}")
-        
-        with ratio_col2:
-            try:
-                # Group by line
-                line_ratios = linked_df.groupby("Line").agg({
-                    "Internal_Defect_Count": "sum",
-                    "Customer_Complaint_Count": "sum"
-                }).reset_index()
-                
-                # Calculate overall ratio
-                line_ratios["Ratio"] = line_ratios["Internal_Defect_Count"] / line_ratios["Customer_Complaint_Count"]
-                
-                # Create scatter plot
-                fig = px.scatter(
-                    line_ratios,
-                    x="Internal_Defect_Count",
-                    y="Customer_Complaint_Count",
-                    size="Ratio",
-                    color="Line",
-                    hover_name="Line",
-                    text="Line",
-                    title="Lỗi nội bộ và khiếu nại khách hàng theo Line"
-                )
-                
-                # Update markers
-                fig.update_traces(
-                    marker=dict(sizemode="area", sizeref=0.1),
-                    textposition="top center"
-                )
-                
-                # Add diagonal reference line (1:1 ratio)
-                max_val = max(line_ratios["Internal_Defect_Count"].max(), line_ratios["Customer_Complaint_Count"].max())
-                fig.add_trace(go.Scatter(
-                    x=[0, max_val],
-                    y=[0, max_val],
-                    mode="lines",
-                    line=dict(color="gray", dash="dash"),
-                    name="Tỷ lệ 1:1"
-                ))
-                
-                # Update layout
-                fig.update_layout(
-                    xaxis_title="Số lỗi nội bộ",
-                    yaxis_title="Số khiếu nại khách hàng",
-                    height=400,
-                    margin=dict(l=40, r=40, t=40, b=40)
-                )
-                
-                st.plotly_chart(fig, use_container_width=True)
-            except Exception as e:
-                st.error(f"Lỗi tạo biểu đồ tỷ lệ theo line: {str(e)}")
-        
-                # Timeline Analysis
-        st.markdown('<div class="sub-header">Phân tích theo thời gian</div>', unsafe_allow_html=True)
-        
-        try:
-            # Group by date
-            date_analysis = linked_df.groupby("Production_Date").agg({
-                "Internal_Defect_Count": "sum",
-                "Customer_Complaint_Count": "sum"
-            }).reset_index()
+            # Group by line to get average TEM VÀNG per line
+            line_tem_vang = filtered_tem_vang_df.groupby("Line")[["TEM_VANG", "Hold_Quantity"]].mean().reset_index()
             
-            # Calculate ratio
-            date_analysis["Ratio"] = (
-                date_analysis["Internal_Defect_Count"]
-                / date_analysis["Customer_Complaint_Count"]
+            # Sort by Line number
+            line_tem_vang = line_tem_vang.sort_values("Line")
+            
+            # Create figure
+            fig = go.Figure()
+            
+            # Add TEM VÀNG bars
+            fig.add_trace(go.Bar(
+                x=line_tem_vang["Line"],
+                y=line_tem_vang["TEM_VANG"],
+                name="TEM VÀNG",
+                marker_color="royalblue",
+                text=line_tem_vang["TEM_VANG"].round(2).astype(str) + "%",
+                textposition="auto"
+            ))
+            
+            # Add target lines for different line groups
+            fig.add_shape(
+                type="line",
+                x0=-0.5, x1=5.5,  # Lines 1-6
+                y0=0.29, y1=0.29,
+                line=dict(color="green", width=2, dash="dash"),
+                name="Target Lines 1-6"
             )
             
-            # Sort by date
-            date_analysis = date_analysis.sort_values("Production_Date")
+            fig.add_shape(
+                type="line",
+                x0=5.5, x1=7.5,  # Lines 7-8
+                y0=2.18, y1=2.18,
+                line=dict(color="red", width=2, dash="dash"),
+                name="Target Lines 7-8"
+            )
             
-            # Create figure with secondary y-axis
+            # Add annotations for targets
+            fig.add_annotation(
+                x=2.5, y=0.29,
+                text="Target Lines 1-6: 0.29%",
+                showarrow=False,
+                yshift=10,
+                font=dict(size=10, color="green")
+            )
+            
+            fig.add_annotation(
+                x=6.5, y=2.18,
+                text="Target Lines 7-8: 2.18%",
+                showarrow=False,
+                yshift=10,
+                font=dict(size=10, color="red")
+            )
+            
+            # Update layout
+            fig.update_layout(
+                title="TEM VÀNG theo Line sản xuất",
+                xaxis_title="Line",
+                yaxis_title="TEM VÀNG (%)",
+                height=350,
+                margin=dict(l=40, r=40, t=40, b=40),
+                xaxis=dict(
+                    tickmode='array',
+                    tickvals=list(range(1, 9)),
+                    ticktext=[str(i) for i in range(1, 9)]
+                )
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+        except Exception as e:
+            st.error(f"Lỗi tạo biểu đồ TEM VÀNG theo line: {str(e)}")
+
+# TEM VÀNG by Shift Analysis
+st.markdown('<div class="sub-header">Phân tích TEM VÀNG theo ca</div>', unsafe_allow_html=True)
+
+shift_col1, shift_col2 = st.columns(2)
+
+with shift_col1:
+    # TEM VÀNG by shift
+    if not filtered_tem_vang_shift_df.empty:
+        try:
+            # Group by shift to get average TEM VÀNG per shift
+            shift_tem_vang = filtered_tem_vang_shift_df.groupby("Shift")[["TEM_VANG", "Hold_Quantity"]].mean().reset_index()
+            
+            # Sort by shift number
+            shift_tem_vang = shift_tem_vang.sort_values("Shift")
+            
+            # Create figure
+            fig = go.Figure()
+            
+            # Add TEM VÀNG bars
+            fig.add_trace(go.Bar(
+                x=shift_tem_vang["Shift"],
+                y=shift_tem_vang["TEM_VANG"],
+                name="TEM VÀNG",
+                marker_color="royalblue",
+                text=shift_tem_vang["TEM_VANG"].round(2).astype(str) + "%",
+                textposition="auto"
+            ))
+            
+            # Set the appropriate target based on line selection
+            if selected_line in ["7", "8"]:
+                target_value = 2.18
+                target_label = "Mục tiêu Line 7-8 (2.18%)"
+            elif selected_line in ["1", "2", "3", "4", "5", "6"]:
+                target_value = 0.29
+                target_label = "Mục tiêu Line 1-6 (0.29%)"
+            else:
+                target_value = 0.41
+                target_label = "Mục tiêu tổng (0.41%)"
+            
+            # Add target line
+            fig.add_hline(
+                y=target_value,
+                line_dash="dash",
+                line_color="red",
+                annotation_text=target_label
+            )
+            
+            # Update layout
+            fig.update_layout(
+                title="TEM VÀNG theo ca",
+                xaxis_title="Ca",
+                yaxis_title="TEM VÀNG (%)",
+                height=350,
+                margin=dict(l=40, r=40, t=40, b=40)
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+        except Exception as e:
+            st.error(f"Lỗi tạo biểu đồ TEM VÀNG theo ca: {str(e)}")
+    else:
+        st.warning("⚠️ Không có dữ liệu TEM VÀNG theo ca")
+
+with shift_col2:
+    # TEM VÀNG by shift leader
+    if not filtered_tem_vang_leader_df.empty:
+        try:
+            # Group by leader to get average TEM VÀNG per leader
+            leader_tem_vang = filtered_tem_vang_leader_df.groupby("Leader")[["TEM_VÀNG", "Hold_Quantity"]].mean().reset_index()
+            
+            # Sort by TEM VÀNG value
+            leader_tem_vang = leader_tem_vang.sort_values("TEM_VÀNG", ascending=False)
+            
+            # Create figure
+            fig = go.Figure()
+            
+            # Add TEM VÀNG bars
+            fig.add_trace(go.Bar(
+                x=leader_tem_vang["Leader"],
+                y=leader_tem_vang["TEM_VANG"],
+                name="TEM VÀNG",
+                marker_color="royalblue",
+                text=leader_tem_vang["TEM_VANG"].round(2).astype(str) + "%",
+                textposition="auto"
+            ))
+            
+            # Set the appropriate target based on line selection
+            if selected_line in ["7", "8"]:
+                target_value = 2.18
+                target_label = "Mục tiêu Line 7-8 (2.18%)"
+            elif selected_line in ["1", "2", "3", "4", "5", "6"]:
+                target_value = 0.29
+                target_label = "Mục tiêu Line 1-6 (0.29%)"
+            else:
+                target_value = 0.41
+                target_label = "Mục tiêu tổng (0.41%)"
+            
+            # Add target line
+            fig.add_hline(
+                y=target_value,
+                line_dash="dash",
+                line_color="red",
+                annotation_text=target_label
+            )
+            
+            # Update layout
+            fig.update_layout(
+                title="TEM VÀNG theo trưởng ca",
+                xaxis_title="Trưởng ca",
+                yaxis_title="TEM VÀNG (%)",
+                height=350,
+                margin=dict(l=40, r=40, t=40, b=40),
+                xaxis_tickangle=-45
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+        except Exception as e:
+            st.error(f"Lỗi tạo biểu đồ TEM VÀNG theo trưởng ca: {str(e)}")
+    else:
+        st.warning("⚠️ Không có dữ liệu TEM VÀNG theo trưởng ca")
+
+# TEM VÀNG by Hour Analysis
+st.markdown('<div class="sub-header">Phân tích TEM VÀNG theo giờ</div>', unsafe_allow_html=True)
+
+if not filtered_tem_vang_hour_df.empty:
+    try:
+        # Sort by hour
+        hour_tem_vang = filtered_tem_vang_hour_df.sort_values("Hour")
+        
+        # Create figure
+        fig = go.Figure()
+        
+        # Add TEM VÀNG line
+        fig.add_trace(go.Scatter(
+            x=hour_tem_vang["Hour"],
+            y=hour_tem_vang["TEM_VANG"],
+            mode="lines+markers",
+            name="TEM VÀNG",
+            line=dict(color="royalblue", width=2),
+            marker=dict(size=6)
+        ))
+        
+        # Set the appropriate target based on line selection
+        if selected_line in ["7", "8"]:
+            target_value = 2.18
+            target_label = "Mục tiêu Line 7-8 (2.18%)"
+        elif selected_line in ["1", "2", "3", "4", "5", "6"]:
+            target_value = 0.29
+            target_label = "Mục tiêu Line 1-6 (0.29%)"
+        else:
+            target_value = 0.41
+            target_label = "Mục tiêu tổng (0.41%)"
+        
+        # Add target line
+        fig.add_hline(
+            y=target_value,
+            line_dash="dash",
+            line_color="red",
+            annotation_text=target_label
+        )
+        
+        # Add shift background colors
+        fig.add_vrect(
+            x0=6, x1=14,
+            fillcolor="rgba(135, 206, 250, 0.2)",
+            layer="below",
+            line_width=0,
+            annotation_text="Ca 1 (6-14)",
+            annotation_position="top left"
+        )
+        
+        fig.add_vrect(
+            x0=14, x1=22,
+            fillcolor="rgba(255, 228, 181, 0.2)",
+            layer="below",
+            line_width=0,
+            annotation_text="Ca 2 (14-22)",
+            annotation_position="top left"
+        )
+        
+        fig.add_vrect(
+            x0=0, x1=6,
+            fillcolor="rgba(211, 211, 211, 0.2)",
+            layer="below",
+            line_width=0,
+            annotation_text="Ca 3 (22-6)",
+            annotation_position="top left"
+        )
+        
+        fig.add_vrect(
+            x0=22, x1=24,
+            fillcolor="rgba(211, 211, 211, 0.2)",
+            layer="below",
+            line_width=0
+        )
+        
+        # Update layout
+        fig.update_layout(
+            title="Phân tích TEM VÀNG theo giờ",
+            xaxis_title="Giờ",
+            yaxis_title="TEM VÀNG (%)",
+            height=400,
+            margin=dict(l=40, r=40, t=40, b=40),
+            xaxis=dict(
+                tickmode='array',
+                tickvals=list(range(0, 24)),
+                ticktext=[f"{i:02d}:00" for i in range(0, 24)]
+            )
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+    except Exception as e:
+        st.error(f"Lỗi tạo biểu đồ TEM VÀNG theo giờ: {str(e)}")
+else:
+    st.warning("⚠️ Không có dữ liệu TEM VÀNG theo giờ")
+
+# Defect Analysis
+st.markdown('<div class="sub-header">Phân tích lỗi theo Line</div>', unsafe_allow_html=True)
+
+defect_col1, defect_col2 = st.columns(2)
+
+with defect_col1:
+    # Pareto chart of defects by name
+    if "defect_patterns" in data and "defect_counts" in data["defect_patterns"]:
+        try:
+            defect_counts = data["defect_patterns"]["defect_counts"]
+            
+            # Create Pareto chart
             fig = make_subplots(specs=[[{"secondary_y": True}]])
             
-            # Add lines for internal defects and customer complaints
+            # Add bars for defect counts and hold quantity
             fig.add_trace(
-                go.Scatter(
-                    x=date_analysis["Production_Date"],
-                    y=date_analysis["Internal_Defect_Count"],
-                    name="Lỗi nội bộ",
-                    mode="lines+markers",
-                    line=dict(color="royalblue", width=2)
+                go.Bar(
+                    x=defect_counts["Defect_Name"],
+                    y=defect_counts["Count"],
+                    name="Số lần xuất hiện",
+                    marker_color="steelblue"
                 ),
                 secondary_y=False
             )
+            
+            if "Hold_Quantity" in defect_counts.columns:
+                fig.add_trace(
+                    go.Bar(
+                        x=defect_counts["Defect_Name"],
+                        y=defect_counts["Hold_Quantity"],
+                        name="Số lượng hold",
+                        marker_color="darkred",
+                        opacity=0.7
+                    ),
+                    secondary_y=False
+                )
+            
+            # Add line for cumulative percentage
             fig.add_trace(
                 go.Scatter(
-                    x=date_analysis["Production_Date"],
-                    y=date_analysis["Customer_Complaint_Count"],
-                    name="Khiếu nại khách hàng",
+                    x=defect_counts["Defect_Name"],
+                    y=defect_counts["Cumulative"],
+                    name="Tích lũy %",
                     mode="lines+markers",
+                    marker=dict(color="firebrick"),
                     line=dict(color="firebrick", width=2)
                 ),
-                secondary_y=False
+                secondary_y=True
             )
-            # Add ratio line
-            fig.add_trace(
-                go.Scatter(
-                    x=date_analysis["Production_Date"],
-                    y=date_analysis["Ratio"],
-                    name="Tỷ lệ Lỗi:Khiếu nại",
-                    mode="lines",
-                    line=dict(color="green", width=2, dash="dash")
-                ),
+            
+            # Add 80% reference line
+            fig.add_hline(
+                y=80,
+                line_dash="dash",
+                line_color="green",
+                annotation_text="80% lỗi",
                 secondary_y=True
             )
             
             # Update layout
             fig.update_layout(
-                title="Lỗi nội bộ và khiếu nại khách hàng theo thời gian",
-                xaxis_title="Ngày sản xuất",
+                title="Phân tích Pareto các loại lỗi",
+                xaxis_title="Tên lỗi",
                 height=400,
-                margin=dict(l=40, r=40, t=40, b=40),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02)
+                margin=dict(l=40, r=40, t=40, b=80),
+                xaxis_tickangle=-45,
+                legend=dict(
+                    orientation="h",
+                    yanchor="bottom",
+                    y=1.02,
+                    xanchor="right",
+                    x=1
+                )
             )
-            fig.update_yaxes(title_text="Số lượng", secondary_y=False)
-            fig.update_yaxes(title_text="Tỷ lệ Lỗi:Khiếu nại", secondary_y=True)
+            
+            # Set y-axes titles
+            fig.update_yaxes(title_text="Số lỗi / Số lượng hold", secondary_y=False)
+            fig.update_yaxes(title_text="Tích lũy %", secondary_y=True)
             
             st.plotly_chart(fig, use_container_width=True)
             
-            # Calculate correlation and display insight
-            correlation = date_analysis["Internal_Defect_Count"].corr(
-                date_analysis["Customer_Complaint_Count"]
-            )
-            st.markdown(f"""
-            <div class="insight-card">
-                <div class="insight-title">Phân tích tương quan</div>
-                <div class="insight-content">
-                    <p>Tương quan giữa lỗi nội bộ và khiếu nại khách hàng là <strong>{correlation:.2f}</strong>.</p>
-                    <p>{'Tương quan dương này cho thấy sự gia tăng lỗi nội bộ có liên quan đến sự gia tăng khiếu nại khách hàng, với độ trễ từ vài ngày đến vài tuần.' if correlation > 0 else 'Tương quan này cho thấy lỗi nội bộ và khiếu nại khách hàng có thể không liên quan trực tiếp hoặc có độ trễ đáng kể giữa vấn đề sản xuất và phản hồi của khách hàng.'}</p>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
-            
-        except Exception as e:
-            st.error(f"Lỗi tạo biểu đồ phân tích thời gian: {str(e)}")
-        
-        
-        # Detection Effectiveness Analysis
-        st.markdown('<div class="sub-header">Phân tích hiệu quả phát hiện lỗi</div>', unsafe_allow_html=True)
-        
-        try:
-            # Calculate detection effectiveness for each defect type
-            effectiveness_df = linked_df.groupby("Defect_Type").agg({
-                "Internal_Defect_Count": "sum",
-                "Customer_Complaint_Count": "sum"
-            }).reset_index()
-            
-            # Calculate effectiveness percentage
-            effectiveness_df["Total_Issues"] = (
-                effectiveness_df["Internal_Defect_Count"]
-                + effectiveness_df["Customer_Complaint_Count"]
-            )
-            effectiveness_df["Detection_Effectiveness"] = (
-                effectiveness_df["Internal_Defect_Count"]
-                / effectiveness_df["Total_Issues"]
-                * 100
-            ).round(1)
-            
-            # Sort by effectiveness
-            effectiveness_df = effectiveness_df.sort_values("Detection_Effectiveness")
-            
-            # Create figure
-            fig = go.Figure()
-            fig.add_trace(go.Bar(
-                y=effectiveness_df["Defect_Type"],
-                x=effectiveness_df["Detection_Effectiveness"],
-                orientation="h",
-                marker_color=effectiveness_df["Detection_Effectiveness"].map(
-                    lambda x: "green" if x >= 90 else ("orange" if x >= 75 else "red")
-                ),
-                text=effectiveness_df["Detection_Effectiveness"].astype(str) + "%",
-                textposition="outside"
-            ))
-            fig.add_vline(x=75, line_dash="dash", line_color="orange", annotation_text="75% (Chấp nhận được)")
-            fig.add_vline(x=90, line_dash="dash", line_color="green", annotation_text="90% (Xuất sắc)")
-            fig.update_layout(
-                title="Hiệu quả phát hiện lỗi nội bộ theo loại lỗi",
-                xaxis_title="Hiệu quả phát hiện (%)",
-                yaxis_title="Loại lỗi",
-                height=400,
-                margin=dict(l=40, r=40, t=40, b=40),
-                xaxis=dict(range=[0, 100])
-            )
-            st.plotly_chart(fig, use_container_width=True)
-            
-            # Identify poor detection areas
-            poor_detection = effectiveness_df[
-                effectiveness_df["Detection_Effectiveness"] < 75
-            ]
-            if not poor_detection.empty:
-                low_items = "".join([
-                    f"<li><strong>{row['Defect_Type']}</strong>: {row['Detection_Effectiveness']}% hiệu quả</li>"
-                    for _, row in poor_detection.iterrows()
-                ])
+            # Add Pareto analysis insight
+            if "vital_few" in data["defect_patterns"]:
+                vital_few = data["defect_patterns"]["vital_few"]
+                
                 st.markdown(f"""
-                <div class="warning-card">
-                    <div class="warning-title">Khu vực phát hiện lỗi kém</div>
+                <div class="insight-card">
+                    <div class="insight-title">Phân tích Pareto</div>
                     <div class="insight-content">
-                        <p>Các loại lỗi sau đây có hiệu quả phát hiện dưới 75%, cho thấy cơ hội cải tiến đáng kể:</p>
-                        <ul>
-                            {low_items}
-                        </ul>
-                        <p>Cân nhắc triển khai các cải tiến nhắm mục tiêu trong phương pháp phát hiện cho các loại lỗi này.</p>
+                        <p>{len(vital_few)} loại lỗi ({len(vital_few)/len(defect_counts)*100:.0f}% tổng số loại) chiếm 80% số lỗi.</p>
+                        <p>Tập trung cải tiến chất lượng vào: {', '.join(vital_few['Defect_Name'].tolist())}</p>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
-            
         except Exception as e:
-            st.error(f"Lỗi tạo phân tích hiệu quả phát hiện: {str(e)}")
-        else:
-            st.warning("""
-            ⚠️ Không có dữ liệu lỗi liên kết. Điều này có thể do:
-            
-            1. Không đủ dữ liệu lịch sử để thiết lập kết nối
-            2. Không khớp mã lỗi giữa dữ liệu nội bộ và dữ liệu khách hàng
-            3. Vấn đề tích hợp dữ liệu
-            
-            Vui lòng đảm bảo cả dữ liệu AQL và khiếu nại đều có sẵn và được định dạng đúng.
-            """)
+            st.error(f"Lỗi tạo biểu đồ Pareto: {str(e)}")
 
+with defect_col2:
+    # Defects by line heatmap
+    if "defect_patterns" in data and "pivot_line_defects" in data["defect_patterns"]:
+        try:
+            pivot_df = data["defect_patterns"]["pivot_line_defects"]
+            
+            if not pivot_df.empty:
+                # Create heatmap
+                fig = px.imshow(
+                    pivot_df,
+                    labels=dict(x="Tên lỗi", y="Line", color="Số lỗi"),
+                    x=pivot_df.columns,
+                    y=pivot_df.index,
+                    color_continuous_scale="YlOrRd",
+                    aspect="auto"
+                )
+                
+                # Update layout
+                fig.update_layout(
+                    title="Phân bố lỗi theo Line",
+                    height=400,
+                    margin=dict(l=40, r=40, t=40, b=80),
+                    xaxis_tickangle=-45
+                )
+                
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.warning("⚠️ Không có dữ liệu lỗi để hiển thị biểu đồ nhiệt")
+        except Exception as e:
+            st.error(f"Lỗi tạo bản đồ nhiệt lỗi: {str(e)}")
+
+# Implement auto-refresh if enabled
+if auto_refresh:
+    time.sleep(5)  # Wait 5 seconds to allow user to view the dashboard
+    st.experimental_rerun()  # Then refresh
