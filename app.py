@@ -190,7 +190,7 @@ def authenticate():
         return None
 
 # Function to load complaint data
-@st.cache_data(ttl=60)  # Cache for 1 minute only - REDUCED FROM 300
+@st.cache_data(ttl=300)  # Cache for 5 minutes
 def load_complaint_data():
     try:
         # Authenticate and connect to Google Sheets
@@ -227,10 +227,6 @@ def load_complaint_data():
             if "Ngày SX" in df.columns:
                 try:
                     df["Ngày SX"] = pd.to_datetime(df["Ngày SX"], format="%d/%m/%Y", errors='coerce')
-                    # Try alternative format if many NaT values
-                    if df["Ngày SX"].isna().sum() > len(df) * 0.5:
-                        df["Ngày SX"] = pd.to_datetime(df["Ngày SX"], format="%m/%d/%Y", errors='coerce')
-                    
                     df["Production_Month"] = df["Ngày SX"].dt.strftime("%m/%Y")
                     df["Production_Date"] = df["Ngày SX"]
                 except Exception as e:
@@ -262,7 +258,7 @@ def load_complaint_data():
         return pd.DataFrame()
 
 # Function to load AQL data
-@st.cache_data(ttl=60)  # Cache for 1 minute only - REDUCED FROM 300
+@st.cache_data(ttl=300)  # Cache for 5 minutes
 def load_aql_data():
     try:
         # Authenticate and connect to Google Sheets
@@ -294,57 +290,19 @@ def load_aql_data():
             # Convert to DataFrame
             df = pd.DataFrame(data)
             
-            # Debug: Print column names to verify exact naming
-            st.sidebar.expander("AQL Data Debug").write({
-                "Column Names": df.columns.tolist(),
-                "Data Shape": df.shape,
-                "Sample Data": df.head(2).to_dict('records') if not df.empty else []
-            })
-            
             # Basic data cleaning
             # Convert date columns to datetime if needed
             if "Ngày SX" in df.columns:
                 try:
-                    # First try with day first format (assuming DD/MM/YYYY)
                     df["Ngày SX"] = pd.to_datetime(df["Ngày SX"], format="%d/%m/%Y", errors='coerce')
-                    
-                    # If many NaT values, try month first format (MM/DD/YYYY)
-                    if df["Ngày SX"].isna().sum() > len(df) * 0.5:
-                        df["Ngày SX"] = pd.to_datetime(df["Ngày SX"], format="%m/%d/%Y", errors='coerce')
-                        
                     df["Production_Month"] = df["Ngày SX"].dt.strftime("%m/%Y")
                     df["Production_Date"] = df["Ngày SX"]
-                    
-                    # Debug date conversion
-                    date_debug = {
-                        "Original date samples": df["Ngày SX"].astype(str).head(3).tolist(),
-                        "Converted dates": df["Production_Date"].head(3).tolist(),
-                        "NaT count": df["Production_Date"].isna().sum()
-                    }
-                    st.sidebar.expander("Date Conversion Debug").write(date_debug)
-                    
                 except Exception as e:
                     connection_status.warning(f"⚠️ Không thể xử lý cột ngày: {e}")
             
-            # Make sure numeric columns are properly typed - FIXED COLUMN NAME
-            column_name = "Số lượng hold ( gói/thùng)"
-            if column_name in df.columns:
-                df[column_name] = pd.to_numeric(df[column_name], errors='coerce').fillna(0)
-                # Debug
-                st.sidebar.expander("Hold Column Debug").write({
-                    "Column exists": True,
-                    "Column sum": df[column_name].sum(),
-                    "Column non-zero values": (df[column_name] > 0).sum()
-                })
-            else:
-                # Debug column names if the expected column is missing
-                available_columns = df.columns.tolist()
-                similar_columns = [col for col in available_columns if "hold" in col.lower() or "gói" in col.lower()]
-                st.sidebar.expander("Missing Hold Column Debug").write({
-                    "Column exists": False,
-                    "Available columns": available_columns,
-                    "Similar columns": similar_columns
-                })
+            # Make sure numeric columns are properly typed
+            if "Số lượng hold ( gói/thùng)" in df.columns:
+                df["Số lượng hold ( gói/thùng)"] = pd.to_numeric(df["Số lượng hold ( gói/thùng)"], errors='coerce').fillna(0)
             
             # Ensure Line column is converted to string for consistent filtering
             if "Line" in df.columns:
@@ -364,7 +322,7 @@ def load_aql_data():
         return pd.DataFrame()
 
 # Function to load production data (Sản lượng)
-@st.cache_data(ttl=60)  # Cache for 1 minute only - REDUCED FROM 300
+@st.cache_data(ttl=300)  # Cache for 5 minutes
 def load_production_data():
     try:
         # Authenticate and connect to Google Sheets
@@ -396,56 +354,19 @@ def load_production_data():
             # Convert to DataFrame
             df = pd.DataFrame(data)
             
-            # Debug: Print column names to verify exact naming
-            st.sidebar.expander("Production Data Debug").write({
-                "Column Names": df.columns.tolist(),
-                "Data Shape": df.shape,
-                "Sample Data": df.head(2).to_dict('records') if not df.empty else []
-            })
-            
             # Basic data cleaning
             # Convert date columns to datetime if needed
             if "Ngày" in df.columns:
                 try:
-                    # First try with day first format (assuming DD/MM/YYYY)
                     df["Ngày"] = pd.to_datetime(df["Ngày"], format="%d/%m/%Y", errors='coerce')
-                    
-                    # If many NaT values, try month first format (MM/DD/YYYY)
-                    if df["Ngày"].isna().sum() > len(df) * 0.5:
-                        df["Ngày"] = pd.to_datetime(df["Ngày"], format="%m/%d/%Y", errors='coerce')
-                        
                     df["Production_Month"] = df["Ngày"].dt.strftime("%m/%Y")
                     df["Production_Date"] = df["Ngày"]
-                    
-                    # Debug date conversion
-                    date_debug = {
-                        "Original date samples": df["Ngày"].astype(str).head(3).tolist(),
-                        "Converted dates": df["Production_Date"].head(3).tolist(),
-                        "NaT count": df["Production_Date"].isna().sum()
-                    }
-                    st.sidebar.expander("Production Date Conversion Debug").write(date_debug)
-                    
                 except Exception as e:
                     connection_status.warning(f"⚠️ Không thể xử lý cột ngày: {e}")
             
             # Make sure numeric columns are properly typed
             if "Sản lượng" in df.columns:
                 df["Sản lượng"] = pd.to_numeric(df["Sản lượng"], errors='coerce').fillna(0)
-                # Debug
-                st.sidebar.expander("Sản lượng Column Debug").write({
-                    "Column exists": True,
-                    "Column sum": df["Sản lượng"].sum(),
-                    "Column non-zero values": (df["Sản lượng"] > 0).sum()
-                })
-            else:
-                # Debug column names if the expected column is missing
-                available_columns = df.columns.tolist()
-                similar_columns = [col for col in available_columns if "sản lượng" in col.lower() or "san luong" in col.lower()]
-                st.sidebar.expander("Missing Sản lượng Column Debug").write({
-                    "Column exists": False,
-                    "Available columns": available_columns,
-                    "Similar columns": similar_columns
-                })
             
             # Ensure Line column is converted to string for consistent filtering
             if "Line" in df.columns:
@@ -464,7 +385,7 @@ def load_production_data():
         st.error(f"❌ Lỗi tải dữ liệu sản lượng: {str(e)}")
         return pd.DataFrame()
 
-# Function to calculate TEM VÀNG - UPDATED
+# Function to calculate TEM VÀNG
 def calculate_tem_vang(aql_df, production_df):
     """Calculate TEM VÀNG by combining AQL hold data with production volume data"""
     try:
@@ -477,122 +398,35 @@ def calculate_tem_vang(aql_df, production_df):
         aql_copy = aql_df.copy()
         prod_copy = production_df.copy()
         
-        # Debug - show dataframe columns and shape at the start
-        tem_vang_debug = {
-            "AQL columns": aql_copy.columns.tolist(),
-            "AQL shape": aql_copy.shape,
-            "Production columns": prod_copy.columns.tolist(),
-            "Production shape": prod_copy.shape,
-        }
-        
-        # Check for the column name for hold quantities - IMPORTANT FIX
-        hold_column = "Số lượng hold ( gói/thùng)"
-        if hold_column not in aql_copy.columns:
-            # Try to find similar column names
-            potential_columns = [col for col in aql_copy.columns if "hold" in col.lower() or "gói" in col.lower()]
-            tem_vang_debug["Potential hold columns"] = potential_columns
-            if potential_columns:
-                # Use the first potential column
-                hold_column = potential_columns[0]
-                tem_vang_debug["Using alternative hold column"] = hold_column
-            else:
-                st.error(f"❌ Không tìm thấy cột 'Số lượng hold ( gói/thùng)' trong dữ liệu AQL")
-                return pd.DataFrame()
-        
-        # Group AQL data by date and line to get total hold quantities - UPDATED
-        if "Production_Date" in aql_copy.columns and "Line" in aql_copy.columns and hold_column in aql_copy.columns:
-            # Force specific data types for consistency
-            aql_copy["Production_Date"] = pd.to_datetime(aql_copy["Production_Date"])
-            aql_copy["Line"] = aql_copy["Line"].astype(str)
-            aql_copy[hold_column] = pd.to_numeric(aql_copy[hold_column], errors='coerce').fillna(0)
-            
-            aql_grouped = aql_copy.groupby(["Production_Date", "Line"])[hold_column].sum().reset_index()
+        # Group AQL data by date and line to get total hold quantities
+        if "Production_Date" in aql_copy.columns and "Line" in aql_copy.columns and "Số lượng hold ( gói/thùng)" in aql_copy.columns:
+            aql_grouped = aql_copy.groupby(["Production_Date", "Line"])["Số lượng hold ( gói/thùng)"].sum().reset_index()
             aql_grouped.columns = ["Date", "Line", "Hold_Quantity"]
-            tem_vang_debug["AQL grouping success"] = True
-            tem_vang_debug["AQL grouped shape"] = aql_grouped.shape
-            tem_vang_debug["AQL grouped sample"] = aql_grouped.head(3).to_dict('records')
         else:
-            missing_cols = []
-            if "Production_Date" not in aql_copy.columns: missing_cols.append("Production_Date")
-            if "Line" not in aql_copy.columns: missing_cols.append("Line")
-            if hold_column not in aql_copy.columns: missing_cols.append(hold_column)
-            
-            tem_vang_debug["AQL grouping failed"] = True
-            tem_vang_debug["Missing columns"] = missing_cols
-            st.warning(f"⚠️ Thiếu cột cần thiết trong dữ liệu AQL để tính TEM VÀNG: {', '.join(missing_cols)}")
+            st.warning("⚠️ Thiếu cột cần thiết trong dữ liệu AQL để tính TEM VÀNG")
             return pd.DataFrame()
-        
-        # Check Production date and Line to make sure they're compatible with AQL data
-        if "Ngày" in prod_copy.columns and "Production_Date" not in prod_copy.columns:
-            prod_copy["Production_Date"] = pd.to_datetime(prod_copy["Ngày"])
-            tem_vang_debug["Using 'Ngày' as Production_Date in production data"] = True
         
         # Group production data by date and line to get total production volumes
         if "Production_Date" in prod_copy.columns and "Line" in prod_copy.columns and "Sản lượng" in prod_copy.columns:
-            # Force specific data types for consistency
-            prod_copy["Production_Date"] = pd.to_datetime(prod_copy["Production_Date"])
-            prod_copy["Line"] = prod_copy["Line"].astype(str)
-            prod_copy["Sản lượng"] = pd.to_numeric(prod_copy["Sản lượng"], errors='coerce').fillna(0)
-            
             prod_grouped = prod_copy.groupby(["Production_Date", "Line"])["Sản lượng"].sum().reset_index()
             prod_grouped.columns = ["Date", "Line", "Production_Volume"]
-            tem_vang_debug["Production grouping success"] = True
-            tem_vang_debug["Production grouped shape"] = prod_grouped.shape
-            tem_vang_debug["Production grouped sample"] = prod_grouped.head(3).to_dict('records')
         else:
-            missing_cols = []
-            if "Production_Date" not in prod_copy.columns: missing_cols.append("Production_Date")
-            if "Line" not in prod_copy.columns: missing_cols.append("Line")
-            if "Sản lượng" not in prod_copy.columns: missing_cols.append("Sản lượng")
-            
-            tem_vang_debug["Production grouping failed"] = True
-            tem_vang_debug["Missing columns"] = missing_cols
-            st.warning(f"⚠️ Thiếu cột cần thiết trong dữ liệu sản lượng để tính TEM VÀNG: {', '.join(missing_cols)}")
+            st.warning("⚠️ Thiếu cột cần thiết trong dữ liệu sản lượng để tính TEM VÀNG")
             return pd.DataFrame()
-        
-        # Convert Line to string in both dataframes to ensure consistent joining
-        aql_grouped["Line"] = aql_grouped["Line"].astype(str)
-        prod_grouped["Line"] = prod_grouped["Line"].astype(str)
-        
-        # Debug the data before merging
-        tem_vang_debug["AQL grouped lines"] = aql_grouped["Line"].unique().tolist()
-        tem_vang_debug["Production grouped lines"] = prod_grouped["Line"].unique().tolist()
-        tem_vang_debug["AQL grouped dates range"] = [aql_grouped["Date"].min(), aql_grouped["Date"].max()]
-        tem_vang_debug["Production grouped dates range"] = [prod_grouped["Date"].min(), prod_grouped["Date"].max()]
         
         # Merge the grouped data
         tem_vang_df = pd.merge(aql_grouped, prod_grouped, on=["Date", "Line"], how="inner")
-        tem_vang_debug["Merge result shape"] = tem_vang_df.shape
-        tem_vang_debug["Merge result sample"] = tem_vang_df.head(3).to_dict('records')
         
         # Calculate TEM VÀNG percentage
-        if not tem_vang_df.empty:
-            tem_vang_df["TEM_VANG"] = (tem_vang_df["Hold_Quantity"] / tem_vang_df["Production_Volume"]) * 100
-            tem_vang_debug["TEM_VANG calculation"] = "Success"
-            
-            # Add month column for filtering
-            tem_vang_df["Production_Month"] = tem_vang_df["Date"].dt.strftime("%m/%Y")
-            
-            # Debug the final result
-            tem_vang_debug["Final TEM_VANG shape"] = tem_vang_df.shape
-            tem_vang_debug["Final TEM_VANG sample"] = tem_vang_df.head(3).to_dict('records')
-            tem_vang_debug["Average TEM_VANG"] = tem_vang_df["TEM_VANG"].mean()
-        else:
-            tem_vang_debug["TEM_VANG calculation"] = "Failed - Empty DataFrame after merge"
+        tem_vang_df["TEM_VANG"] = (tem_vang_df["Hold_Quantity"] / tem_vang_df["Production_Volume"]) * 100
         
-        # Display debug information
-        st.sidebar.expander("TEM VÀNG Calculation Debug").write(tem_vang_debug)
+        # Add month column for filtering
+        tem_vang_df["Production_Month"] = tem_vang_df["Date"].dt.strftime("%m/%Y")
         
         return tem_vang_df
         
     except Exception as e:
         st.error(f"❌ Lỗi tính toán TEM VÀNG: {str(e)}")
-        # Add exception details to debug info
-        st.sidebar.expander("TEM VÀNG Exception Debug").write({
-            "Exception Type": type(e).__name__,
-            "Exception Message": str(e),
-            "Exception Details": str(e.__traceback__.tb_frame)
-        })
         return pd.DataFrame()
 
 # Function to analyze defect patterns
@@ -747,7 +581,7 @@ def link_defects_with_complaints(aql_df, complaint_df):
         return pd.DataFrame()
 
 # Load the data
-@st.cache_data(ttl=60)  # Cache the combined data for 1 minute only - REDUCED FROM 600
+@st.cache_data(ttl=600)  # Cache the combined data for 10 minutes
 def load_all_data():
     """Load and prepare all required data"""
     
@@ -773,17 +607,6 @@ def load_all_data():
         "defect_patterns": defect_patterns,
         "linked_defects": linked_defects_df
     }
-
-# Add aggressive cache clearing button
-if st.sidebar.button("🧹 FORCE CLEAR ALL CACHE", use_container_width=True):
-    # Clear all cached functions
-    for cached_func in [load_complaint_data, load_aql_data, load_production_data, load_all_data]:
-        try:
-            cached_func.clear()
-        except:
-            pass
-    st.cache_data.clear()
-    st.experimental_rerun()
 
 # Title and description
 st.markdown('<div class="main-header">Báo cáo chất lượng CF MMB</div>', unsafe_allow_html=True)
@@ -910,22 +733,16 @@ with st.sidebar:
         except Exception as e:
             st.warning(f"Lỗi ở bộ lọc sản phẩm: {e}")
     
-    # Refresh button - MODIFIED FOR BETTER VISIBILITY
-    if st.button("🔄 LÀM MỚI DỮ LIỆU", use_container_width=True, help="Tải lại dữ liệu từ Google Sheets"):
+    # Refresh button
+    if st.button("🔄 Làm mới dữ liệu", use_container_width=True):
         st.cache_data.clear()
         st.experimental_rerun()
     
     # Show last update time
     st.markdown(f"**Cập nhật cuối:** {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
     
-    # Add auto-refresh checkbox - MODIFIED TO BE MORE AGGRESSIVE
-    auto_refresh = st.checkbox("⏱️ Tự động làm mới (1p)", value=False, help="Tự động làm mới dữ liệu mỗi 1 phút")
-    if auto_refresh:
-        # Auto refresh every 60 seconds
-        st.write("Đang chờ cập nhật tự động...")
-        time.sleep(60)  # Wait for 60 seconds
-        st.cache_data.clear()
-        st.experimental_rerun()
+    # Add auto-refresh checkbox
+    auto_refresh = st.checkbox("⏱️ Tự động làm mới (5p)", value=False)
 
 # Main dashboard layout with tabs for the 3 pages
 tab1, tab2, tab3 = st.tabs([
