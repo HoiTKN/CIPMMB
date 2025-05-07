@@ -240,21 +240,25 @@ def load_aql_data():
             if "Line" in df.columns:
                 df["Line"] = df["Line"].astype(str)
             
-            # Process shift information based on hour
+            # Process shift information based on hour - FIXED VERSION
             if "Giờ" in df.columns:
                 # Convert to numeric if not already
                 df["Giờ"] = pd.to_numeric(df["Giờ"], errors='coerce')
                 
-                # Define shifts based on hour ranges
-                df["Shift"] = pd.cut(
-                    df["Giờ"],
-                    bins=[-0.1, 6, 14, 22, 24],
-                    labels=["3", "1", "2", "3"],
-                    include_lowest=True
-                )
+                # Define a function to map hours to shifts
+                def map_hour_to_shift(hour):
+                    if pd.isna(hour):
+                        return "Unknown"
+                    hour = float(hour)
+                    if 6 <= hour < 14:
+                        return "1"
+                    elif 14 <= hour < 22:
+                        return "2"
+                    else:  # 22-24 or 0-6
+                        return "3"
                 
-                # Handle any NaN values in Shift
-                df["Shift"] = df["Shift"].fillna("Unknown")
+                # Apply the mapping function
+                df["Shift"] = df["Giờ"].apply(map_hour_to_shift)
                 
                 # Convert Shift to string
                 df["Shift"] = df["Shift"].astype(str)
@@ -1225,7 +1229,7 @@ with shift_col2:
     if not filtered_tem_vang_leader_df.empty:
         try:
             # Group by leader to get average TEM VÀNG per leader
-            leader_tem_vang = filtered_tem_vang_leader_df.groupby("Leader")[["TEM_VÀNG", "Hold_Quantity"]].mean().reset_index()
+            leader_tem_vang = filtered_tem_vang_leader_df.groupby("Leader")[["TEM_VANG", "Hold_Quantity"]].mean().reset_index()
             
             # Sort by TEM VÀNG value
             leader_tem_vang = leader_tem_vang.sort_values("TEM_VÀNG", ascending=False)
