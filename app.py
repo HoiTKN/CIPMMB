@@ -240,7 +240,7 @@ def load_aql_data():
             if "Line" in df.columns:
                 df["Line"] = df["Line"].astype(str)
             
-            # Process shift information based on hour - FIXED VERSION
+            # Process shift information based on hour
             if "Giờ" in df.columns:
                 # Convert to numeric if not already
                 df["Giờ"] = pd.to_numeric(df["Giờ"], errors='coerce')
@@ -262,10 +262,6 @@ def load_aql_data():
                 
                 # Convert Shift to string
                 df["Shift"] = df["Shift"].astype(str)
-            
-            # Print some diagnostic info to help debug
-            st.sidebar.write(f"AQL columns: {df.columns.tolist()}")
-            st.sidebar.write(f"AQL data shape: {df.shape}")
             
             # Hide connection status after successful load
             connection_status.empty()
@@ -335,10 +331,6 @@ def load_production_data():
             if "Ca" in df.columns:
                 df["Ca"] = df["Ca"].astype(str)
             
-            # Print some diagnostic info to help debug
-            st.sidebar.write(f"Production columns: {df.columns.tolist()}")
-            st.sidebar.write(f"Production data shape: {df.shape}")
-            
             # Hide connection status after successful load
             connection_status.empty()
             
@@ -384,12 +376,9 @@ def load_aql_goi_data():
             # Convert to DataFrame
             df = pd.DataFrame(data)
             
-            # Print columns to help debug
-            st.sidebar.write(f"AQL gói columns: {df.columns.tolist()}")
-            
             # Return only defect code and name columns if they exist
             defect_code_col = next((col for col in df.columns if "code" in col.lower()), None)
-            defect_name_col = next((col for col in df.columns if "name" in col.lower() or "tên" in col.lower() or "actual" in col.lower()), None)
+            defect_name_col = next((col for col in df.columns if "name" in col.lower() or "tên" in col.lower()), None)
             
             if defect_code_col and defect_name_col:
                 return df[[defect_code_col, defect_name_col]]
@@ -437,12 +426,9 @@ def load_aql_to_ly_data():
             # Convert to DataFrame
             df = pd.DataFrame(data)
             
-            # Print columns to help debug
-            st.sidebar.write(f"AQL Tô ly columns: {df.columns.tolist()}")
-            
             # Return only defect code and name columns if they exist
             defect_code_col = next((col for col in df.columns if "code" in col.lower()), None)
-            defect_name_col = next((col for col in df.columns if "name" in col.lower() or "tên" in col.lower() or "actual" in col.lower()), None)
+            defect_name_col = next((col for col in df.columns if "name" in col.lower() or "tên" in col.lower()), None)
             
             if defect_code_col and defect_name_col:
                 return df[[defect_code_col, defect_name_col]]
@@ -471,17 +457,17 @@ def calculate_tem_vang(aql_df, production_df):
         aql_copy = aql_df.copy()
         prod_copy = production_df.copy()
         
-        # Debug info
-        st.sidebar.write("AQL Columns for TEM VANG:", aql_copy.columns.tolist())
-        st.sidebar.write("Production Columns for TEM VANG:", prod_copy.columns.tolist())
-        
         # Group AQL data by date and line to get total hold quantities
         if "Production_Date" in aql_copy.columns and "Line" in aql_copy.columns and "Số lượng hold ( gói/thùng)" in aql_copy.columns:
+            # Make sure we don't count rows with no hold quantity
+            aql_copy.loc[aql_copy["Số lượng hold ( gói/thùng)"].isna(), "Số lượng hold ( gói/thùng)"] = 0
+            
             aql_grouped = aql_copy.groupby(["Production_Date", "Line"])["Số lượng hold ( gói/thùng)"].sum().reset_index()
             aql_grouped.columns = ["Date", "Line", "Hold_Quantity"]
             
-            # Debug the aggregation
-            st.sidebar.write("AQL grouping OK, sample data:", aql_grouped.head(2).to_dict('records'))
+            # Display sample for debugging
+            if not aql_grouped.empty:
+                st.sidebar.write("AQL data grouped by date/line:", aql_grouped.head(3).to_dict('records'))
         else:
             missing_cols = []
             if "Production_Date" not in aql_copy.columns:
@@ -496,11 +482,15 @@ def calculate_tem_vang(aql_df, production_df):
         
         # Group production data by date and line to get total production volumes
         if "Production_Date" in prod_copy.columns and "Line" in prod_copy.columns and "Sản lượng" in prod_copy.columns:
+            # Make sure we don't count rows with no production volume
+            prod_copy.loc[prod_copy["Sản lượng"].isna(), "Sản lượng"] = 0
+            
             prod_grouped = prod_copy.groupby(["Production_Date", "Line"])["Sản lượng"].sum().reset_index()
             prod_grouped.columns = ["Date", "Line", "Production_Volume"]
             
-            # Debug the aggregation
-            st.sidebar.write("Production grouping OK, sample data:", prod_grouped.head(2).to_dict('records'))
+            # Display sample for debugging
+            if not prod_grouped.empty:
+                st.sidebar.write("Production data grouped by date/line:", prod_grouped.head(3).to_dict('records'))
         else:
             missing_cols = []
             if "Production_Date" not in prod_copy.columns:
@@ -516,8 +506,9 @@ def calculate_tem_vang(aql_df, production_df):
         # Merge the grouped data
         tem_vang_df = pd.merge(aql_grouped, prod_grouped, on=["Date", "Line"], how="inner")
         
-        # Debug the merge
-        st.sidebar.write("Merge completed, shape:", tem_vang_df.shape)
+        # Display sample for debugging
+        if not tem_vang_df.empty:
+            st.sidebar.write("Merged TEM VANG data:", tem_vang_df.head(3).to_dict('records'))
         
         # Calculate TEM VÀNG percentage
         tem_vang_df["TEM_VANG"] = (tem_vang_df["Hold_Quantity"] / tem_vang_df["Production_Volume"]) * 100
@@ -525,100 +516,115 @@ def calculate_tem_vang(aql_df, production_df):
         # Add month column for filtering
         tem_vang_df["Production_Month"] = tem_vang_df["Date"].dt.strftime("%m/%Y")
         
-        # Debug the result
-        st.sidebar.write("TEM VANG calculation complete, unique Line values:", tem_vang_df["Line"].unique())
-        
         return tem_vang_df
         
     except Exception as e:
         st.error(f"❌ Lỗi tính toán TEM VÀNG: {str(e)}")
         return pd.DataFrame()
 
-# Function to calculate TEM VÀNG by shift - FIXED
+# Function to calculate TEM VÀNG by shift - COMPLETELY REVISED
 def calculate_tem_vang_by_shift(aql_df, production_df):
     """Calculate TEM VÀNG by shift using AQL and production data"""
     try:
-        # Check if dataframes are empty or missing required columns
+        # Check if dataframes are empty
         if aql_df.empty or production_df.empty:
             st.error("❌ Không thể tính TEM VÀNG theo ca - thiếu dữ liệu")
-            return pd.DataFrame()
-        
-        # Check columns
-        aql_columns = aql_df.columns.tolist()
-        prod_columns = production_df.columns.tolist()
-        
-        st.sidebar.write("AQL Columns for Shift:", aql_columns)
-        st.sidebar.write("Production Columns for Shift:", prod_columns)
-        
-        # Ensure we have the right columns for shift analysis
-        if not ("Production_Date" in aql_columns and "Line" in aql_columns and "Số lượng hold ( gói/thùng)" in aql_columns):
-            st.warning("⚠️ Thiếu cột cần thiết trong dữ liệu AQL để tính TEM VÀNG theo ca")
-            return pd.DataFrame()
-        
-        if not ("Production_Date" in prod_columns and "Line" in prod_columns and "Sản lượng" in prod_columns and "Ca" in prod_columns):
-            st.warning("⚠️ Thiếu cột cần thiết trong dữ liệu sản lượng để tính TEM VÀNG theo ca")
             return pd.DataFrame()
         
         # Create copies to avoid modifying originals
         aql_copy = aql_df.copy()
         prod_copy = production_df.copy()
         
-        # Ensure we have shift information in AQL data
-        # If Shift doesn't exist, derive it from Giờ column
-        if "Shift" not in aql_copy.columns and "Giờ" in aql_copy.columns:
-            # Convert to numeric if not already
-            aql_copy["Giờ"] = pd.to_numeric(aql_copy["Giờ"], errors='coerce')
-            
-            # Define a function to map hours to shifts
-            def map_hour_to_shift(hour):
-                if pd.isna(hour):
-                    return "Unknown"
-                hour = float(hour)
-                if 6 <= hour < 14:
-                    return "1"
-                elif 14 <= hour < 22:
-                    return "2"
-                else:  # 22-24 or 0-6
-                    return "3"
-            
-            # Apply the mapping function
-            aql_copy["Shift"] = aql_copy["Giờ"].apply(map_hour_to_shift)
-        elif "Shift" not in aql_copy.columns:
-            st.warning("⚠️ Không thể xác định ca từ dữ liệu AQL - thiếu cả cột 'Shift' và 'Giờ'")
+        # Display column names for debugging
+        st.sidebar.write("AQL columns for shift:", aql_copy.columns.tolist())
+        st.sidebar.write("Production columns for shift:", prod_copy.columns.tolist())
+        
+        # Ensure we have all required columns
+        required_aql_cols = ["Production_Date", "Line", "Số lượng hold ( gói/thùng)"]
+        missing_aql_cols = [col for col in required_aql_cols if col not in aql_copy.columns]
+        
+        required_prod_cols = ["Production_Date", "Line", "Sản lượng", "Ca"]
+        missing_prod_cols = [col for col in required_prod_cols if col not in prod_copy.columns]
+        
+        if missing_aql_cols:
+            st.warning(f"⚠️ Thiếu cột trong dữ liệu AQL để tính TEM VÀNG theo ca: {', '.join(missing_aql_cols)}")
             return pd.DataFrame()
         
-        # Ensure Shift is a string
+        if missing_prod_cols:
+            st.warning(f"⚠️ Thiếu cột trong dữ liệu sản lượng để tính TEM VÀNG theo ca: {', '.join(missing_prod_cols)}")
+            return pd.DataFrame()
+        
+        # Ensure we have shift information for AQL data
+        if "Shift" not in aql_copy.columns:
+            # If we don't have Shift column but have Giờ, derive Shift from Giờ
+            if "Giờ" in aql_copy.columns:
+                # Convert Giờ to numeric
+                aql_copy["Giờ"] = pd.to_numeric(aql_copy["Giờ"], errors='coerce')
+                
+                # Define shift mapping function
+                def hour_to_shift(hour):
+                    if pd.isna(hour):
+                        return None
+                    hour = float(hour)
+                    if 6 <= hour < 14:
+                        return "1"
+                    elif 14 <= hour < 22:
+                        return "2"
+                    else:  # 22-24 or 0-6
+                        return "3"
+                
+                # Apply mapping function
+                aql_copy["Shift"] = aql_copy["Giờ"].apply(hour_to_shift)
+            else:
+                st.warning("⚠️ Không thể xác định ca từ dữ liệu AQL - thiếu cột 'Shift' và 'Giờ'")
+                return pd.DataFrame()
+        
+        # Ensure Shift is string type for both dataframes
         aql_copy["Shift"] = aql_copy["Shift"].astype(str)
+        prod_copy["Ca"] = prod_copy["Ca"].astype(str)
         
-        # Group AQL data by date, line, and shift to get total hold quantities
-        aql_grouped = aql_copy.groupby(["Production_Date", "Line", "Shift"])["Số lượng hold ( gói/thùng)"].sum().reset_index()
-        aql_grouped.columns = ["Date", "Line", "Shift", "Hold_Quantity"]
+        # Group AQL data by date, line, shift
+        try:
+            aql_grouped = aql_copy.groupby(["Production_Date", "Line", "Shift"])["Số lượng hold ( gói/thùng)"].sum().reset_index()
+            aql_grouped.columns = ["Date", "Line", "Shift", "Hold_Quantity"]
+            
+            # Display sample for debugging
+            if not aql_grouped.empty:
+                st.sidebar.write("AQL data grouped by shift:", aql_grouped.head(3).to_dict('records'))
+        except Exception as e:
+            st.error(f"Lỗi khi nhóm dữ liệu AQL theo ca: {e}")
+            return pd.DataFrame()
         
-        # Rename Ca to Shift in production data for consistent naming
-        prod_copy.rename(columns={"Ca": "Shift"}, inplace=True)
+        # Group production data by date, line, shift
+        try:
+            prod_grouped = prod_copy.groupby(["Production_Date", "Line", "Ca"])["Sản lượng"].sum().reset_index()
+            prod_grouped.columns = ["Date", "Line", "Shift", "Production_Volume"]
+            
+            # Display sample for debugging
+            if not prod_grouped.empty:
+                st.sidebar.write("Production data grouped by shift:", prod_grouped.head(3).to_dict('records'))
+        except Exception as e:
+            st.error(f"Lỗi khi nhóm dữ liệu sản lượng theo ca: {e}")
+            return pd.DataFrame()
         
-        # Ensure Shift is a string
-        prod_copy["Shift"] = prod_copy["Shift"].astype(str)
-        
-        # Group production data by date, line, and shift to get total production volumes
-        prod_grouped = prod_copy.groupby(["Production_Date", "Line", "Shift"])["Sản lượng"].sum().reset_index()
-        prod_grouped.columns = ["Date", "Line", "Shift", "Production_Volume"]
-        
-        # Merge the grouped data
+        # Merge the data
         tem_vang_shift_df = pd.merge(
             aql_grouped, 
             prod_grouped, 
-            on=["Date", "Line", "Shift"], 
+            on=["Date", "Line", "Shift"],
             how="inner"
         )
         
-        # Calculate TEM VÀNG percentage
+        # Display merged data for debugging
+        if not tem_vang_shift_df.empty:
+            st.sidebar.write("Merged shift data:", tem_vang_shift_df.head(3).to_dict('records'))
+            st.sidebar.write("Merged shift data shape:", tem_vang_shift_df.shape)
+        
+        # Calculate TEM VÀNG
         tem_vang_shift_df["TEM_VANG"] = (tem_vang_shift_df["Hold_Quantity"] / tem_vang_shift_df["Production_Volume"]) * 100
         
         # Add month column for filtering
         tem_vang_shift_df["Production_Month"] = tem_vang_shift_df["Date"].dt.strftime("%m/%Y")
-        
-        st.sidebar.write("Shift analysis complete, shape:", tem_vang_shift_df.shape)
         
         return tem_vang_shift_df
         
@@ -626,63 +632,116 @@ def calculate_tem_vang_by_shift(aql_df, production_df):
         st.error(f"❌ Lỗi tính toán TEM VÀNG theo ca: {str(e)}")
         return pd.DataFrame()
 
-# Function to calculate TEM VÀNG by shift leader - FIXED
+# Function to calculate TEM VÀNG by shift leader - COMPLETELY REVISED
 def calculate_tem_vang_by_leader(aql_df, production_df):
     """Calculate TEM VÀNG by shift leader using AQL and production data"""
     try:
-        # Check if dataframes are empty or missing required columns
+        # Check if dataframes are empty
         if aql_df.empty or production_df.empty:
             st.error("❌ Không thể tính TEM VÀNG theo trưởng ca - thiếu dữ liệu")
-            return pd.DataFrame()
-        
-        # Check columns
-        aql_columns = aql_df.columns.tolist()
-        prod_columns = production_df.columns.tolist()
-        
-        st.sidebar.write("AQL Columns for Leader:", aql_columns)
-        st.sidebar.write("Production Columns for Leader:", prod_columns)
-        
-        # Check for required columns
-        truong_ca_col = next((col for col in aql_columns if "trưởng ca" in col.lower()), None)
-        if not truong_ca_col:
-            st.warning("⚠️ Thiếu cột trưởng ca trong dữ liệu AQL để tính TEM VÀNG theo trưởng ca")
-            return pd.DataFrame()
-        
-        nguoi_phu_trach_col = next((col for col in prod_columns if "người phụ trách" in col.lower()), None)
-        if not nguoi_phu_trach_col:
-            st.warning("⚠️ Thiếu cột người phụ trách trong dữ liệu sản lượng để tính TEM VÀNG theo trưởng ca")
             return pd.DataFrame()
         
         # Create copies to avoid modifying originals
         aql_copy = aql_df.copy()
         prod_copy = production_df.copy()
         
-        # Group AQL data by date, line, and shift leader to get total hold quantities
-        aql_grouped = aql_copy.groupby(["Production_Date", "Line", truong_ca_col])["Số lượng hold ( gói/thùng)"].sum().reset_index()
-        aql_grouped.columns = ["Date", "Line", "Leader", "Hold_Quantity"]
+        # Check for required columns
+        st.sidebar.write("AQL columns for leader:", aql_copy.columns.tolist())
+        st.sidebar.write("Production columns for leader:", prod_copy.columns.tolist())
         
-        # Rename column in production data for consistent naming
-        prod_copy.rename(columns={nguoi_phu_trach_col: "Leader"}, inplace=True)
+        # Find the columns for Trưởng ca in AQL data
+        truong_ca_col = None
+        for col in aql_copy.columns:
+            if "trưởng ca" in col.lower():
+                truong_ca_col = col
+                break
         
-        # Group production data by date, line, and leader to get total production volumes
-        prod_grouped = prod_copy.groupby(["Production_Date", "Line", "Leader"])["Sản lượng"].sum().reset_index()
-        prod_grouped.columns = ["Date", "Line", "Leader", "Production_Volume"]
+        # Find the columns for Người phụ trách in production data
+        nguoi_phu_trach_col = None
+        for col in prod_copy.columns:
+            if "người phụ trách" in col.lower() or "phụ trách" in col.lower():
+                nguoi_phu_trach_col = col
+                break
         
-        # Merge the grouped data
+        if not truong_ca_col:
+            st.warning("⚠️ Không tìm thấy cột trưởng ca trong dữ liệu AQL")
+            return pd.DataFrame()
+        
+        if not nguoi_phu_trach_col:
+            st.warning("⚠️ Không tìm thấy cột người phụ trách trong dữ liệu sản lượng")
+            return pd.DataFrame()
+        
+        # Display found columns for debugging
+        st.sidebar.write(f"Found Trưởng ca column: {truong_ca_col}")
+        st.sidebar.write(f"Found Người phụ trách column: {nguoi_phu_trach_col}")
+        
+        # Ensure required columns exist
+        required_aql_cols = ["Production_Date", "Line", "Số lượng hold ( gói/thùng)"]
+        missing_aql_cols = [col for col in required_aql_cols if col not in aql_copy.columns]
+        
+        required_prod_cols = ["Production_Date", "Line", "Sản lượng"]
+        missing_prod_cols = [col for col in required_prod_cols if col not in prod_copy.columns]
+        
+        if missing_aql_cols:
+            st.warning(f"⚠️ Thiếu cột trong dữ liệu AQL để tính TEM VÀNG theo trưởng ca: {', '.join(missing_aql_cols)}")
+            return pd.DataFrame()
+        
+        if missing_prod_cols:
+            st.warning(f"⚠️ Thiếu cột trong dữ liệu sản lượng để tính TEM VÀNG theo trưởng ca: {', '.join(missing_prod_cols)}")
+            return pd.DataFrame()
+        
+        # Display unique leader values for debugging
+        st.sidebar.write("Unique Trưởng ca values:", aql_copy[truong_ca_col].unique())
+        st.sidebar.write("Unique Người phụ trách values:", prod_copy[nguoi_phu_trach_col].unique())
+        
+        # Group AQL data by date, line, leader
+        try:
+            aql_grouped = aql_copy.groupby(["Production_Date", "Line", truong_ca_col])["Số lượng hold ( gói/thùng)"].sum().reset_index()
+            aql_grouped.columns = ["Date", "Line", "Leader", "Hold_Quantity"]
+            
+            # Display sample for debugging
+            if not aql_grouped.empty:
+                st.sidebar.write("AQL data grouped by leader:", aql_grouped.head(3).to_dict('records'))
+        except Exception as e:
+            st.error(f"Lỗi khi nhóm dữ liệu AQL theo trưởng ca: {e}")
+            return pd.DataFrame()
+        
+        # Group production data by date, line, leader
+        try:
+            prod_grouped = prod_copy.groupby(["Production_Date", "Line", nguoi_phu_trach_col])["Sản lượng"].sum().reset_index()
+            prod_grouped.columns = ["Date", "Line", "Leader", "Production_Volume"]
+            
+            # Display sample for debugging
+            if not prod_grouped.empty:
+                st.sidebar.write("Production data grouped by leader:", prod_grouped.head(3).to_dict('records'))
+        except Exception as e:
+            st.error(f"Lỗi khi nhóm dữ liệu sản lượng theo người phụ trách: {e}")
+            return pd.DataFrame()
+        
+        # Standardize leader names for better matching
+        aql_grouped["Leader"] = aql_grouped["Leader"].str.strip().str.lower()
+        prod_grouped["Leader"] = prod_grouped["Leader"].str.strip().str.lower()
+        
+        # Merge the data
         tem_vang_leader_df = pd.merge(
             aql_grouped, 
             prod_grouped, 
-            on=["Date", "Line", "Leader"], 
+            on=["Date", "Line", "Leader"],
             how="inner"
         )
         
-        # Calculate TEM VÀNG percentage
+        # Display merged data for debugging
+        if not tem_vang_leader_df.empty:
+            st.sidebar.write("Merged leader data:", tem_vang_leader_df.head(3).to_dict('records'))
+            st.sidebar.write("Merged leader data shape:", tem_vang_leader_df.shape)
+        else:
+            st.sidebar.write("No matching leader data found after merge")
+        
+        # Calculate TEM VÀNG
         tem_vang_leader_df["TEM_VANG"] = (tem_vang_leader_df["Hold_Quantity"] / tem_vang_leader_df["Production_Volume"]) * 100
         
         # Add month column for filtering
         tem_vang_leader_df["Production_Month"] = tem_vang_leader_df["Date"].dt.strftime("%m/%Y")
-        
-        st.sidebar.write("Leader analysis complete, shape:", tem_vang_leader_df.shape)
         
         return tem_vang_leader_df
         
@@ -690,11 +749,11 @@ def calculate_tem_vang_by_leader(aql_df, production_df):
         st.error(f"❌ Lỗi tính toán TEM VÀNG theo trưởng ca: {str(e)}")
         return pd.DataFrame()
 
-# Function to calculate TEM VÀNG by hour - FIXED
+# Function to calculate TEM VÀNG by hour - REVISED
 def calculate_tem_vang_by_hour(aql_df, production_df):
     """Calculate TEM VÀNG by hour using AQL and production data"""
     try:
-        # Check if dataframes are empty or missing required columns
+        # Check if dataframes are empty
         if aql_df.empty or production_df.empty:
             st.error("❌ Không thể tính TEM VÀNG theo giờ - thiếu dữ liệu")
             return pd.DataFrame()
@@ -703,54 +762,66 @@ def calculate_tem_vang_by_hour(aql_df, production_df):
         aql_copy = aql_df.copy()
         prod_copy = production_df.copy()
         
-        # Print columns
-        st.sidebar.write("AQL columns for hour:", aql_copy.columns.tolist())
-        
         # Check if Giờ column exists
         if "Giờ" not in aql_copy.columns:
             st.warning("⚠️ Thiếu cột 'Giờ' trong dữ liệu AQL để tính TEM VÀNG theo giờ")
             return pd.DataFrame()
         
+        # Check if we have shift column in production data
+        if "Ca" not in prod_copy.columns:
+            st.warning("⚠️ Thiếu cột 'Ca' trong dữ liệu sản lượng để tính TEM VÀNG theo giờ")
+            return pd.DataFrame()
+        
         # Ensure Giờ is numeric
         aql_copy["Giờ"] = pd.to_numeric(aql_copy["Giờ"], errors='coerce')
         
-        # Group AQL data by hour to get total hold quantities
-        aql_grouped = aql_copy.groupby("Giờ")["Số lượng hold ( gói/thùng)"].sum().reset_index()
-        aql_grouped.columns = ["Hour", "Hold_Quantity"]
-        
-        # Map hours to shifts to get production volumes
+        # Map hours to shifts
         hour_to_shift = {
             h: "1" if 6 <= h < 14 else ("2" if 14 <= h < 22 else "3")
             for h in range(24)
         }
         
-        aql_grouped["Shift"] = aql_grouped["Hour"].map(hour_to_shift)
+        # Add shift column based on hour
+        aql_copy["Shift"] = aql_copy["Giờ"].map(lambda h: hour_to_shift.get(h, "Unknown") if pd.notna(h) else "Unknown")
         
-        # Calculate total production by shift
-        prod_copy.rename(columns={"Ca": "Shift"}, inplace=True)
+        # Group AQL data by hour, ignoring date and line to get aggregated values
+        aql_hour_grouped = aql_copy.groupby("Giờ")["Số lượng hold ( gói/thùng)"].sum().reset_index()
+        aql_hour_grouped.columns = ["Hour", "Hold_Quantity"]
         
-        shift_production = prod_copy.groupby("Shift")["Sản lượng"].sum().reset_index()
+        # Add shift column to the grouped data
+        aql_hour_grouped["Shift"] = aql_hour_grouped["Hour"].map(lambda h: hour_to_shift.get(h, "Unknown") if pd.notna(h) else "Unknown")
         
-        # Merge to get production volume for each hour
-        # We'll distribute the shift production evenly across hours in that shift
+        # Group production data by shift (Ca)
+        prod_copy["Ca"] = prod_copy["Ca"].astype(str)
+        shift_production = prod_copy.groupby("Ca")["Sản lượng"].sum().reset_index()
+        shift_production.columns = ["Shift", "Production_Volume"]
+        
+        # Display for debugging
+        st.sidebar.write("Hour-grouped AQL data:", aql_hour_grouped.head().to_dict('records'))
+        st.sidebar.write("Shift-grouped production data:", shift_production.to_dict('records'))
+        
+        # Define hours per shift for distribution
         hours_per_shift = {
             "1": 8,  # 6-14 (8 hours)
             "2": 8,  # 14-22 (8 hours)
             "3": 8   # 22-6 (8 hours)
         }
         
-        # Join shift production to hours
+        # Merge to get production volume for each hour
         tem_vang_hour_df = pd.merge(
-            aql_grouped,
+            aql_hour_grouped,
             shift_production,
             on="Shift",
             how="left"
         )
         
-        # Distribute production evenly by hours in shift
+        # Display for debugging
+        st.sidebar.write("Merged hour data before calculations:", tem_vang_hour_df.head().to_dict('records'))
+        
+        # Calculate hourly production by dividing shift production by hours per shift
         tem_vang_hour_df["Hourly_Production"] = tem_vang_hour_df.apply(
-            lambda row: row["Sản lượng"] / hours_per_shift.get(row["Shift"], 8) 
-            if pd.notna(row["Shift"]) and pd.notna(row["Sản lượng"]) and row["Sản lượng"] > 0
+            lambda row: row["Production_Volume"] / hours_per_shift.get(row["Shift"], 8) 
+            if pd.notna(row["Shift"]) and pd.notna(row["Production_Volume"]) and row["Production_Volume"] > 0
             else 0,
             axis=1
         )
@@ -761,8 +832,6 @@ def calculate_tem_vang_by_hour(aql_df, production_df):
         # Sort by hour
         tem_vang_hour_df = tem_vang_hour_df.sort_values("Hour")
         
-        st.sidebar.write("Hour analysis complete, shape:", tem_vang_hour_df.shape)
-        
         return tem_vang_hour_df
         
     except Exception as e:
@@ -770,7 +839,7 @@ def calculate_tem_vang_by_hour(aql_df, production_df):
         st.error(f"Chi tiết lỗi: {e}")
         return pd.DataFrame()
 
-# Function to map defect codes to defect names - FIXED
+# Function to map defect codes to defect names
 def map_defect_codes_to_names(aql_df, aql_goi_df, aql_to_ly_df):
     """Map defect codes to proper defect names based on line number"""
     try:
@@ -781,9 +850,6 @@ def map_defect_codes_to_names(aql_df, aql_goi_df, aql_to_ly_df):
         
         # Create a copy to avoid modifying the original
         df = aql_df.copy()
-        
-        # Print the columns to help debug
-        st.sidebar.write("AQL columns for mapping:", df.columns.tolist())
         
         # Create a Defect_Name column
         df["Defect_Name"] = ""
@@ -808,7 +874,6 @@ def map_defect_codes_to_names(aql_df, aql_goi_df, aql_to_ly_df):
             
             # Create a mapping dictionary for gói
             goi_mapping = dict(zip(aql_goi_df[goi_code_col], aql_goi_df[goi_name_col]))
-            st.sidebar.write("Gói mapping sample:", {k: goi_mapping[k] for k in list(goi_mapping.keys())[:3]})
         else:
             goi_mapping = {}
         
@@ -818,7 +883,6 @@ def map_defect_codes_to_names(aql_df, aql_goi_df, aql_to_ly_df):
             
             # Create a mapping dictionary for tô ly
             to_ly_mapping = dict(zip(aql_to_ly_df[to_ly_code_col], aql_to_ly_df[to_ly_name_col]))
-            st.sidebar.write("Tô ly mapping sample:", {k: to_ly_mapping[k] for k in list(to_ly_mapping.keys())[:3]})
         else:
             to_ly_mapping = {}
         
@@ -842,9 +906,6 @@ def map_defect_codes_to_names(aql_df, aql_goi_df, aql_to_ly_df):
         # Apply the mapping function
         df["Defect_Name"] = df.apply(map_defect_name, axis=1)
         
-        # Check if mapping was successful
-        st.sidebar.write("Mapping results - unique defect names:", df["Defect_Name"].nunique())
-        
         return df
         
     except Exception as e:
@@ -861,9 +922,6 @@ def analyze_defect_patterns(aql_df_with_names):
         
         # Create copy to avoid modifying original
         df = aql_df_with_names.copy()
-        
-        # Print columns to help debug
-        st.sidebar.write("Columns for defect analysis:", df.columns.tolist())
         
         # Group by defect name to get frequency
         if "Defect_Name" in df.columns and df["Defect_Name"].nunique() > 0:
@@ -985,7 +1043,7 @@ def load_all_data():
 st.markdown('<div class="main-header">Báo cáo chất lượng CF MMB</div>', unsafe_allow_html=True)
 
 # Toggle debug mode
-debug_mode = st.sidebar.checkbox("Debug Mode", value=False)
+debug_mode = st.sidebar.checkbox("Debug Mode", value=True)
 
 # Load all data
 data = load_all_data()
@@ -1400,7 +1458,7 @@ with shift_col2:
             leader_tem_vang = filtered_tem_vang_leader_df.groupby("Leader")[["TEM_VANG", "Hold_Quantity"]].mean().reset_index()
             
             # Sort by TEM VÀNG value
-            leader_tem_vang = leader_tem_vang.sort_values("TEM_VANG", ascending=False)
+            leader_tem_vang = leader_tem_vang.sort_values("TEM_VÀNG", ascending=False)
             
             # Create figure
             fig = go.Figure()
@@ -1677,20 +1735,25 @@ with defect_col2:
 if debug_mode:
     st.markdown("### Debugging Information")
     
-    # AQL data
+    # Show TEM VÀNG shift breakdown
+    if not data["tem_vang_shift_df"].empty:
+        st.subheader("TEM VÀNG by Shift Raw Data")
+        st.dataframe(data["tem_vang_shift_df"])
+    
+    # Show TEM VÀNG leader breakdown
+    if not data["tem_vang_leader_df"].empty:
+        st.subheader("TEM VÀNG by Leader Raw Data")
+        st.dataframe(data["tem_vang_leader_df"])
+    
+    # AQL data sample
     if not data["aql_data"].empty:
-        st.subheader("AQL Data Sample")
+        st.subheader("AQL Data Sample (First 5 rows)")
         st.dataframe(data["aql_data"].head())
     
-    # Production data
+    # Production data sample
     if not data["production_data"].empty:
-        st.subheader("Production Data Sample")
+        st.subheader("Production Data Sample (First 5 rows)")
         st.dataframe(data["production_data"].head())
-    
-    # TEM VÀNG data
-    if not data["tem_vang_data"].empty:
-        st.subheader("TEM VÀNG Data Sample")
-        st.dataframe(data["tem_vang_data"].head())
 
 # Implement auto-refresh if enabled
 if auto_refresh:
