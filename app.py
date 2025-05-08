@@ -1219,7 +1219,7 @@ with st.sidebar:
     # Refresh button
     if st.button("🔄 Làm mới dữ liệu", use_container_width=True):
         st.cache_data.clear()
-        st.experimental_rerun()
+        st.rerun()  # Changed from st.experimental_rerun() to st.rerun()
     
     # Show last update time
     st.markdown(f"**Cập nhật cuối:** {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
@@ -1799,4 +1799,4 @@ with defect_col2:
 # Implement auto-refresh if enabled
 if auto_refresh:
     time.sleep(300)  # Wait 5 minutes to allow user to view the dashboard
-    st.experimental_rerun()  # Then refresh
+    st.rerun()  # Changed from st.experimental_rerun() to st.rerun()
