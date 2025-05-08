@@ -189,6 +189,26 @@ def authenticate():
         st.error(f"❌ Lỗi xác thực: {str(e)}")
         return None
 
+# Helper function to extract hour from string formats like "2h"
+def extract_hour(hour_str):
+    """Extract numeric hour from different format strings like '2h'"""
+    if pd.isna(hour_str):
+        return np.nan
+    
+    # If the hour is already a number, return it
+    if isinstance(hour_str, (int, float)):
+        return float(hour_str)
+    
+    # If it's a string, extract the number part
+    if isinstance(hour_str, str):
+        hour_str = hour_str.lower().replace('h', '').strip()
+        try:
+            return float(hour_str)
+        except:
+            return np.nan
+    
+    return np.nan
+
 # Function to load AQL data
 @st.cache_data(ttl=300)  # Cache for 5 minutes
 def load_aql_data():
@@ -243,25 +263,6 @@ def load_aql_data():
             # Process shift information based on hour
             if "Giờ" in df.columns:
                 # Handle hour format like "2h", "4h", etc.
-                def extract_hour(hour_str):
-                    if pd.isna(hour_str):
-                        return np.nan
-                    
-                    # If the hour is already a number, return it
-                    if isinstance(hour_str, (int, float)):
-                        return float(hour_str)
-                    
-                    # If it's a string, extract the number part
-                    if isinstance(hour_str, str):
-                        hour_str = hour_str.lower().replace('h', '').strip()
-                        try:
-                            return float(hour_str)
-                        except:
-                            return np.nan
-                    
-                    return np.nan
-                
-                # Apply the extraction function
                 df["Giờ_numeric"] = df["Giờ"].apply(extract_hour)
                 
                 # Define a function to map hours to shifts
@@ -277,7 +278,7 @@ def load_aql_data():
                     else:  # 22-24 or 0-6
                         return "3"
                 
-                # Apply the mapping function
+                # Apply the mapping function using the numeric hour value
                 df["Shift"] = df["Giờ_numeric"].apply(map_hour_to_shift)
                 
                 # Convert Shift to string
@@ -464,7 +465,7 @@ def load_aql_to_ly_data():
         st.error(f"❌ Lỗi tải dữ liệu AQL Tô ly: {str(e)}")
         return pd.DataFrame()
 
-# Function to calculate TEM VÀNG - FIXED
+# Function to calculate TEM VÀNG
 def calculate_tem_vang(aql_df, production_df):
     """Calculate TEM VÀNG by combining AQL hold data with production volume data"""
     try:
@@ -542,7 +543,7 @@ def calculate_tem_vang(aql_df, production_df):
         st.error(f"❌ Lỗi tính toán TEM VÀNG: {str(e)}")
         return pd.DataFrame()
 
-# Function to calculate TEM VÀNG by shift - FIXED
+# Function to calculate TEM VÀNG by shift
 def calculate_tem_vang_by_shift(aql_df, production_df):
     """Calculate TEM VÀNG by shift using AQL and production data"""
     try:
@@ -577,9 +578,24 @@ def calculate_tem_vang_by_shift(aql_df, production_df):
         # Ensure we have shift information for AQL data
         if "Shift" not in aql_copy.columns:
             # If we don't have Shift column but have Giờ, derive Shift from Giờ
-            if "Giờ" in aql_copy.columns:
-                # Convert Giờ to numeric
-                aql_copy["Giờ"] = pd.to_numeric(aql_copy["Giờ"], errors='coerce')
+            if "Giờ_numeric" in aql_copy.columns:
+                # Define shift mapping function
+                def hour_to_shift(hour):
+                    if pd.isna(hour):
+                        return "Unknown"
+                    hour = float(hour)
+                    if 6 <= hour < 14:
+                        return "1"
+                    elif 14 <= hour < 22:
+                        return "2"
+                    else:  # 22-24 or 0-6
+                        return "3"
+                
+                # Apply mapping function
+                aql_copy["Shift"] = aql_copy["Giờ_numeric"].apply(hour_to_shift)
+            elif "Giờ" in aql_copy.columns:
+                # Extract numeric hour and apply mapping
+                aql_copy["Giờ_numeric"] = aql_copy["Giờ"].apply(extract_hour)
                 
                 # Define shift mapping function
                 def hour_to_shift(hour):
@@ -594,7 +610,7 @@ def calculate_tem_vang_by_shift(aql_df, production_df):
                         return "3"
                 
                 # Apply mapping function
-                aql_copy["Shift"] = aql_copy["Giờ"].apply(hour_to_shift)
+                aql_copy["Shift"] = aql_copy["Giờ_numeric"].apply(hour_to_shift)
             else:
                 st.warning("⚠️ Không thể xác định ca từ dữ liệu AQL - thiếu cột 'Shift' và 'Giờ'")
                 return pd.DataFrame()
@@ -652,7 +668,7 @@ def calculate_tem_vang_by_shift(aql_df, production_df):
         st.error(f"❌ Lỗi tính toán TEM VÀNG theo ca: {str(e)}")
         return pd.DataFrame()
 
-# Function to calculate TEM VÀNG by shift leader - FIXED to use "Tên Trưởng ca" column
+# Function to calculate TEM VÀNG by shift leader - Use "Tên Trưởng ca" column
 def calculate_tem_vang_by_leader(aql_df, production_df):
     """Calculate TEM VÀNG by shift leader using AQL and production data"""
     try:
@@ -781,7 +797,7 @@ def calculate_tem_vang_by_leader(aql_df, production_df):
         st.error(f"❌ Lỗi tính toán TEM VÀNG theo trưởng ca: {str(e)}")
         return pd.DataFrame()
 
-# Function to calculate TEM VÀNG by hour - REVISED
+# Function to calculate TEM VÀNG by hour
 def calculate_tem_vang_by_hour(aql_df, production_df):
     """Calculate TEM VÀNG by hour using AQL and production data"""
     try:
@@ -1037,7 +1053,7 @@ def analyze_defect_patterns(aql_df_with_names):
         st.error(f"❌ Lỗi phân tích mẫu lỗi: {str(e)}")
         return {}
 
-# Load all data needed - FIXED to ensure all dictionary keys are initialized
+# Load all data needed
 @st.cache_data(ttl=600)  # Cache the combined data for 10 minutes
 def load_all_data():
     """Load and prepare all required data"""
@@ -1073,15 +1089,15 @@ def load_all_data():
         # Calculate TEM VÀNG metrics
         result["tem_vang_data"] = calculate_tem_vang(aql_df, production_df)
         
-        # Calculate the shift, leader, and hour data
-        shift_df = calculate_tem_vang_by_shift(aql_df, production_df)
-        leader_df = calculate_tem_vang_by_leader(aql_df, production_df)
-        hour_df = calculate_tem_vang_by_hour(aql_df, production_df)
+        # Store calculations in variables first
+        shift_data = calculate_tem_vang_by_shift(aql_df, production_df)
+        leader_data = calculate_tem_vang_by_leader(aql_df, production_df)
+        hour_data = calculate_tem_vang_by_hour(aql_df, production_df)
         
-        # Store in the result dictionary with consistent key names
-        result["tem_vang_shift_df"] = shift_df
-        result["tem_vang_leader_df"] = leader_df
-        result["tem_vang_hour_data"] = hour_df
+        # Then assign to result dictionary
+        result["tem_vang_shift_df"] = shift_data
+        result["tem_vang_leader_df"] = leader_data
+        result["tem_vang_hour_data"] = hour_data
         
         # Analyze defect patterns with names
         result["defect_patterns"] = analyze_defect_patterns(aql_df_with_names)
