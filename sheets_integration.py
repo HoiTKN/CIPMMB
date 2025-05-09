@@ -125,6 +125,12 @@ def standardize_date(date_str):
     except:
         return None
 
+def format_date_mm_dd_yyyy(date_obj):
+    """Format a date object to MM/DD/YYYY string format for Power BI"""
+    if pd.isna(date_obj) or date_obj is None:
+        return None
+    return date_obj.strftime('%m/%d/%Y')
+
 def clean_item_code(item_code):
     if pd.isna(item_code) or item_code == '':
         return ''
@@ -170,6 +176,7 @@ def round_to_2hour(t):
     return time(rounded_hour, 0)
 
 def determine_shift(time_obj):
+    """Modified to return just the shift number (1, 2, or 3) for Power BI"""
     if time_obj is None:
         return None
     
@@ -179,11 +186,11 @@ def determine_shift(time_obj):
     shift2_end = time(22, 30)
     
     if shift1_start <= time_obj < shift1_end:
-        return "Shift 1: 6:30-14:30"
+        return 1
     elif shift1_end <= time_obj < shift2_end:
-        return "Shift 2: 14:30-22:30"
+        return 2
     else:
-        return "Shift 3: 22:30-6:30"
+        return 3
 
 def find_qa_and_leader(row, aql_data):
     if pd.isna(row['Ngày SX_std']) or row['Item_clean'] == '' or row['Giờ_time'] is None:
@@ -246,7 +253,7 @@ def find_qa_and_leader(row, aql_data):
         shift = row['Shift']
         
         # For times between 22:30-23:59, we use the next hour's QA (from 0h)
-        if shift == "Shift 3: 22:30-6:30" and complaint_hour >= 22:
+        if shift == 3 and complaint_hour >= 22:
             if not next_check.empty:
                 return next_qa, next_leader, f"{debug_info} | Using next hour (0h) based on Shift 3 rule"
         
@@ -315,7 +322,7 @@ def main():
 
     print(f"Retrieved {len(knkh_df)} KNKH records and {len(aql_df)} AQL records")
 
-    # NEW: Extract correct Ngày SX from Nội dung phản hồi and ALWAYS replace the Ngày SX column
+    # Extract correct Ngày SX from Nội dung phản hồi and replace the Ngày SX column
     knkh_df['Ngày SX_extracted'] = knkh_df['Nội dung phản hồi'].apply(extract_correct_date)
     
     # Replace the original Ngày SX with the extracted one when available, keeping the exact format
@@ -331,14 +338,13 @@ def main():
     # Create filter date (December 1, 2024)
     filter_date = pd.to_datetime('2024-09-01')
     
-    # Filter both DataFrames to only include data from December 1, 2024 onwards
+    # Filter both DataFrames to only include data from September 1, 2024 onwards
     knkh_df = knkh_df[knkh_df['Ngày SX_std'] >= filter_date]
     aql_df = aql_df[aql_df['Ngày SX_std'] >= filter_date]
     
     print(f"After date filtering: {len(knkh_df)} KNKH records and {len(aql_df)} AQL records")
 
-    # Apply data processing steps
-    # Step 2: Extract time, line, and machine information
+    # Extract time, line, and machine information
     knkh_df[['Giờ_extracted', 'Line_extracted', 'Máy_extracted']] = knkh_df['Nội dung phản hồi'].apply(
         lambda x: pd.Series(extract_production_info(x))
     )
@@ -347,24 +353,24 @@ def main():
     knkh_df['Line_extracted'] = pd.to_numeric(knkh_df['Line_extracted'], errors='coerce')
     knkh_df['Máy_extracted'] = pd.to_numeric(knkh_df['Máy_extracted'], errors='coerce')
 
-    # Step 3: Standardize the receipt date
+    # Standardize the receipt date
     knkh_df['Ngày tiếp nhận_std'] = knkh_df['Ngày tiếp nhận'].apply(standardize_date)
 
-    # Step 4: Clean item codes
+    # Clean item codes
     knkh_df['Item_clean'] = knkh_df['Item'].apply(clean_item_code)
     aql_df['Item_clean'] = aql_df['Item'].apply(clean_item_code)
 
-    # Step 5: Parse time
+    # Parse time
     knkh_df['Giờ_time'] = knkh_df['Giờ_extracted'].apply(parse_time)
     aql_df['Giờ_time'] = aql_df['Giờ'].apply(parse_time)
 
     # Round time to 2-hour intervals
     knkh_df['Giờ_rounded'] = knkh_df['Giờ_time'].apply(round_to_2hour)
 
-    # Step 6: Determine shift
+    # Determine shift (now just returns 1, 2, or 3)
     knkh_df['Shift'] = knkh_df['Giờ_time'].apply(determine_shift)
 
-    # Step 7: Match QA and leader
+    # Match QA and leader
     knkh_df['QA_matched'] = None
     knkh_df['Tên Trưởng ca_matched'] = None
     knkh_df['debug_info'] = None
@@ -377,13 +383,17 @@ def main():
         knkh_df.at[idx, 'debug_info'] = debug_info
     print("Matching process complete")
 
+    # Format dates for Power BI (MM/DD/YYYY)
+    knkh_df['Ngày tiếp nhận_formatted'] = knkh_df['Ngày tiếp nhận_std'].apply(format_date_mm_dd_yyyy)
+    knkh_df['Ngày SX_formatted'] = knkh_df['Ngày SX_std'].apply(format_date_mm_dd_yyyy)
+
     # Create the joined dataframe with all required columns
     filtered_knkh_df = knkh_df.copy()
     joined_df = filtered_knkh_df[[
-        'Mã ticket', 'Ngày tiếp nhận', 'Tỉnh', 'Ngày SX', 'Sản phẩm/Dịch vụ',
+        'Mã ticket', 'Ngày tiếp nhận_formatted', 'Tỉnh', 'Ngày SX_formatted', 'Sản phẩm/Dịch vụ',
         'Số lượng (ly/hộp/chai/gói/hủ)', 'Nội dung phản hồi', 'Item', 'Tên sản phẩm',
         'SL pack/ cây lỗi', 'Tên lỗi', 'Line_extracted', 'Máy_extracted', 'Giờ_extracted',
-        'QA_matched', 'Tên Trưởng ca_matched', 'Shift', 'Ngày tiếp nhận_std'
+        'QA_matched', 'Tên Trưởng ca_matched', 'Shift'
     ]].copy()
 
     # Rename columns for clarity
@@ -392,14 +402,13 @@ def main():
         'Máy_extracted': 'Máy',
         'Giờ_extracted': 'Giờ',
         'QA_matched': 'QA',
-        'Tên Trưởng ca_matched': 'Tên Trưởng ca'
+        'Tên Trưởng ca_matched': 'Tên Trưởng ca',
+        'Ngày tiếp nhận_formatted': 'Ngày tiếp nhận',
+        'Ngày SX_formatted': 'Ngày SX'
     }, inplace=True)
 
     # Sort by Mã ticket from largest to smallest
     joined_df = joined_df.sort_values(by='Mã ticket', ascending=False)
-
-    # Remove the standardized date column as it's not needed for output
-    joined_df = joined_df.drop(columns=['Ngày tiếp nhận_std'])
 
     # Save to the destination spreadsheet
     try:
@@ -420,7 +429,7 @@ def main():
         joined_df_cleaned = joined_df.fillna('')
         data_to_write = [joined_df_cleaned.columns.tolist()] + joined_df_cleaned.values.tolist()
 
-        # Update the worksheet - FIXED METHOD
+        # Update the worksheet
         integrated_worksheet.update('A1', data_to_write)
         print(f"Successfully wrote {len(data_to_write)-1} rows to the destination sheet, sorted by Mã ticket (largest to smallest)")
 
