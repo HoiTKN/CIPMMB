@@ -4,7 +4,7 @@ import os
 import sys
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-from datetime import datetime
+from datetime import datetime, time
 
 # Define the scopes
 SCOPES = [
@@ -74,6 +74,83 @@ def standardize_date(date_str):
     except:
         return None
 
+def parse_hour(hour_str):
+    """Extract hour from hour string"""
+    if pd.isna(hour_str) or not isinstance(hour_str, str):
+        return None
+    
+    # Clean the input
+    hour_str = hour_str.lower().strip()
+    
+    # Handle different formats
+    if 'h' in hour_str:
+        try:
+            # Extract hour part before 'h'
+            hour_part = hour_str.split('h')[0]
+            return int(hour_part)
+        except:
+            pass
+    
+    # Handle format like '14:00'
+    if ':' in hour_str:
+        try:
+            hour_part = hour_str.split(':')[0]
+            return int(hour_part)
+        except:
+            pass
+    
+    # Try direct conversion if it's just a number
+    try:
+        return int(hour_str)
+    except:
+        return None
+
+def determine_shift(hour):
+    """Determine shift (Ca) based on hour"""
+    if hour is None:
+        return None
+    
+    if 6 <= hour < 14:
+        return 1
+    elif 14 <= hour < 22:
+        return 2
+    else:
+        return 3
+
+def format_as_table(worksheet):
+    """Format worksheet as a table for Power BI"""
+    try:
+        # Get the number of rows and columns
+        rows = worksheet.row_count
+        cols = worksheet.col_count
+        
+        # Define the range for formatting
+        range_name = f'A1:{chr(64 + cols)}{rows}'
+        
+        # Apply table formatting
+        worksheet.format(range_name, {
+            "backgroundColor": {"red": 0.95, "green": 0.95, "blue": 0.95},
+            "horizontalAlignment": "CENTER",
+            "textFormat": {"bold": True}
+        })
+        
+        # Format header row
+        worksheet.format("A1:Z1", {
+            "backgroundColor": {"red": 0.8, "green": 0.8, "blue": 0.8},
+            "textFormat": {"bold": True}
+        })
+        
+        # Add alternating row colors for better readability
+        # This isn't a true "table" but makes it more table-like for export
+        for i in range(2, rows + 1, 2):
+            worksheet.format(f'A{i}:{chr(64 + cols)}{i}', {
+                "backgroundColor": {"red": 0.9, "green": 0.9, "blue": 0.9}
+            })
+        
+        print("Applied table formatting to worksheet")
+    except Exception as e:
+        print(f"Warning: Could not apply table formatting: {str(e)}")
+
 def main():
     print("Starting Google Sheets data processing...")
     
@@ -120,8 +197,12 @@ def main():
     id_aql_df['Ngày SX_std'] = id_aql_df['Ngày SX'].apply(standardize_date)
     
     # Extract week and month
-    id_aql_df['Tuan'] = id_aql_df['Ngày SX_std'].apply(get_week_number)
-    id_aql_df['Thang'] = id_aql_df['Ngày SX_std'].apply(get_month_number)
+    id_aql_df['Tuần'] = id_aql_df['Ngày SX_std'].apply(get_week_number)
+    id_aql_df['Tháng'] = id_aql_df['Ngày SX_std'].apply(get_month_number)
+    
+    # Extract hour and determine shift (Ca)
+    id_aql_df['hour'] = id_aql_df['Giờ'].apply(parse_hour)
+    id_aql_df['Ca'] = id_aql_df['hour'].apply(determine_shift)
     
     # Create defect name mapping dictionaries
     goi_defect_map = dict(zip(aql_goi_df['Defect code'], aql_goi_df['Defect name']))
@@ -151,7 +232,7 @@ def main():
     # Create the new dataframe with required columns
     try:
         new_df = id_aql_df[[
-            'Ngày SX', 'Tuan', 'Thang', 'Sản phẩm', 'Item', 'Giờ', 'Line', 'MĐG', 
+            'Ngày SX', 'Tuần', 'Tháng', 'Sản phẩm', 'Item', 'Giờ', 'Ca', 'Line', 'MĐG', 
             'SL gói lỗi sau xử lý', 'Defect code', 'Defect name', 'Số lượng hold ( gói/thùng)',
             'QA', 'Tên Trưởng ca'
         ]].copy()
@@ -185,6 +266,9 @@ def main():
         # Update the worksheet
         processed_worksheet.update('A1', data_to_write)
         print(f"Successfully wrote {len(data_to_write)-1} rows to the destination sheet, sorted by Ngày SX (newest first)")
+        
+        # Format the worksheet as a table
+        format_as_table(processed_worksheet)
 
     except Exception as e:
         print(f"Error writing to destination sheet: {str(e)}")
