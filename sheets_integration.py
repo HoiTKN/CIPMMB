@@ -131,6 +131,24 @@ def format_date_mm_dd_yyyy(date_obj):
         return None
     return date_obj.strftime('%m/%d/%Y')
 
+def extract_month(date_obj):
+    """Extract month from a datetime object"""
+    if pd.isna(date_obj) or date_obj is None:
+        return None
+    return date_obj.month
+
+def extract_year(date_obj):
+    """Extract year from a datetime object"""
+    if pd.isna(date_obj) or date_obj is None:
+        return None
+    return date_obj.year
+
+def extract_week(date_obj):
+    """Extract ISO week number from a datetime object"""
+    if pd.isna(date_obj) or date_obj is None:
+        return None
+    return date_obj.isocalendar()[1]  # Returns the ISO week number
+
 def clean_item_code(item_code):
     if pd.isna(item_code) or item_code == '':
         return ''
@@ -335,7 +353,7 @@ def main():
     knkh_df['Ngày SX_std'] = knkh_df['Ngày SX'].apply(standardize_date)
     aql_df['Ngày SX_std'] = aql_df['Ngày SX'].apply(standardize_date)
     
-    # Create filter date (December 1, 2024)
+    # Create filter date (September 1, 2024)
     filter_date = pd.to_datetime('2024-09-01')
     
     # Filter both DataFrames to only include data from September 1, 2024 onwards
@@ -387,13 +405,22 @@ def main():
     knkh_df['Ngày tiếp nhận_formatted'] = knkh_df['Ngày tiếp nhận_std'].apply(format_date_mm_dd_yyyy)
     knkh_df['Ngày SX_formatted'] = knkh_df['Ngày SX_std'].apply(format_date_mm_dd_yyyy)
 
+    # Extract month and year from production date (Ngày SX)
+    knkh_df['Tháng sản xuất'] = knkh_df['Ngày SX_std'].apply(extract_month)
+    knkh_df['Năm sản xuất'] = knkh_df['Ngày SX_std'].apply(extract_year)
+
+    # Extract week and month from receipt date (Ngày tiếp nhận)
+    knkh_df['Tuần nhận khiếu nại'] = knkh_df['Ngày tiếp nhận_std'].apply(extract_week)
+    knkh_df['Tháng nhận khiếu nại'] = knkh_df['Ngày tiếp nhận_std'].apply(extract_month)
+
     # Create the joined dataframe with all required columns
     filtered_knkh_df = knkh_df.copy()
     joined_df = filtered_knkh_df[[
         'Mã ticket', 'Ngày tiếp nhận_formatted', 'Tỉnh', 'Ngày SX_formatted', 'Sản phẩm/Dịch vụ',
         'Số lượng (ly/hộp/chai/gói/hủ)', 'Nội dung phản hồi', 'Item', 'Tên sản phẩm',
         'SL pack/ cây lỗi', 'Tên lỗi', 'Line_extracted', 'Máy_extracted', 'Giờ_extracted',
-        'QA_matched', 'Tên Trưởng ca_matched', 'Shift'
+        'QA_matched', 'Tên Trưởng ca_matched', 'Shift', 
+        'Tháng sản xuất', 'Năm sản xuất', 'Tuần nhận khiếu nại', 'Tháng nhận khiếu nại'
     ]].copy()
 
     # Rename columns for clarity
