@@ -117,6 +117,22 @@ def determine_shift(hour):
     else:
         return 3
 
+def get_target_tv(line):
+    """Determine Target TV based on Line number"""
+    if pd.isna(line):
+        return None
+    
+    try:
+        line_num = float(line)
+        if 1 <= line_num <= 6:
+            return 0.29
+        elif 7 <= line_num <= 8:
+            return 2.19
+        else:
+            return None
+    except (ValueError, TypeError):
+        return None
+
 def format_as_table(worksheet):
     """Format worksheet as a table for Power BI"""
     try:
@@ -204,6 +220,9 @@ def main():
     id_aql_df['hour'] = id_aql_df['Giờ'].apply(parse_hour)
     id_aql_df['Ca'] = id_aql_df['hour'].apply(determine_shift)
     
+    # Add Target TV column based on Line
+    id_aql_df['Target TV'] = id_aql_df['Line'].apply(get_target_tv)
+    
     # Create defect name mapping dictionaries
     goi_defect_map = dict(zip(aql_goi_df['Defect code'], aql_goi_df['Defect name']))
     to_ly_defect_map = dict(zip(aql_to_ly_df['Defect code'], aql_to_ly_df['Defect name']))
@@ -234,7 +253,7 @@ def main():
         new_df = id_aql_df[[
             'Ngày SX', 'Tuần', 'Tháng', 'Sản phẩm', 'Item', 'Giờ', 'Ca', 'Line', 'MĐG', 
             'SL gói lỗi sau xử lý', 'Defect code', 'Defect name', 'Số lượng hold ( gói/thùng)',
-            'QA', 'Tên Trưởng ca'
+            'Target TV', 'QA', 'Tên Trưởng ca'
         ]].copy()
     except KeyError as e:
         print(f"Error: Missing column in source data: {e}")
