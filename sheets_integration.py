@@ -63,38 +63,133 @@ def extract_correct_date(text):
     return None
 
 def extract_production_info(text):
+    """
+    Extract production information from text with improved pattern recognition.
+    Returns (time, line, machine) tuple.
+    """
     if not isinstance(text, str):
         return None, None, None
-
-    # More flexible patterns to handle variations
+    
+    # Clean and standardize the text
+    text = text.strip()
+    
+    # First, try to match the full pattern with various formats
+    # This comprehensive pattern tries to capture all the variations at once
+    comprehensive_pattern = r'Nơi SX:\s*I-MBP\s*\(\s*(?:(\d{1,2}:\d{1,2})\s*)?(\d{1,2})(?:(\d))?I?(?:\d{0,2})(?:.*?)\)'
+    match = re.search(comprehensive_pattern, text)
+    
+    if match:
+        time_str = match.group(1)  # May be None if time not present
+        
+        # The second digit is always the line
+        line = match.group(2)
+        
+        # The third digit, if present, is the machine
+        machine = match.group(3)
+        
+        return time_str, line, machine
+    
+    # If the comprehensive pattern didn't work, try specific patterns
     patterns = [
-        # Pattern for "(HH:MM DD)" where DD is line number and machine number (two digits)
-        r'Nơi SX: I-MBP \((\d{2}:\d{2})\s+(\d)(\d)I\s*\)',
-        r'Nơi SX: I-MBP \((\d{2}:\d{2})\s+(\d)(\d)\s*I\s*\)',
-        # Pattern for "(HH:MM D)" where D is just line number (single digit)
-        r'Nơi SX: I-MBP \((\d{2}:\d{2})\s+(\d)I\s*\)',
-        # Pattern for "(HH:MM DI)" where D is just line number (single digit) 
-        r'Nơi SX: I-MBP \((\d{2}:\d{2})\s+(\d)I\)',
-        # Pattern with optional machine
-        r'Nơi SX: I-MBP \((\d{2}:\d{2})\s+(\d+)(?:(\d))?I?\s*\)'
+        # Pattern for cases like "Nơi SX: I-MBP ( 07:12 2I)"
+        r'Nơi SX:\s*I-MBP\s*\(\s*(\d{1,2}:\d{1,2})\s+(\d)I\s*\)',
+        
+        # Pattern for cases like "Nơi SX: I-MBP (32I)" - no time, line=3, machine=2
+        r'Nơi SX:\s*I-MBP\s*\(\s*(\d)(\d)I\s*\)',
+        
+        # Pattern for cases like "Nơi SX: I-MBP (81I)" - no time, line=8, machine=1
+        r'Nơi SX:\s*I-MBP\s*\(\s*(\d+)I\s*\)',
+        
+        # Pattern for cases like "Nơi SX: I-MBP (13:19 23)" - with time, line=2, machine=3
+        r'Nơi SX:\s*I-MBP\s*\(\s*(\d{1,2}:\d{1,2})\s+(\d)(\d)\s*\)',
+        
+        # Pattern for cases like "Nơi SX: I-MBP ( 02:50 24I)" - with time, line=2, machine=4
+        r'Nơi SX:\s*I-MBP\s*\(\s*(\d{1,2}:\d{1,2})\s+(\d)(\d)I\s*\)',
+        
+        # Pattern for cases with additional info like "Nơi SX: I-MBP (03:24 24I08)"
+        r'Nơi SX:\s*I-MBP\s*\(\s*(\d{1,2}:\d{1,2})\s+(\d)(\d)I\d+\s*\)',
+        
+        # Pattern for cases with text after the line/machine like "Nơi SX: I-MBP (03:05 33I - text)"
+        r'Nơi SX:\s*I-MBP\s*\(\s*(\d{1,2}:\d{1,2})\s+(\d)(\d)I\s*-.*?\)',
+        
+        # Pattern for cases without spaces like "Nơi SX: I-MBP (16:0131I)"
+        r'Nơi SX:\s*I-MBP\s*\(\s*(\d{1,2}:\d{1,2})(\d)(\d)I\s*\)',
+        
+        # Pattern for longer cases like "Nơi SX: I-MBP (21:28 82I06)"
+        r'Nơi SX:\s*I-MBP\s*\(\s*(\d{1,2}:\d{1,2})\s+(\d)(\d)I\d+\s*\)'
     ]
     
     for pattern in patterns:
         match = re.search(pattern, text)
         if match:
-            production_time = match.group(1)  # HH:MM format
+            groups = match.groups()
             
-            # For patterns with optional machine
-            if len(match.groups()) == 3:
-                line = match.group(2)             # First digit or full number
-                machine = match.group(3) if match.group(3) else None  # Second digit or None
-            else:
-                # For patterns with just line
-                line = match.group(2)
-                machine = None
-            
-            return production_time, line, machine
+            # Different patterns have different group arrangements
+            if len(groups) == 1:
+                # Pattern with just line, no time or machine
+                return None, groups[0], None
+            elif len(groups) == 2:
+                if ':' in groups[0]:
+                    # Time and line, no machine
+                    return groups[0], groups[1], None
+                else:
+                    # Line and machine, no time
+                    return None, groups[0], groups[1]
+            elif len(groups) == 3:
+                # Time, line, and machine
+                return groups[0], groups[1], groups[2]
+    
+    # If no patterns matched, try a last-resort comprehensive pattern
+    # This focuses on extracting just the content inside parentheses
+    parenthesis_pattern = r'Nơi SX:\s*I-MBP\s*\((.*?)\)'
+    match = re.search(parenthesis_pattern, text)
+    
+    if match:
+        content = match.group(1).strip()
         
+        # Try to extract time if present
+        time_match = re.search(r'(\d{1,2}:\d{1,2})', content)
+        time_str = time_match.group(1) if time_match else None
+        
+        # Remove time part if found to simplify the remaining content
+        if time_str:
+            content = content.replace(time_str, '').strip()
+        
+        # Now look for patterns in the remaining content
+        # Common patterns are D(D)I(digits) where first D is line, second D (if present) is machine
+        line_machine_match = re.search(r'(\d)(\d)?I', content)
+        
+        if line_machine_match:
+            line = line_machine_match.group(1)
+            machine = line_machine_match.group(2)
+            return time_str, line, machine
+        
+        # Try another pattern for just digits
+        digits_match = re.search(r'(\d+)', content)
+        if digits_match:
+            digits = digits_match.group(1)
+            if len(digits) >= 1:
+                line = digits[0]
+                machine = digits[1] if len(digits) > 1 else None
+                return time_str, line, machine
+    
+    # If we still couldn't extract the info, try a more general approach
+    # Looking for any pair of digits that might represent line and machine
+    digits_pattern = r'(\d)(?:(\d))?'
+    match = re.search(digits_pattern, text)
+    
+    if match:
+        # The first digit is likely the line
+        line = match.group(1)
+        # The second digit, if present, is likely the machine
+        machine = match.group(2) if len(match.groups()) > 1 else None
+        
+        # Try to find a time pattern separately
+        time_match = re.search(r'(\d{1,2}:\d{1,2})', text)
+        time_str = time_match.group(1) if time_match else None
+        
+        return time_str, line, machine
+    
     return None, None, None
 
 def standardize_date(date_str):
