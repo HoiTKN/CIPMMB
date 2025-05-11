@@ -46,6 +46,12 @@ def authenticate():
         print(f"Authentication error: {str(e)}")
         sys.exit(1)
 
+def get_day_of_month(date):
+    """Extract day from date"""
+    if pd.isna(date) or date is None:
+        return None
+    return date.day
+
 def get_week_number(date):
     """Extract week number from date"""
     if pd.isna(date) or date is None:
@@ -212,7 +218,8 @@ def main():
     # Standardize dates
     id_aql_df['Ngày SX_std'] = id_aql_df['Ngày SX'].apply(standardize_date)
     
-    # Extract week and month
+    # Extract date, week and month
+    id_aql_df['Ngày'] = id_aql_df['Ngày SX_std'].apply(get_day_of_month)
     id_aql_df['Tuần'] = id_aql_df['Ngày SX_std'].apply(get_week_number)
     id_aql_df['Tháng'] = id_aql_df['Ngày SX_std'].apply(get_month_number)
     
@@ -251,7 +258,7 @@ def main():
     # Create the new dataframe with required columns
     try:
         new_df = id_aql_df[[
-            'Ngày SX', 'Tuần', 'Tháng', 'Sản phẩm', 'Item', 'Giờ', 'Ca', 'Line', 'MĐG', 
+            'Ngày SX', 'Ngày', 'Tuần', 'Tháng', 'Sản phẩm', 'Item', 'Giờ', 'Ca', 'Line', 'MĐG', 
             'SL gói lỗi sau xử lý', 'Defect code', 'Defect name', 'Số lượng hold ( gói/thùng)',
             'Target TV', 'QA', 'Tên Trưởng ca'
         ]].copy()
@@ -259,6 +266,11 @@ def main():
         print(f"Error: Missing column in source data: {e}")
         print(f"Available columns: {id_aql_df.columns.tolist()}")
         sys.exit(1)
+    
+    # Filter to only include rows where 'Số lượng hold ( gói/thùng)' is not empty
+    print(f"Total rows before filtering: {len(new_df)}")
+    new_df = new_df[new_df['Số lượng hold ( gói/thùng)'].notna() & (new_df['Số lượng hold ( gói/thùng)'] != '')]
+    print(f"Rows after filtering for non-empty 'Số lượng hold ( gói/thùng)': {len(new_df)}")
     
     # Sort by Ngày SX (newest first)
     new_df = new_df.sort_values(by='Ngày SX', ascending=False)
