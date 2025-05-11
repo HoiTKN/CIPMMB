@@ -409,9 +409,15 @@ def main():
     knkh_df['Tháng sản xuất'] = knkh_df['Ngày SX_std'].apply(extract_month)
     knkh_df['Năm sản xuất'] = knkh_df['Ngày SX_std'].apply(extract_year)
 
-    # Extract week and month from receipt date (Ngày tiếp nhận)
+    # Extract week, month and year from receipt date (Ngày tiếp nhận)
     knkh_df['Tuần nhận khiếu nại'] = knkh_df['Ngày tiếp nhận_std'].apply(extract_week)
     knkh_df['Tháng nhận khiếu nại'] = knkh_df['Ngày tiếp nhận_std'].apply(extract_month)
+    knkh_df['Năm nhận khiếu nại'] = knkh_df['Ngày tiếp nhận_std'].apply(extract_year)  # Added this line
+
+    # Filter to only include rows where "Bộ phận chịu trách nhiệm" is "Nhà máy"
+    print(f"Total rows before filtering by 'Bộ phận chịu trách nhiệm': {len(knkh_df)}")
+    knkh_df = knkh_df[knkh_df['Bộ phận chịu trách nhiệm'] == 'Nhà máy']
+    print(f"Rows after filtering for 'Bộ phận chịu trách nhiệm' = 'Nhà máy': {len(knkh_df)}")
 
     # Create the joined dataframe with all required columns
     filtered_knkh_df = knkh_df.copy()
@@ -420,7 +426,8 @@ def main():
         'Số lượng (ly/hộp/chai/gói/hủ)', 'Nội dung phản hồi', 'Item', 'Tên sản phẩm',
         'SL pack/ cây lỗi', 'Tên lỗi', 'Line_extracted', 'Máy_extracted', 'Giờ_extracted',
         'QA_matched', 'Tên Trưởng ca_matched', 'Shift', 
-        'Tháng sản xuất', 'Năm sản xuất', 'Tuần nhận khiếu nại', 'Tháng nhận khiếu nại'
+        'Tháng sản xuất', 'Năm sản xuất', 'Tuần nhận khiếu nại', 'Tháng nhận khiếu nại', 'Năm nhận khiếu nại',
+        'Bộ phận chịu trách nhiệm'
     ]].copy()
 
     # Rename columns for clarity
