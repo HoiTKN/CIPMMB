@@ -64,8 +64,11 @@ def extract_correct_date(text):
 
 def extract_production_info(text):
     """
-    Extract production information from text with improved pattern recognition.
+    Extract production information from text with corrected line and machine logic.
     Returns (time, line, machine) tuple.
+    
+    Important: Line numbers can only be 1-8.
+    If a two-digit number is found, the first digit is the line, and the second is the machine.
     """
     if not isinstance(text, str):
         return None, None, None
@@ -73,124 +76,61 @@ def extract_production_info(text):
     # Clean and standardize the text
     text = text.strip()
     
-    # First, try to match the full pattern with various formats
-    # This comprehensive pattern tries to capture all the variations at once
-    comprehensive_pattern = r'Nơi SX:\s*I-MBP\s*\(\s*(?:(\d{1,2}:\d{1,2})\s*)?(\d{1,2})(?:(\d))?I?(?:\d{0,2})(?:.*?)\)'
-    match = re.search(comprehensive_pattern, text)
-    
-    if match:
-        time_str = match.group(1)  # May be None if time not present
-        
-        # The second digit is always the line
-        line = match.group(2)
-        
-        # The third digit, if present, is the machine
-        machine = match.group(3)
-        
-        return time_str, line, machine
-    
-    # If the comprehensive pattern didn't work, try specific patterns
-    patterns = [
-        # Pattern for cases like "Nơi SX: I-MBP ( 07:12 2I)"
-        r'Nơi SX:\s*I-MBP\s*\(\s*(\d{1,2}:\d{1,2})\s+(\d)I\s*\)',
-        
-        # Pattern for cases like "Nơi SX: I-MBP (32I)" - no time, line=3, machine=2
-        r'Nơi SX:\s*I-MBP\s*\(\s*(\d)(\d)I\s*\)',
-        
-        # Pattern for cases like "Nơi SX: I-MBP (81I)" - no time, line=8, machine=1
-        r'Nơi SX:\s*I-MBP\s*\(\s*(\d+)I\s*\)',
-        
-        # Pattern for cases like "Nơi SX: I-MBP (13:19 23)" - with time, line=2, machine=3
-        r'Nơi SX:\s*I-MBP\s*\(\s*(\d{1,2}:\d{1,2})\s+(\d)(\d)\s*\)',
-        
-        # Pattern for cases like "Nơi SX: I-MBP ( 02:50 24I)" - with time, line=2, machine=4
-        r'Nơi SX:\s*I-MBP\s*\(\s*(\d{1,2}:\d{1,2})\s+(\d)(\d)I\s*\)',
-        
-        # Pattern for cases with additional info like "Nơi SX: I-MBP (03:24 24I08)"
-        r'Nơi SX:\s*I-MBP\s*\(\s*(\d{1,2}:\d{1,2})\s+(\d)(\d)I\d+\s*\)',
-        
-        # Pattern for cases with text after the line/machine like "Nơi SX: I-MBP (03:05 33I - text)"
-        r'Nơi SX:\s*I-MBP\s*\(\s*(\d{1,2}:\d{1,2})\s+(\d)(\d)I\s*-.*?\)',
-        
-        # Pattern for cases without spaces like "Nơi SX: I-MBP (16:0131I)"
-        r'Nơi SX:\s*I-MBP\s*\(\s*(\d{1,2}:\d{1,2})(\d)(\d)I\s*\)',
-        
-        # Pattern for longer cases like "Nơi SX: I-MBP (21:28 82I06)"
-        r'Nơi SX:\s*I-MBP\s*\(\s*(\d{1,2}:\d{1,2})\s+(\d)(\d)I\d+\s*\)'
-    ]
-    
-    for pattern in patterns:
-        match = re.search(pattern, text)
-        if match:
-            groups = match.groups()
-            
-            # Different patterns have different group arrangements
-            if len(groups) == 1:
-                # Pattern with just line, no time or machine
-                return None, groups[0], None
-            elif len(groups) == 2:
-                if ':' in groups[0]:
-                    # Time and line, no machine
-                    return groups[0], groups[1], None
-                else:
-                    # Line and machine, no time
-                    return None, groups[0], groups[1]
-            elif len(groups) == 3:
-                # Time, line, and machine
-                return groups[0], groups[1], groups[2]
-    
-    # If no patterns matched, try a last-resort comprehensive pattern
-    # This focuses on extracting just the content inside parentheses
+    # Capture the entire content inside parentheses after "Nơi SX: I-MBP"
     parenthesis_pattern = r'Nơi SX:\s*I-MBP\s*\((.*?)\)'
-    match = re.search(parenthesis_pattern, text)
+    parenthesis_match = re.search(parenthesis_pattern, text)
     
-    if match:
-        content = match.group(1).strip()
-        
-        # Try to extract time if present
-        time_match = re.search(r'(\d{1,2}:\d{1,2})', content)
-        time_str = time_match.group(1) if time_match else None
-        
-        # Remove time part if found to simplify the remaining content
-        if time_str:
-            content = content.replace(time_str, '').strip()
-        
-        # Now look for patterns in the remaining content
-        # Common patterns are D(D)I(digits) where first D is line, second D (if present) is machine
-        line_machine_match = re.search(r'(\d)(\d)?I', content)
-        
-        if line_machine_match:
-            line = line_machine_match.group(1)
-            machine = line_machine_match.group(2)
-            return time_str, line, machine
-        
-        # Try another pattern for just digits
-        digits_match = re.search(r'(\d+)', content)
-        if digits_match:
-            digits = digits_match.group(1)
-            if len(digits) >= 1:
-                line = digits[0]
-                machine = digits[1] if len(digits) > 1 else None
-                return time_str, line, machine
+    if not parenthesis_match:
+        return None, None, None
     
-    # If we still couldn't extract the info, try a more general approach
-    # Looking for any pair of digits that might represent line and machine
-    digits_pattern = r'(\d)(?:(\d))?'
-    match = re.search(digits_pattern, text)
+    # Get the content inside parentheses
+    content = parenthesis_match.group(1).strip()
     
-    if match:
-        # The first digit is likely the line
-        line = match.group(1)
-        # The second digit, if present, is likely the machine
-        machine = match.group(2) if len(match.groups()) > 1 else None
-        
-        # Try to find a time pattern separately
-        time_match = re.search(r'(\d{1,2}:\d{1,2})', text)
-        time_str = time_match.group(1) if time_match else None
-        
-        return time_str, line, machine
+    # Extract time if present
+    time_match = re.search(r'(\d{1,2}:\d{1,2})', content)
+    time_str = time_match.group(1) if time_match else None
     
-    return None, None, None
+    # Remove time part if found to simplify the remaining content
+    if time_str:
+        content = content.replace(time_str, '').strip()
+    
+    # Find numeric sequences
+    numbers = re.findall(r'\d+', content)
+    
+    if not numbers:
+        return time_str, None, None
+    
+    # Process the numbers found
+    line = None
+    machine = None
+    
+    for num_str in numbers:
+        if len(num_str) == 1:
+            # If it's a single digit (e.g., "8I"), it's likely just the line
+            if 1 <= int(num_str) <= 8:
+                line = num_str
+        elif len(num_str) >= 2:
+            # For two or more digits (e.g., "24I" or "81I06")
+            if int(num_str[0]) <= 8:
+                # The first digit is the line
+                line = num_str[0]
+                # The second digit is the machine
+                machine = num_str[1]
+    
+    # If no line was found through the normal patterns, try a last resort approach
+    if line is None:
+        # Look for patterns like "2I" or "8I"
+        line_match = re.search(r'([1-8])I', content)
+        if line_match:
+            line = line_match.group(1)
+    
+    # Special handling for patterns like "21I" where we interpret as line 2, machine 1
+    digit_sequence_match = re.search(r'(\d)(\d)I', content)
+    if digit_sequence_match:
+        line = digit_sequence_match.group(1)  # First digit as line
+        machine = digit_sequence_match.group(2)  # Second digit as machine
+    
+    return time_str, line, machine
 
 def standardize_date(date_str):
     try:
@@ -449,7 +389,7 @@ def main():
     aql_df['Ngày SX_std'] = aql_df['Ngày SX'].apply(standardize_date)
     
     # Create filter date (September 1, 2024)
-    filter_date = pd.to_datetime('2024-09-01')
+    filter_date = pd.to_datetime('2024-01-01')
     
     # Filter both DataFrames to only include data from September 1, 2024 onwards
     knkh_df = knkh_df[knkh_df['Ngày SX_std'] >= filter_date]
