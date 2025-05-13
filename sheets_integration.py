@@ -48,6 +48,47 @@ def authenticate():
         print(f"Authentication error: {str(e)}")
         sys.exit(1)
 
+def clean_concatenated_dates(date_str):
+    """
+    Clean concatenated dates like '11/04/202511/04/202511/04/2025'
+    Returns the first valid date found
+    """
+    if not isinstance(date_str, str):
+        return date_str
+    
+    # Regular expression to find date patterns in DD/MM/YYYY format
+    date_pattern = r'(\d{1,2}/\d{1,2}/\d{4})'
+    matches = re.findall(date_pattern, date_str)
+    
+    if matches:
+        # Return the first date that parses correctly
+        for match in matches:
+            try:
+                parsed_date = pd.to_datetime(match, format='%d/%m/%Y', dayfirst=True)
+                # Current date as reference
+                current_date = datetime.now()
+                # If date is not more than 1 year in the future, consider it valid
+                if parsed_date <= current_date + pd.Timedelta(days=365):
+                    return match
+            except:
+                continue
+        
+        # If no valid dates found based on future check, return the first match
+        return matches[0]
+    
+    # If no DD/MM/YYYY pattern found, try different patterns
+    # DD-MM-YYYY
+    date_pattern = r'(\d{1,2}-\d{1,2}-\d{4})'
+    matches = re.findall(date_pattern, date_str)
+    if matches:
+        return matches[0]
+    
+    # Try to extract first 10 characters if they look like a date
+    if len(date_str) >= 10 and ('/' in date_str[:10] or '-' in date_str[:10]):
+        return date_str[:10]
+    
+    return date_str
+
 def extract_correct_date(text):
     """Extract the correct Ngày SX from Nội dung phản hồi"""
     if not isinstance(text, str):
@@ -246,8 +287,31 @@ def determine_shift(time_obj):
         return 3
 
 def find_qa_and_leader(row, aql_data):
+    """
+    Improved function to match QA and leader from the AQL data sheet
+    """
     if pd.isna(row['Ngày SX_std']) or row['Item_clean'] == '' or row['Giờ_time'] is None:
-        return None, None, "Missing data"
+        return None, None, "Missing required data"
+    
+    # Check for QA column - handle different possible names
+    qa_column = None
+    for col in ['QA', 'QA ', ' QA', 'QA  ']:
+        if col in aql_data.columns:
+            qa_column = col
+            break
+    
+    # Check for leader column - handle different possible names
+    leader_column = None
+    for col in ['Tên Trường ca', 'Trưởng ca', 'Tên Trưởng ca', 'TruongCa']:
+        if col in aql_data.columns:
+            leader_column = col
+            break
+    
+    if not qa_column:
+        return None, None, f"QA column not found in AQL data"
+    
+    if not leader_column:
+        return None, None, f"Leader column not found in AQL data"
     
     # 1. Filter AQL data for the same date, item, and line
     matching_rows = aql_data[
@@ -257,7 +321,7 @@ def find_qa_and_leader(row, aql_data):
     ]
     
     if matching_rows.empty:
-        return None, None, "No matches for date+item+line"
+        return None, None, f"No matches for date+item+line"
     
     # 2. Get the complaint hour and determine which 2-hour intervals to check
     complaint_hour = row['Giờ_time'].hour
@@ -280,23 +344,13 @@ def find_qa_and_leader(row, aql_data):
     # 4. Apply the matching rules
     # 4a. First, check if there's data for the preceding hour
     if not prev_check.empty:
-        prev_qa = prev_check.iloc[0].get('QA ') if 'QA ' in prev_check.columns else None
-        prev_leader = None
-        for col in ['Tên Trường ca', 'Trưởng ca']:
-            if col in prev_check.columns:
-                prev_leader = prev_check.iloc[0].get(col)
-                if prev_leader is not None:
-                    break
+        prev_qa = prev_check.iloc[0].get(qa_column)
+        prev_leader = prev_check.iloc[0].get(leader_column)
         
         # 4b. Check if there's data for the next hour
         if not next_check.empty:
-            next_qa = next_check.iloc[0].get('QA ') if 'QA ' in next_check.columns else None
-            next_leader = None
-            for col in ['Tên Trường ca', 'Trưởng ca']:
-                if col in next_check.columns:
-                    next_leader = next_check.iloc[0].get(col)
-                    if next_leader is not None:
-                        break
+            next_qa = next_check.iloc[0].get(qa_column)
+            next_leader = next_check.iloc[0].get(leader_column)
             
             # 4c. If both QA and leader are the same, use them
             if prev_qa == next_qa and prev_leader == next_leader:
@@ -315,13 +369,8 @@ def find_qa_and_leader(row, aql_data):
     
     # If no data for preceding hour, try next hour
     elif not next_check.empty:
-        next_qa = next_check.iloc[0].get('QA ') if 'QA ' in next_check.columns else None
-        next_leader = None
-        for col in ['Tên Trường ca', 'Trưởng ca']:
-            if col in next_check.columns:
-                next_leader = next_check.iloc[0].get(col)
-                if next_leader is not None:
-                    break
+        next_qa = next_check.iloc[0].get(qa_column)
+        next_leader = next_check.iloc[0].get(leader_column)
         return next_qa, next_leader, f"{debug_info} | Only next hour data available"
     
     # If no data for either hour, look for any data for same date, item, line
@@ -340,13 +389,8 @@ def find_qa_and_leader(row, aql_data):
                     closest_row = aql_row
         
         if closest_row is not None:
-            closest_qa = closest_row.get('QA ') if 'QA ' in aql_data.columns else None
-            closest_leader = None
-            for col in ['Tên Trường ca', 'Trưởng ca']:
-                if col in aql_data.columns:
-                    closest_leader = closest_row.get(col)
-                    if closest_leader is not None:
-                        break
+            closest_qa = closest_row.get(qa_column)
+            closest_leader = closest_row.get(leader_column)
             return closest_qa, closest_leader, f"{debug_info} | Using closest time match"
     
     return None, None, f"{debug_info} | No matching QA records found"
@@ -374,7 +418,13 @@ def main():
     aql_df = pd.DataFrame(aql_data)
 
     print(f"Retrieved {len(knkh_df)} KNKH records and {len(aql_df)} AQL records")
+    print(f"KNKH columns: {list(knkh_df.columns)}")
+    print(f"AQL columns: {list(aql_df.columns)}")
 
+    # Clean concatenated dates for both reception date and production date
+    knkh_df['Ngày tiếp nhận'] = knkh_df['Ngày tiếp nhận'].apply(clean_concatenated_dates)
+    knkh_df['Ngày SX'] = knkh_df['Ngày SX'].apply(clean_concatenated_dates)
+    
     # Extract correct Ngày SX from Nội dung phản hồi and replace the Ngày SX column
     knkh_df['Ngày SX_extracted'] = knkh_df['Nội dung phản hồi'].apply(extract_correct_date)
     
@@ -388,10 +438,10 @@ def main():
     knkh_df['Ngày SX_std'] = knkh_df['Ngày SX'].apply(standardize_date)
     aql_df['Ngày SX_std'] = aql_df['Ngày SX'].apply(standardize_date)
     
-    # Create filter date (September 1, 2024)
+    # Create filter date (January 1, 2024)
     filter_date = pd.to_datetime('2024-01-01')
     
-    # Filter both DataFrames to only include data from September 1, 2024 onwards
+    # Filter both DataFrames to only include data from January 1, 2024 onwards
     knkh_df = knkh_df[knkh_df['Ngày SX_std'] >= filter_date]
     aql_df = aql_df[aql_df['Ngày SX_std'] >= filter_date]
     
@@ -423,7 +473,7 @@ def main():
     # Determine shift (now just returns 1, 2, or 3)
     knkh_df['Shift'] = knkh_df['Giờ_time'].apply(determine_shift)
 
-    # Match QA and leader
+    # Match QA and leader with improved debugging
     knkh_df['QA_matched'] = None
     knkh_df['Tên Trưởng ca_matched'] = None
     knkh_df['debug_info'] = None
@@ -447,7 +497,7 @@ def main():
     # Extract week, month and year from receipt date (Ngày tiếp nhận)
     knkh_df['Tuần nhận khiếu nại'] = knkh_df['Ngày tiếp nhận_std'].apply(extract_week)
     knkh_df['Tháng nhận khiếu nại'] = knkh_df['Ngày tiếp nhận_std'].apply(extract_month)
-    knkh_df['Năm nhận khiếu nại'] = knkh_df['Ngày tiếp nhận_std'].apply(extract_year)  # Added this line
+    knkh_df['Năm nhận khiếu nại'] = knkh_df['Ngày tiếp nhận_std'].apply(extract_year)
 
     # Filter to only include rows where "Bộ phận chịu trách nhiệm" is "Nhà máy"
     print(f"Total rows before filtering by 'Bộ phận chịu trách nhiệm': {len(knkh_df)}")
@@ -462,7 +512,7 @@ def main():
         'SL pack/ cây lỗi', 'Tên lỗi', 'Line_extracted', 'Máy_extracted', 'Giờ_extracted',
         'QA_matched', 'Tên Trưởng ca_matched', 'Shift', 
         'Tháng sản xuất', 'Năm sản xuất', 'Tuần nhận khiếu nại', 'Tháng nhận khiếu nại', 'Năm nhận khiếu nại',
-        'Bộ phận chịu trách nhiệm'
+        'Bộ phận chịu trách nhiệm', 'debug_info'  # Added debug_info column for troubleshooting
     ]].copy()
 
     # Rename columns for clarity
@@ -501,6 +551,23 @@ def main():
         # Update the worksheet
         integrated_worksheet.update('A1', data_to_write)
         print(f"Successfully wrote {len(data_to_write)-1} rows to the destination sheet, sorted by Mã ticket (largest to smallest)")
+
+        # Also create a debug worksheet to help troubleshoot matching issues
+        try:
+            debug_worksheet = destination_sheet.worksheet('Debug_Info')
+            debug_worksheet.clear()
+        except gspread.exceptions.WorksheetNotFound:
+            debug_worksheet = destination_sheet.add_worksheet(
+                title='Debug_Info',
+                rows=min(500, len(joined_df)+1), # Limit to 500 rows to avoid exceeding limits
+                cols=8
+            )
+            
+        # Create a simplified debug table with key matching info
+        debug_df = joined_df[['Mã ticket', 'Ngày SX', 'Item', 'Line', 'Giờ', 'QA', 'Tên Trưởng ca', 'debug_info']]
+        debug_data = [debug_df.columns.tolist()] + debug_df.head(499).fillna('').values.tolist()
+        debug_worksheet.update('A1', debug_data)
+        print(f"Created debug worksheet with matching information")
 
     except Exception as e:
         print(f"Error writing to destination sheet: {str(e)}")
