@@ -48,6 +48,46 @@ def authenticate():
         print(f"Authentication error: {str(e)}")
         sys.exit(1)
 
+def extract_short_product_name(full_name):
+    """
+    Extract a shorter version of the product name that includes only brand name (Omachi/Kokomi)
+    and the flavor, excluding packaging information.
+    
+    Examples:
+    "Mì dinh dưỡng khoai tây Omachi mì trộn xốt Spaghetti 30gói x 90gr" -> "Omachi mì trộn xốt Spaghetti"
+    "Mì dinh dưỡng khoai tây Omachi Sườn hầm ngũ quả 30gói x 80gr" -> "Omachi Sườn hầm ngũ quả"
+    "Mì Kokomi Pro canh chua tôm 30gói x 82gr" -> "Kokomi Pro canh chua tôm"
+    """
+    if pd.isna(full_name) or full_name == '':
+        return ''
+    
+    full_name = str(full_name).strip()
+    
+    # Pattern to match brand names (Omachi or Kokomi)
+    brand_pattern = r'(Omachi|Kokomi)'
+    brand_match = re.search(brand_pattern, full_name)
+    
+    if not brand_match:
+        return full_name  # Return original if no brand match
+    
+    # Get the start position of brand name
+    start_pos = brand_match.start()
+    
+    # Pattern to match packaging information (e.g., "30gói x 90gr")
+    pkg_pattern = r'\d+\s*gói\s*x\s*\d+\s*gr'
+    pkg_match = re.search(pkg_pattern, full_name)
+    
+    if pkg_match:
+        # End position is where packaging info starts
+        end_pos = pkg_match.start()
+        # Extract text between brand name and packaging info
+        short_name = full_name[start_pos:end_pos].strip()
+    else:
+        # If no packaging info, use rest of string after brand
+        short_name = full_name[start_pos:].strip()
+    
+    return short_name
+
 def clean_concatenated_dates(date_str):
     """
     Clean concatenated dates like '11/04/202511/04/202511/04/2025'
@@ -619,9 +659,13 @@ def main():
 
     # Create the joined dataframe with all required columns
     filtered_knkh_df = knkh_df.copy()
+    
+    # Extract short product names
+    filtered_knkh_df['Tên sản phẩm ngắn'] = filtered_knkh_df['Tên sản phẩm'].apply(extract_short_product_name)
+    
     joined_df = filtered_knkh_df[[
         'Mã ticket', 'Ngày tiếp nhận_formatted', 'Tỉnh', 'Ngày SX_formatted', 'Sản phẩm/Dịch vụ',
-        'Số lượng (ly/hộp/chai/gói/hủ)', 'Nội dung phản hồi', 'Item', 'Tên sản phẩm',
+        'Số lượng (ly/hộp/chai/gói/hủ)', 'Nội dung phản hồi', 'Item', 'Tên sản phẩm', 'Tên sản phẩm ngắn',
         'SL pack/ cây lỗi', 'Tên lỗi', 'Line_extracted', 'Máy_extracted', 'Giờ_extracted',
         'QA_matched', 'Tên Trưởng ca_matched', 'Shift', 
         'Tháng sản xuất', 'Năm sản xuất', 'Tuần nhận khiếu nại', 'Tháng nhận khiếu nại', 'Năm nhận khiếu nại',
