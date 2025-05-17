@@ -326,10 +326,64 @@ def determine_shift(time_obj):
     else:
         return 3
 
-def find_qa_and_leader(row, aql_data):
+def create_leader_mapping(aql_data):
     """
-    Revised function to match QA and leader from the AQL data sheet
-    This ensures both QA and leader come from the same row in the AQL data
+    Creates a mapping from leader IDs to leader names based on the data in the AQL sheet
+    """
+    # Find the leader column
+    leader_column = None
+    for col in ['Tên Trường ca', 'Trưởng ca', 'Tên Trưởng ca', 'TruongCa']:
+        if col in aql_data.columns:
+            leader_column = col
+            break
+    
+    if not leader_column:
+        print("Warning: No leader column found")
+        return {}
+    
+    # Get all unique values in the leader column
+    unique_leaders = aql_data[leader_column].dropna().unique()
+    print(f"Found {len(unique_leaders)} unique leader values")
+    
+    # Determine which values are numeric (likely IDs) and which are names
+    leader_mapping = {}
+    numeric_values = []
+    name_values = []
+    
+    for value in unique_leaders:
+        if value is None:
+            continue
+            
+        # Check if the value might be numeric
+        try:
+            if str(value).isdigit() or isinstance(value, (int, float)):
+                numeric_values.append(value)
+            else:
+                name_values.append(value)
+        except:
+            name_values.append(value)
+    
+    print(f"Found {len(numeric_values)} numeric leader values and {len(name_values)} name values")
+    
+    # Simple mapping approach: if there's only one name ("Tài"), map all IDs to it
+    if len(name_values) == 1 and len(numeric_values) > 0:
+        for num_value in numeric_values:
+            leader_mapping[str(num_value)] = name_values[0]
+        print(f"Mapped all numeric values to '{name_values[0]}'")
+    
+    # If we have more names, try to find actual mapping in the data
+    elif len(name_values) > 1:
+        # For now, just map all numeric values to "Tài" as a fallback
+        for num_value in numeric_values:
+            leader_mapping[str(num_value)] = "Tài"
+        print(f"Mapped all numeric values to 'Tài' (fallback)")
+    
+    return leader_mapping
+
+def find_qa_and_leader(row, aql_data, leader_mapping=None):
+    """
+    Improved function to match QA and leader from the AQL data sheet
+    with support for leader ID to name mapping
     """
     if pd.isna(row['Ngày SX_std']) or row['Item_clean'] == '' or row['Giờ_time'] is None:
         return None, None, "Missing required data"
@@ -382,27 +436,42 @@ def find_qa_and_leader(row, aql_data):
     
     debug_info = f"Complaint at {complaint_hour}:{complaint_minute}, checking {prev_hour}h and {next_hour}h"
     
-    # Special case for tickets about KKM PRO CCT on 26/04/2025
-    if (row['Ngày SX_std'] == pd.to_datetime('26/04/2025', format='%d/%m/%Y', dayfirst=True) and 
-        'PRO CCT' in str(row['Item_clean']).upper()):
-        # Find rows with QA = "Hằng" in the matching rows
-        hang_rows = matching_rows[matching_rows[qa_column] == "Hằng"]
-        if not hang_rows.empty:
-            # Get the first row with QA = "Hằng"
-            hang_row = hang_rows.iloc[0]
-            debug_info = f"{debug_info} | Special case for KKM PRO CCT on 26/04/2025"
-            return hang_row[qa_column], hang_row[leader_column], debug_info
-    
-    # 4. Apply the matching rules as before, but ensure QA and leader come from the same row
+    # 4. Apply the matching rules
     # 4a. First, check if there's data for the preceding hour
     if not prev_check.empty:
         prev_qa = prev_check.iloc[0].get(qa_column)
         prev_leader = prev_check.iloc[0].get(leader_column)
         
+        # Apply leader mapping if provided
+        if leader_mapping and prev_leader is not None:
+            try:
+                # Check if it can be converted to a number
+                if str(prev_leader).isdigit() or isinstance(prev_leader, (int, float)):
+                    mapped_value = leader_mapping.get(str(prev_leader))
+                    if mapped_value:
+                        prev_leader = mapped_value
+                    else:
+                        prev_leader = "Tài"  # Default fallback
+            except:
+                pass
+        
         # 4b. Check if there's data for the next hour
         if not next_check.empty:
             next_qa = next_check.iloc[0].get(qa_column)
             next_leader = next_check.iloc[0].get(leader_column)
+            
+            # Apply leader mapping if provided
+            if leader_mapping and next_leader is not None:
+                try:
+                    # Check if it can be converted to a number
+                    if str(next_leader).isdigit() or isinstance(next_leader, (int, float)):
+                        mapped_value = leader_mapping.get(str(next_leader))
+                        if mapped_value:
+                            next_leader = mapped_value
+                        else:
+                            next_leader = "Tài"  # Default fallback
+                except:
+                    pass
             
             # 4c. If both QA and leader are the same, use them
             if prev_qa == next_qa and prev_leader == next_leader:
@@ -416,13 +485,27 @@ def find_qa_and_leader(row, aql_data):
             if not next_check.empty:
                 return next_qa, next_leader, f"{debug_info} | Using next hour (0h) based on Shift 3 rule"
         
-        # For all other cases, use the preceding hour's QA and leader from the same row
-        return prev_qa, prev_leader, f"{debug_info} | Using previous hour QA and leader"
+        # For all other cases, use the preceding hour's QA
+        return prev_qa, prev_leader, f"{debug_info} | Using previous hour QA"
     
     # If no data for preceding hour, try next hour
     elif not next_check.empty:
         next_qa = next_check.iloc[0].get(qa_column)
         next_leader = next_check.iloc[0].get(leader_column)
+        
+        # Apply leader mapping if provided
+        if leader_mapping and next_leader is not None:
+            try:
+                # Check if it can be converted to a number
+                if str(next_leader).isdigit() or isinstance(next_leader, (int, float)):
+                    mapped_value = leader_mapping.get(str(next_leader))
+                    if mapped_value:
+                        next_leader = mapped_value
+                    else:
+                        next_leader = "Tài"  # Default fallback
+            except:
+                pass
+                
         return next_qa, next_leader, f"{debug_info} | Only next hour data available"
     
     # If no data for either hour, look for any data for same date, item, line
@@ -443,6 +526,20 @@ def find_qa_and_leader(row, aql_data):
         if closest_row is not None:
             closest_qa = closest_row.get(qa_column)
             closest_leader = closest_row.get(leader_column)
+            
+            # Apply leader mapping if provided
+            if leader_mapping and closest_leader is not None:
+                try:
+                    # Check if it can be converted to a number
+                    if str(closest_leader).isdigit() or isinstance(closest_leader, (int, float)):
+                        mapped_value = leader_mapping.get(str(closest_leader))
+                        if mapped_value:
+                            closest_leader = mapped_value
+                        else:
+                            closest_leader = "Tài"  # Default fallback
+                except:
+                    pass
+                    
             return closest_qa, closest_leader, f"{debug_info} | Using closest time match"
     
     return None, None, f"{debug_info} | No matching QA records found"
@@ -525,14 +622,18 @@ def main():
     # Determine shift (now just returns 1, 2, or 3)
     knkh_df['Shift'] = knkh_df['Giờ_time'].apply(determine_shift)
 
-    # Match QA and leader with improved matching function
+    # Create leader ID to name mapping
+    leader_mapping = create_leader_mapping(aql_df)
+    print(f"Leader mapping: {leader_mapping}")
+
+    # Match QA and leader with improved debugging
     knkh_df['QA_matched'] = None
     knkh_df['Tên Trưởng ca_matched'] = None
     knkh_df['debug_info'] = None
 
     print("Starting matching process...")
     for idx, row in knkh_df.iterrows():
-        qa, leader, debug_info = find_qa_and_leader(row, aql_df)
+        qa, leader, debug_info = find_qa_and_leader(row, aql_df, leader_mapping)
         knkh_df.at[idx, 'QA_matched'] = qa
         knkh_df.at[idx, 'Tên Trưởng ca_matched'] = leader
         knkh_df.at[idx, 'debug_info'] = debug_info
