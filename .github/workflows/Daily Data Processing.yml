@@ -2,8 +2,8 @@ name: Daily Data Processing
 
 on:
   schedule:
-    # Run at 2 AM UTC (9 AM Vietnam time, UTC+7)
-    - cron: '0 0 * * *'
+    # Run at 1 AM UTC (8 AM Vietnam time, UTC+7)
+    - cron: '0 1 * * *'
   # Optional: Allow manual trigger from GitHub Actions tab
   workflow_dispatch:
 
