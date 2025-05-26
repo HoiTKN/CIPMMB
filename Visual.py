@@ -226,11 +226,11 @@ def create_mapping_key_with_hour_logic(row, sample_id_df):
         return None
 
 def create_simple_mapping_key(row):
-    """Create a simple mapping key for sample_id_df records"""
+    """Create mapping keys for sample_id_df records, handling MĐG grouping logic"""
     try:
         date_std = standardize_date(row['Ngày SX'])
         if date_std is None:
-            return None
+            return []
         
         date_key = date_std.strftime('%d/%m/%Y')
         ca = int(float(row['Ca'])) if pd.notna(row['Ca']) else None
@@ -238,11 +238,25 @@ def create_simple_mapping_key(row):
         mdg = int(float(row['MĐG'])) if pd.notna(row['MĐG']) else None
         
         if ca is None or line is None or mdg is None:
-            return None
+            return []
+        
+        # Handle MĐG grouping logic
+        keys = []
+        if mdg == 1:
+            # MĐG 1 covers both MĐG 1 and MĐG 2
+            keys.append((date_key, ca, line, 1))
+            keys.append((date_key, ca, line, 2))
+        elif mdg == 3:
+            # MĐG 3 covers both MĐG 3 and MĐG 4
+            keys.append((date_key, ca, line, 3))
+            keys.append((date_key, ca, line, 4))
+        else:
+            # For other MĐG values, use as-is
+            keys.append((date_key, ca, line, mdg))
             
-        return (date_key, ca, line, mdg)
+        return keys
     except (ValueError, TypeError, KeyError):
-        return None
+        return []
 
 def main():
     print("Starting Google Sheets data processing...")
@@ -360,8 +374,15 @@ def main():
         return hao_hut_mapping.get(key, '') if key else ''
     
     # Add VHM and % Hao hụt OPP columns to the main dataframe
+    print("Applying VHM and % Hao hụt OPP mapping to main data...")
     id_aql_df['VHM'] = id_aql_df.apply(get_vhm, axis=1)
     id_aql_df['% Hao hụt OPP'] = id_aql_df.apply(get_hao_hut_opp, axis=1)
+    
+    # Debug: Show mapping statistics
+    vhm_mapped_count = (id_aql_df['VHM'] != '').sum()
+    hao_hut_mapped_count = (id_aql_df['% Hao hụt OPP'] != '').sum()
+    print(f"Successfully mapped VHM for {vhm_mapped_count} out of {len(id_aql_df)} records")
+    print(f"Successfully mapped % Hao hụt OPP for {hao_hut_mapped_count} out of {len(id_aql_df)} records")
     
     # Create the new dataframe with required columns (including new VHM and % Hao hụt OPP columns)
     try:
