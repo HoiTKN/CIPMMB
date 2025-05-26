@@ -2,6 +2,7 @@ import pandas as pd
 import gspread
 import os
 import sys
+import time
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from datetime import datetime, time
@@ -142,36 +143,24 @@ def get_target_tv(line):
 def format_as_table(worksheet):
     """Format worksheet as a table for Power BI"""
     try:
+        print("Applying table formatting...")
+        time.sleep(2)  # Add delay to avoid rate limits
+        
         # Get the number of rows and columns
         rows = worksheet.row_count
         cols = worksheet.col_count
         
-        # Define the range for formatting
-        range_name = f'A1:{chr(64 + cols)}{rows}'
-        
-        # Apply table formatting
-        worksheet.format(range_name, {
-            "backgroundColor": {"red": 0.95, "green": 0.95, "blue": 0.95},
-            "horizontalAlignment": "CENTER",
-            "textFormat": {"bold": True}
-        })
-        
-        # Format header row
+        # Only format header row to minimize API calls
         worksheet.format("A1:Z1", {
-            "backgroundColor": {"red": 0.8, "green": 0.8, "blue": 0.8},
-            "textFormat": {"bold": True}
+            "backgroundColor": {"red": 0.2, "green": 0.4, "blue": 0.8},
+            "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}}
         })
         
-        # Add alternating row colors for better readability
-        # This isn't a true "table" but makes it more table-like for export
-        for i in range(2, rows + 1, 2):
-            worksheet.format(f'A{i}:{chr(64 + cols)}{i}', {
-                "backgroundColor": {"red": 0.9, "green": 0.9, "blue": 0.9}
-            })
+        print("Successfully applied header formatting")
         
-        print("Applied table formatting to worksheet")
     except Exception as e:
-        print(f"Warning: Could not apply table formatting: {str(e)}")
+        print(f"Warning: Could not apply table formatting (this is non-critical): {str(e)}")
+        # Continue without formatting - this won't affect the data
 
 def create_mapping_key_with_hour_logic(row, sample_id_df):
     """Create a mapping key considering extended shift logic and MĐG grouping based on actual working hours"""
@@ -195,12 +184,19 @@ def create_mapping_key_with_hour_logic(row, sample_id_df):
             return None
         
         # Determine which shift codes to look for based on the hour
+        # Priority order: normal shift first, then extended shifts as fallback
         possible_shift_codes = []
         
-        if 6 <= hour < 18:  # 6am to 6pm - matches Ca 14
-            possible_shift_codes = [14, 1, 2]  # Check Ca 14 first, then normal shifts
-        elif 18 <= hour <= 23 or 0 <= hour < 6:  # 6pm to 6am - matches Ca 34
-            possible_shift_codes = [34, 2, 3]  # Check Ca 34 first, then normal shifts
+        if 6 <= hour < 14:  # Ca 1 time (6h-14h)
+            possible_shift_codes = [1, 14]  # Ca 1 first, then Ca 14 as fallback
+        elif 14 <= hour < 18:  # Ca 2 time but also covered by Ca 14 (14h-18h)
+            possible_shift_codes = [2, 14]  # Ca 2 first, then Ca 14 as fallback
+        elif 18 <= hour < 22:  # Ca 2 time but also covered by Ca 34 (18h-22h)
+            possible_shift_codes = [2, 34]  # Ca 2 first, then Ca 34 as fallback
+        elif 22 <= hour <= 23:  # Ca 3 time (22h-23h)
+            possible_shift_codes = [3, 34]  # Ca 3 first, then Ca 34 as fallback
+        elif 0 <= hour < 6:  # Ca 3 time (0h-6h)
+            possible_shift_codes = [3, 34]  # Ca 3 first, then Ca 34 as fallback
         else:
             # Fallback to normal shift determination
             ca = determine_shift(hour)
@@ -413,7 +409,14 @@ def main():
     # Function to get VHM based on hour logic
     def get_vhm(row):
         key = create_mapping_key_with_hour_logic(row, sample_id_df)
-        return vhm_mapping.get(key, '') if key else ''
+        result = vhm_mapping.get(key, '') if key else ''
+        
+        # Debug output for specific cases
+        if result and str(row.get('Giờ', '')).strip() in ['12h', '12:00', '12']:
+            hour = parse_hour(row.get('Giờ', ''))
+            print(f"Debug: Hour {hour} -> Key: {key} -> VHM: {result}")
+            
+        return result
     
     # Function to get % Hao hụt OPP based on hour logic
     def get_hao_hut_opp(row):
@@ -482,11 +485,11 @@ def main():
 
         # Convert DataFrame to list of lists for Google Sheets
         # Handle NaN values by converting to empty strings
-        new_df_cleaned = new_df.fillna('')
+        new_df_cleaned = new_df.fillna('').infer_objects(copy=False)
         data_to_write = [new_df_cleaned.columns.tolist()] + new_df_cleaned.values.tolist()
 
-        # Update the worksheet
-        processed_worksheet.update('A1', data_to_write)
+        # Update the worksheet - use new parameter order
+        processed_worksheet.update(values=data_to_write, range_name='A1')
         print(f"Successfully wrote {len(data_to_write)-1} rows to the destination sheet, sorted by Ngày SX (newest first)")
         print(f"Added VHM and % Hao hụt OPP columns based on Ngày SX, Ca, Line, MĐG mapping")
         
