@@ -173,6 +173,77 @@ def format_as_table(worksheet):
     except Exception as e:
         print(f"Warning: Could not apply table formatting: {str(e)}")
 
+def create_mapping_key_with_hour_logic(row, sample_id_df):
+    """Create a mapping key considering extended shift logic based on actual working hours"""
+    try:
+        # Standardize the date
+        date_std = standardize_date(row['Ngày SX'])
+        if date_std is None:
+            return None
+        
+        date_key = date_std.strftime('%d/%m/%Y')
+        
+        # Parse hour from the main AQL data
+        hour = parse_hour(row.get('Giờ', ''))
+        if hour is None:
+            return None
+            
+        line = int(float(row['Line'])) if pd.notna(row['Line']) else None
+        mdg = int(float(row['MĐG'])) if pd.notna(row['MĐG']) else None
+        
+        if line is None or mdg is None:
+            return None
+        
+        # Determine which shift codes to look for based on the hour
+        possible_shift_codes = []
+        
+        if 6 <= hour < 18:  # 6am to 6pm - matches Ca 14
+            possible_shift_codes = [14, 1, 2]  # Check Ca 14 first, then normal shifts
+        elif 18 <= hour <= 23 or 0 <= hour < 6:  # 6pm to 6am - matches Ca 34
+            possible_shift_codes = [34, 2, 3]  # Check Ca 34 first, then normal shifts
+        else:
+            # Fallback to normal shift determination
+            ca = determine_shift(hour)
+            if ca:
+                possible_shift_codes = [ca]
+        
+        # Try to find a match in sample_id_df for any of the possible shift codes
+        for shift_code in possible_shift_codes:
+            # Check if there's a matching record in sample_id_df
+            matching_records = sample_id_df[
+                (sample_id_df['Ngày SX'].apply(lambda x: standardize_date(x).strftime('%d/%m/%Y') if standardize_date(x) else None) == date_key) &
+                (sample_id_df['Ca'].astype(str).str.strip() == str(shift_code)) &
+                (sample_id_df['Line'].astype(str).str.strip() == str(line)) &
+                (sample_id_df['MĐG'].astype(str).str.strip() == str(mdg))
+            ]
+            
+            if not matching_records.empty:
+                return (date_key, shift_code, line, mdg)
+        
+        return None
+        
+    except (ValueError, TypeError, KeyError):
+        return None
+
+def create_simple_mapping_key(row):
+    """Create a simple mapping key for sample_id_df records"""
+    try:
+        date_std = standardize_date(row['Ngày SX'])
+        if date_std is None:
+            return None
+        
+        date_key = date_std.strftime('%d/%m/%Y')
+        ca = int(float(row['Ca'])) if pd.notna(row['Ca']) else None
+        line = int(float(row['Line'])) if pd.notna(row['Line']) else None
+        mdg = int(float(row['MĐG'])) if pd.notna(row['MĐG']) else None
+        
+        if ca is None or line is None or mdg is None:
+            return None
+            
+        return (date_key, ca, line, mdg)
+    except (ValueError, TypeError, KeyError):
+        return None
+
 def main():
     print("Starting Google Sheets data processing...")
     
@@ -181,6 +252,9 @@ def main():
     
     # Open the source spreadsheet (ID AQL)
     source_sheet = gc.open_by_url('https://docs.google.com/spreadsheets/d/1MxvsyZTMMO0L5Cf1FzuXoKD634OClCCefeLjv9B49XU/edit')
+    
+    # Open the new sample ID sheet for VHM and % Hao hụt OPP data
+    sample_id_sheet = gc.open_by_url('https://docs.google.com/spreadsheets/d/10R0Os96Ckwfiagbe-SbEut6FOyoMZZNmBc-HjdGKqwU/edit')
     
     # Open the destination spreadsheet
     destination_sheet = gc.open_by_url('https://docs.google.com/spreadsheets/d/1sb7Wz26CVkyUfWUE7NQmWm7_Byhw9eAHPArIUnn3iDA/edit')
@@ -201,7 +275,13 @@ def main():
         aql_to_ly_data = aql_to_ly_worksheet.get_all_records()
         aql_to_ly_df = pd.DataFrame(aql_to_ly_data)
         
-        print(f"Retrieved {len(id_aql_df)} ID AQL records, {len(aql_goi_df)} AQL gói records, and {len(aql_to_ly_df)} AQL Tô ly records")
+        # Get the sample ID data for VHM and % Hao hụt OPP mapping
+        # Assuming the data is in the first worksheet (Table1)
+        sample_id_worksheet = sample_id_sheet.get_worksheet(0)  # First worksheet
+        sample_id_data = sample_id_worksheet.get_all_records()
+        sample_id_df = pd.DataFrame(sample_id_data)
+        
+        print(f"Retrieved {len(id_aql_df)} ID AQL records, {len(aql_goi_df)} AQL gói records, {len(aql_to_ly_df)} AQL Tô ly records, and {len(sample_id_df)} Sample ID records")
     
     except Exception as e:
         print(f"Error retrieving worksheet data: {str(e)}")
@@ -255,12 +335,40 @@ def main():
     # Apply the mapping
     id_aql_df['Defect name'] = id_aql_df.apply(map_defect_name, axis=1)
     
-    # Create the new dataframe with required columns
+    # Create mapping dictionary for VHM and % Hao hụt OPP from sample_id_df
+    print("Creating VHM and % Hao hụt OPP mapping...")
+    vhm_mapping = {}
+    hao_hut_mapping = {}
+    
+    # Create simple mapping from sample_id_df
+    for _, row in sample_id_df.iterrows():
+        key = create_simple_mapping_key(row)
+        if key is not None:
+            vhm_mapping[key] = row.get('VHM', '')
+            hao_hut_mapping[key] = row.get('% Hao hụt OPP', '')
+    
+    print(f"Created {len(vhm_mapping)} mapping entries for VHM and % Hao hụt OPP")
+    
+    # Function to get VHM based on hour logic
+    def get_vhm(row):
+        key = create_mapping_key_with_hour_logic(row, sample_id_df)
+        return vhm_mapping.get(key, '') if key else ''
+    
+    # Function to get % Hao hụt OPP based on hour logic
+    def get_hao_hut_opp(row):
+        key = create_mapping_key_with_hour_logic(row, sample_id_df)
+        return hao_hut_mapping.get(key, '') if key else ''
+    
+    # Add VHM and % Hao hụt OPP columns to the main dataframe
+    id_aql_df['VHM'] = id_aql_df.apply(get_vhm, axis=1)
+    id_aql_df['% Hao hụt OPP'] = id_aql_df.apply(get_hao_hut_opp, axis=1)
+    
+    # Create the new dataframe with required columns (including new VHM and % Hao hụt OPP columns)
     try:
         new_df = id_aql_df[[
             'Ngày SX', 'Ngày', 'Tuần', 'Tháng', 'Sản phẩm', 'Item', 'Giờ', 'Ca', 'Line', 'MĐG', 
             'SL gói lỗi sau xử lý', 'Defect code', 'Defect name', 'Số lượng hold ( gói/thùng)',
-            'Target TV', 'QA', 'Tên Trưởng ca'
+            'Target TV', 'VHM', '% Hao hụt OPP', 'QA', 'Tên Trưởng ca'
         ]].copy()
     except KeyError as e:
         print(f"Error: Missing column in source data: {e}")
@@ -272,8 +380,12 @@ def main():
     new_df = new_df[new_df['Số lượng hold ( gói/thùng)'].notna() & (new_df['Số lượng hold ( gói/thùng)'] != '')]
     print(f"Rows after filtering for non-empty 'Số lượng hold ( gói/thùng)': {len(new_df)}")
     
-    # Sort by Ngày SX (newest first)
-    new_df = new_df.sort_values(by='Ngày SX', ascending=False)
+    # Sort by Ngày SX (newest first) - convert to datetime for proper sorting
+    new_df['Ngày SX_for_sort'] = new_df['Ngày SX'].apply(standardize_date)
+    new_df = new_df.sort_values(by='Ngày SX_for_sort', ascending=False, na_position='last')
+    new_df = new_df.drop(columns=['Ngày SX_for_sort'])  # Remove the temporary sorting column
+    
+    print(f"Data sorted by Ngày SX (newest to oldest)")
     
     # Save to the destination spreadsheet
     try:
@@ -297,6 +409,7 @@ def main():
         # Update the worksheet
         processed_worksheet.update('A1', data_to_write)
         print(f"Successfully wrote {len(data_to_write)-1} rows to the destination sheet, sorted by Ngày SX (newest first)")
+        print(f"Added VHM and % Hao hụt OPP columns based on Ngày SX, Ca, Line, MĐG mapping")
         
         # Format the worksheet as a table
         format_as_table(processed_worksheet)
