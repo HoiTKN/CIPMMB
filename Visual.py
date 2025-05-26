@@ -174,7 +174,7 @@ def format_as_table(worksheet):
         print(f"Warning: Could not apply table formatting: {str(e)}")
 
 def create_mapping_key_with_hour_logic(row, sample_id_df):
-    """Create a mapping key considering extended shift logic based on actual working hours"""
+    """Create a mapping key considering extended shift logic and MĐG grouping based on actual working hours"""
     try:
         # Standardize the date
         date_std = standardize_date(row['Ngày SX'])
@@ -207,18 +207,34 @@ def create_mapping_key_with_hour_logic(row, sample_id_df):
             if ca:
                 possible_shift_codes = [ca]
         
-        # Try to find a match in sample_id_df for any of the possible shift codes
+        # Handle MĐG grouping - determine which MĐG values to look for in sample sheet
+        mdg_lookup_values = []
+        if mdg == 2:
+            # MĐG 2 should look for MĐG 1 in sample sheet (since MĐG 1 covers 1,2)
+            mdg_lookup_values = [1, 2]  # Try 1 first, then 2 as fallback
+        elif mdg == 4:
+            # MĐG 4 should look for MĐG 3 in sample sheet (since MĐG 3 covers 3,4)
+            mdg_lookup_values = [3, 4]  # Try 3 first, then 4 as fallback
+        else:
+            mdg_lookup_values = [mdg]
+        
+        # Try to find a match in sample_id_df for any combination of shift codes and MĐG values
         for shift_code in possible_shift_codes:
-            # Check if there's a matching record in sample_id_df
-            matching_records = sample_id_df[
-                (sample_id_df['Ngày SX'].apply(lambda x: standardize_date(x).strftime('%d/%m/%Y') if standardize_date(x) else None) == date_key) &
-                (sample_id_df['Ca'].astype(str).str.strip() == str(shift_code)) &
-                (sample_id_df['Line'].astype(str).str.strip() == str(line)) &
-                (sample_id_df['MĐG'].astype(str).str.strip() == str(mdg))
-            ]
-            
-            if not matching_records.empty:
-                return (date_key, shift_code, line, mdg)
+            for lookup_mdg in mdg_lookup_values:
+                # Check if there's a matching record in sample_id_df
+                try:
+                    matching_records = sample_id_df[
+                        (sample_id_df['Ngày SX'].apply(lambda x: standardize_date(x).strftime('%d/%m/%Y') if standardize_date(x) else None) == date_key) &
+                        (sample_id_df['Ca'].astype(str).str.strip() == str(shift_code)) &
+                        (sample_id_df['Line'].astype(str).str.strip() == str(line)) &
+                        (sample_id_df['MĐG'].astype(str).str.strip() == str(lookup_mdg))
+                    ]
+                    
+                    if not matching_records.empty:
+                        # Return the key that will be used for lookup (using original mdg from AQL data)
+                        return (date_key, shift_code, line, mdg)
+                except Exception as e:
+                    continue
         
         return None
         
@@ -254,8 +270,18 @@ def create_simple_mapping_key(row):
             # For other MĐG values, use as-is
             keys.append((date_key, ca, line, mdg))
             
-        return keys
-    except (ValueError, TypeError, KeyError):
+        # Validate that all keys are properly formed tuples
+        validated_keys = []
+        for key in keys:
+            if isinstance(key, tuple) and len(key) == 4:
+                validated_keys.append(key)
+            else:
+                print(f"Warning: Invalid key format generated: {key}")
+                
+        return validated_keys
+        
+    except (ValueError, TypeError, KeyError) as e:
+        print(f"Warning: Error in create_simple_mapping_key: {e}")
         return []
 
 def main():
@@ -350,16 +376,37 @@ def main():
     id_aql_df['Defect name'] = id_aql_df.apply(map_defect_name, axis=1)
     
     # Create mapping dictionary for VHM and % Hao hụt OPP from sample_id_df
-    print("Creating VHM and % Hao hụt OPP mapping...")
+    print("Creating VHM and % Hao hụt OPP mapping with MĐG grouping logic...")
     vhm_mapping = {}
     hao_hut_mapping = {}
     
-    # Create simple mapping from sample_id_df
+    # Create mapping from sample_id_df with MĐG grouping
     for _, row in sample_id_df.iterrows():
-        key = create_simple_mapping_key(row)
-        if key is not None:
-            vhm_mapping[key] = row.get('VHM', '')
-            hao_hut_mapping[key] = row.get('% Hao hụt OPP', '')
+        keys = create_simple_mapping_key(row)  # Returns a list of keys
+        vhm_value = row.get('VHM', '')
+        hao_hut_value = row.get('% Hao hụt OPP', '')
+        
+        # Only process if we got valid keys
+        if keys:  # Check if keys list is not empty
+            for key in keys:  # Iterate through each key in the list
+                if isinstance(key, tuple) and len(key) == 4:  # Validate key format
+                    vhm_mapping[key] = vhm_value
+                    hao_hut_mapping[key] = hao_hut_value
+                    
+            # Debug output for MĐG grouping
+            if len(keys) > 1:
+                try:
+                    mdg_original = int(float(row['MĐG'])) if pd.notna(row['MĐG']) else None
+                    date_str = standardize_date(row['Ngày SX']).strftime('%d/%m/%Y') if standardize_date(row['Ngày SX']) else 'Unknown'
+                    line = int(float(row['Line'])) if pd.notna(row['Line']) else 'Unknown'
+                    ca = int(float(row['Ca'])) if pd.notna(row['Ca']) else 'Unknown'
+                    
+                    if mdg_original == 1:
+                        print(f"Mapped MĐG 1 to cover MĐG 1,2 for {date_str}, Ca {ca}, Line {line}, VHM: {vhm_value}")
+                    elif mdg_original == 3:
+                        print(f"Mapped MĐG 3 to cover MĐG 3,4 for {date_str}, Ca {ca}, Line {line}, VHM: {vhm_value}")
+                except Exception as e:
+                    print(f"Debug output error: {e}")
     
     print(f"Created {len(vhm_mapping)} mapping entries for VHM and % Hao hụt OPP")
     
@@ -374,7 +421,7 @@ def main():
         return hao_hut_mapping.get(key, '') if key else ''
     
     # Add VHM and % Hao hụt OPP columns to the main dataframe
-    print("Applying VHM and % Hao hụt OPP mapping to main data...")
+    print("Applying VHM and % Hao hụt OPP mapping to main data with MĐG grouping...")
     id_aql_df['VHM'] = id_aql_df.apply(get_vhm, axis=1)
     id_aql_df['% Hao hụt OPP'] = id_aql_df.apply(get_hao_hut_opp, axis=1)
     
@@ -383,6 +430,17 @@ def main():
     hao_hut_mapped_count = (id_aql_df['% Hao hụt OPP'] != '').sum()
     print(f"Successfully mapped VHM for {vhm_mapped_count} out of {len(id_aql_df)} records")
     print(f"Successfully mapped % Hao hụt OPP for {hao_hut_mapped_count} out of {len(id_aql_df)} records")
+    
+    # Debug: Show MĐG grouping mapping examples
+    mdg_2_mapped = ((id_aql_df['MĐG'] == 2) & (id_aql_df['VHM'] != '')).sum()
+    mdg_4_mapped = ((id_aql_df['MĐG'] == 4) & (id_aql_df['VHM'] != '')).sum()
+    total_mdg_2 = (id_aql_df['MĐG'] == 2).sum()
+    total_mdg_4 = (id_aql_df['MĐG'] == 4).sum()
+    
+    if total_mdg_2 > 0:
+        print(f"MĐG 2 mapping: {mdg_2_mapped}/{total_mdg_2} records mapped (looking for MĐG 1 in sample sheet)")
+    if total_mdg_4 > 0:
+        print(f"MĐG 4 mapping: {mdg_4_mapped}/{total_mdg_4} records mapped (looking for MĐG 3 in sample sheet)")
     
     # Create the new dataframe with required columns (including new VHM and % Hao hụt OPP columns)
     try:
