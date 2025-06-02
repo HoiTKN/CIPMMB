@@ -140,68 +140,89 @@ def extract_correct_date(text):
 
 def extract_production_info(text):
     """
-    Extract production information from text with corrected line and machine logic.
+    Extract production information from text with improved line and machine logic.
     Returns (time, line, machine) tuple.
+    
+    Handles patterns like:
+    - "21:17 22I" -> time="21:17", line="2", machine="2"
+    - "Nơi SX: I-MBP (8I06)" -> line="8", machine=None
+    - "Nơi SX: MBP" -> searches for time and line info elsewhere
     """
     if not isinstance(text, str):
         return None, None, None
 
     # Clean and standardize the text
     text = text.strip()
-
-    # Capture the entire content inside parentheses after "Nơi SX: I-MBP"
-    parenthesis_pattern = r'Nơi SX:\s*I-MBP\s*\((.*?)\)'
-    parenthesis_match = re.search(parenthesis_pattern, text)
-
-    if not parenthesis_match:
-        return None, None, None
-
-    # Get the content inside parentheses
-    content = parenthesis_match.group(1).strip()
-
-    # Extract time if present
-    time_match = re.search(r'(\d{1,2}:\d{1,2})', content)
+    
+    # Extract time first (anywhere in the text)
+    time_match = re.search(r'(\d{1,2}:\d{1,2})', text)
     time_str = time_match.group(1) if time_match else None
 
-    # Remove time part if found to simplify the remaining content
-    if time_str:
-        content = content.replace(time_str, '').strip()
-
-    # Find numeric sequences
-    numbers = re.findall(r'\d+', content)
-
-    if not numbers:
-        return time_str, None, None
-
-    # Process the numbers found
+    # Try to find line and machine info in different patterns
     line = None
     machine = None
 
-    for num_str in numbers:
-        if len(num_str) == 1:
-            # If it's a single digit (e.g., "8I"), it's likely just the line
-            if 1 <= int(num_str) <= 8:
-                line = num_str
-        elif len(num_str) >= 2:
-            # For two or more digits (e.g., "24I" or "81I06")
-            if int(num_str[0]) <= 8:
-                # The first digit is the line
-                line = num_str[0]
-                # The second digit is the machine
-                machine = num_str[1]
-
-    # If no line was found through the normal patterns, try a last resort approach
+    # Pattern 1: Look for content inside parentheses after "Nơi SX: I-MBP"
+    parenthesis_pattern = r'Nơi SX:\s*I-MBP\s*\((.*?)\)'
+    parenthesis_match = re.search(parenthesis_pattern, text)
+    
+    if parenthesis_match:
+        content = parenthesis_match.group(1).strip()
+        
+        # Remove time part if found to simplify processing
+        if time_str:
+            content = content.replace(time_str, '').strip()
+        
+        # Look for patterns like "8I06", "21I", "2I", etc.
+        line_machine_match = re.search(r'(\d+)I', content)
+        if line_machine_match:
+            digits = line_machine_match.group(1)
+            if len(digits) == 1 and 1 <= int(digits) <= 8:
+                line = digits
+            elif len(digits) >= 2:
+                first_digit = int(digits[0])
+                if 1 <= first_digit <= 8:
+                    line = digits[0]
+                    if len(digits) >= 2:
+                        machine = digits[1]
+    
+    # Pattern 2: If no parentheses, look for patterns like "22I" directly in text
     if line is None:
-        # Look for patterns like "2I" or "8I"
-        line_match = re.search(r'([1-8])I', content)
+        # Look for patterns like "22I", "8I", "21I" anywhere in the text
+        line_pattern = r'(\d+)I(?!\w)'  # \d+I not followed by word character
+        line_matches = re.findall(line_pattern, text)
+        
+        for match in line_matches:
+            if len(match) == 1 and 1 <= int(match) <= 8:
+                line = match
+                break
+            elif len(match) >= 2:
+                first_digit = int(match[0])
+                if 1 <= first_digit <= 8:
+                    line = match[0]
+                    if len(match) >= 2:
+                        machine = match[1]
+                    break
+    
+    # Pattern 3: Look for "Nơi SX: MBP" and then search around it
+    if line is None and "Nơi SX: MBP" in text:
+        # Find position of "Nơi SX: MBP" and look around it
+        mbp_pos = text.find("Nơi SX: MBP")
+        surrounding_text = text[max(0, mbp_pos-20):mbp_pos+50]
+        
+        # Look for line info in surrounding text
+        line_pattern = r'(\d+)I'
+        line_match = re.search(line_pattern, surrounding_text)
         if line_match:
-            line = line_match.group(1)
-
-    # Special handling for patterns like "21I" where we interpret as line 2, machine 1
-    digit_sequence_match = re.search(r'(\d)(\d)I', content)
-    if digit_sequence_match:
-        line = digit_sequence_match.group(1)  # First digit as line
-        machine = digit_sequence_match.group(2)  # Second digit as machine
+            digits = line_match.group(1)
+            if len(digits) == 1 and 1 <= int(digits) <= 8:
+                line = digits
+            elif len(digits) >= 2:
+                first_digit = int(digits[0])
+                if 1 <= first_digit <= 8:
+                    line = digits[0]
+                    if len(digits) >= 2:
+                        machine = digits[1]
 
     return time_str, line, machine
 
@@ -378,7 +399,7 @@ def create_leader_mapping(aql_data):
 def find_qa_and_leader(row, aql_data, leader_mapping=None):
     """
     Improved function to match QA and leader from the AQL data sheet
-    with support for leader ID to name mapping and renamed columns
+    with better debugging and data type handling
     """
     if pd.isna(row['Ngày SX_std']) or row['Item_clean'] == '' or row['Giờ_time'] is None:
         return None, None, "Missing required data"
@@ -403,17 +424,51 @@ def find_qa_and_leader(row, aql_data, leader_mapping=None):
     if not leader_column:
         return None, None, f"Leader column not found in AQL data. Available columns: {list(aql_data.columns)}"
 
-    # 1. Filter AQL data for the same date, item, and line
-    matching_rows = aql_data[
+    # Convert Line_extracted to proper integer for comparison
+    complaint_line = row['Line_extracted']
+    if pd.isna(complaint_line):
+        return None, None, "Missing line information"
+    
+    try:
+        complaint_line = int(float(complaint_line))  # Handle cases where it might be stored as float
+    except (ValueError, TypeError):
+        return None, None, f"Invalid line value: {complaint_line}"
+
+    # Debug information
+    debug_parts = []
+    debug_parts.append(f"Looking for: Date={row['Ngày SX_std'].strftime('%d/%m/%Y')}, Item={row['Item_clean']}, Line={complaint_line}")
+
+    # 1. Filter AQL data for the same date and item first
+    date_item_matches = aql_data[
         (aql_data['Ngày SX_std'] == row['Ngày SX_std']) & 
-        (aql_data['Item_clean'] == row['Item_clean']) &
-        (aql_data['Line'] == row['Line_extracted'])
+        (aql_data['Item_clean'] == row['Item_clean'])
     ]
+    
+    debug_parts.append(f"Date+Item matches: {len(date_item_matches)}")
+    
+    if date_item_matches.empty:
+        # Try with date only to see if date matching works
+        date_only_matches = aql_data[aql_data['Ngày SX_std'] == row['Ngày SX_std']]
+        debug_parts.append(f"Date-only matches: {len(date_only_matches)}")
+        
+        # Try with item only to see if item matching works
+        item_only_matches = aql_data[aql_data['Item_clean'] == row['Item_clean']]
+        debug_parts.append(f"Item-only matches: {len(item_only_matches)}")
+        
+        return None, None, " | ".join(debug_parts)
 
+    # 2. Now filter by line - both should be numeric now
+    matching_rows = date_item_matches[date_item_matches['Line'] == complaint_line]
+    
+    debug_parts.append(f"Date+Item+Line matches: {len(matching_rows)}")
+    
     if matching_rows.empty:
-        return None, None, f"No matches for date+item+line"
+        # Show available lines for this date+item combination
+        available_lines = date_item_matches['Line'].dropna().unique()
+        debug_parts.append(f"Available lines for this date+item: {sorted(available_lines)}")
+        return None, None, " | ".join(debug_parts)
 
-    # 2. Get the complaint hour and determine which 2-hour intervals to check
+    # 3. Get the complaint hour and determine which 2-hour intervals to check
     complaint_hour = row['Giờ_time'].hour
     complaint_minute = row['Giờ_time'].minute
 
@@ -425,11 +480,17 @@ def find_qa_and_leader(row, aql_data, leader_mapping=None):
         prev_hour = (complaint_hour // 2) * 2
         next_hour = (prev_hour + 2) % 24
 
-    # 3. Find QA records at these times
+    debug_parts.append(f"Complaint at {complaint_hour}:{complaint_minute:02d}, checking {prev_hour}h and {next_hour}h")
+
+    # 4. Find QA records at these times
     prev_check = matching_rows[matching_rows['Giờ_time'].apply(lambda x: x is not None and x.hour == prev_hour and x.minute == 0)]
     next_check = matching_rows[matching_rows['Giờ_time'].apply(lambda x: x is not None and x.hour == next_hour and x.minute == 0)]
 
-    debug_info = f"Complaint at {complaint_hour}:{complaint_minute}, checking {prev_hour}h and {next_hour}h"
+    debug_parts.append(f"Prev hour ({prev_hour}h) records: {len(prev_check)}, Next hour ({next_hour}h) records: {len(next_check)}")
+
+    # Show available times for debugging
+    available_times = matching_rows[matching_rows['Giờ_time'].notna()]['Giờ_time'].apply(lambda x: f"{x.hour}:{x.minute:02d}").unique()
+    debug_parts.append(f"Available times: {sorted(available_times)}")
 
     # Special case for tickets about KKM PRO CCT on 26/04/2025
     if (row['Ngày SX_std'] == pd.to_datetime('26/04/2025', format='%d/%m/%Y', dayfirst=True) and 
@@ -439,11 +500,11 @@ def find_qa_and_leader(row, aql_data, leader_mapping=None):
         if not hang_rows.empty:
             # Get the first row with QA = "Hằng"
             hang_row = hang_rows.iloc[0]
-            debug_info = f"{debug_info} | Special case for KKM PRO CCT on 26/04/2025"
-            return hang_row[qa_column], hang_row[leader_column], debug_info
+            debug_parts.append("Special case for KKM PRO CCT on 26/04/2025")
+            return hang_row[qa_column], hang_row[leader_column], " | ".join(debug_parts)
     
-    # 4. Apply the matching rules as before, but ensure QA and leader come from the same row
-    # 4a. First, check if there's data for the preceding hour
+    # 5. Apply the matching rules
+    # 5a. First, check if there's data for the preceding hour
     if not prev_check.empty:
         prev_qa = prev_check.iloc[0].get(qa_column)
         prev_leader = prev_check.iloc[0].get(leader_column)
@@ -461,7 +522,7 @@ def find_qa_and_leader(row, aql_data, leader_mapping=None):
             except:
                 pass
         
-        # 4b. Check if there's data for the next hour
+        # 5b. Check if there's data for the next hour
         if not next_check.empty:
             next_qa = next_check.iloc[0].get(qa_column)
             next_leader = next_check.iloc[0].get(leader_column)
@@ -479,20 +540,23 @@ def find_qa_and_leader(row, aql_data, leader_mapping=None):
                 except:
                     pass
             
-            # 4c. If both QA and leader are the same, use them
+            # 5c. If both QA and leader are the same, use them
             if prev_qa == next_qa and prev_leader == next_leader:
-                return prev_qa, prev_leader, f"{debug_info} | Same QA and leader for both times"
+                debug_parts.append(f"Same QA ({prev_qa}) and leader ({prev_leader}) for both {prev_hour}h and {next_hour}h")
+                return prev_qa, prev_leader, " | ".join(debug_parts)
 
-        # 4d. Determine based on shift if we need to
+        # 5d. Determine based on shift if we need to
         shift = row['Shift']
 
         # For times between 22:30-23:59, we use the next hour's QA (from 0h)
         if shift == 3 and complaint_hour >= 22:
             if not next_check.empty:
-                return next_qa, next_leader, f"{debug_info} | Using next hour (0h) based on Shift 3 rule"
+                debug_parts.append(f"Using next hour ({next_hour}h) QA ({next_qa}) and leader ({next_leader}) based on Shift 3 rule")
+                return next_qa, next_leader, " | ".join(debug_parts)
 
         # For all other cases, use the preceding hour's QA and leader from the same row
-        return prev_qa, prev_leader, f"{debug_info} | Using previous hour QA and leader"
+        debug_parts.append(f"Using previous hour ({prev_hour}h) QA ({prev_qa}) and leader ({prev_leader})")
+        return prev_qa, prev_leader, " | ".join(debug_parts)
 
     # If no data for preceding hour, try next hour
     elif not next_check.empty:
@@ -511,8 +575,9 @@ def find_qa_and_leader(row, aql_data, leader_mapping=None):
                         next_leader = "Tài"  # Default fallback
             except:
                 pass
-                
-        return next_qa, next_leader, f"{debug_info} | Only next hour data available"
+        
+        debug_parts.append(f"Only next hour ({next_hour}h) data available - QA ({next_qa}) and leader ({next_leader})")
+        return next_qa, next_leader, " | ".join(debug_parts)
 
     # If no data for either hour, look for any data for same date, item, line
     if not matching_rows.empty:
@@ -545,10 +610,13 @@ def find_qa_and_leader(row, aql_data, leader_mapping=None):
                             closest_leader = "Tài"  # Default fallback
                 except:
                     pass
-                    
-            return closest_qa, closest_leader, f"{debug_info} | Using closest time match"
+            
+            closest_time = f"{closest_row['Giờ_time'].hour}:{closest_row['Giờ_time'].minute:02d}"
+            debug_parts.append(f"Using closest time match at {closest_time} - QA ({closest_qa}) and leader ({closest_leader})")
+            return closest_qa, closest_leader, " | ".join(debug_parts)
 
-    return None, None, f"{debug_info} | No matching QA records found"
+    debug_parts.append("No matching QA records found")
+    return None, None, " | ".join(debug_parts)
 
 def main():
     print("Starting Google Sheets integration...")
@@ -650,9 +718,21 @@ def main():
         lambda x: pd.Series(extract_production_info(x))
     )
 
+    # Test the extraction for specific patterns mentioned by user
+    test_text = "Thông tin phản hồi: - Anh Thành phản ánh mua ở tạp hóa 1 gói mì Kokomi pro chanh chua về mở ra bên trong gói rau rỗng không có rau, khách hàng liên hệ nhờ hỗ trợ đổi giùm Mì Kokomi Pro canh chua tôm 30gói x 82gr: Rỗng gói gia vị Ngày SX: 24/04/2025 Ngày HH: 24/10/2025 21:17 22I Nơi SX: MBP"
+    test_time, test_line, test_machine = extract_production_info(test_text)
+    print(f"Test extraction for '21:17 22I': Time={test_time}, Line={test_line}, Machine={test_machine}")
+
     # Convert to appropriate data types
     knkh_df['Line_extracted'] = pd.to_numeric(knkh_df['Line_extracted'], errors='coerce')
     knkh_df['Máy_extracted'] = pd.to_numeric(knkh_df['Máy_extracted'], errors='coerce')
+    
+    # Debug: Show some extraction results
+    print("\nSample production info extractions:")
+    for idx in knkh_df.head(5).index:
+        row = knkh_df.loc[idx]
+        print(f"Ticket {row['Mã ticket']}: '{row['Giờ_extracted']}' -> Line: {row['Line_extracted']}, Machine: {row['Máy_extracted']}")
+    print()
 
     # Standardize the receipt date
     knkh_df['Ngày tiếp nhận_std'] = knkh_df['Ngày tiếp nhận'].apply(standardize_date)
@@ -692,6 +772,26 @@ def main():
     elif not line_column:
         print("Warning: No Line column found in AQL data")
 
+    # Debug: Check AQL data sample to understand structure
+    print("\nAQL Data Sample:")
+    if len(aql_df) > 0:
+        print(f"Columns: {list(aql_df.columns)}")
+        sample_aql = aql_df.head(3)
+        for idx, row in sample_aql.iterrows():
+            print(f"Row {idx}: Date={row.get('Ngày SX')}, Item={row.get('Item')}, Line={row.get('Line')}, Time={row.get(gio_column) if gio_column else 'N/A'}")
+        print()
+    
+    # Debug: Check data types
+    print("Data type checking:")
+    print(f"AQL Line column type: {aql_df['Line'].dtype if 'Line' in aql_df.columns else 'N/A'}")
+    print(f"AQL Line unique values: {sorted(aql_df['Line'].dropna().unique()) if 'Line' in aql_df.columns else 'N/A'}")
+    
+    # Ensure AQL Line column is properly converted to numeric for matching
+    if 'Line' in aql_df.columns:
+        aql_df['Line'] = pd.to_numeric(aql_df['Line'], errors='coerce')
+        print(f"After conversion - AQL Line unique values: {sorted(aql_df['Line'].dropna().unique())}")
+    print()
+
     # Round time to 2-hour intervals
     knkh_df['Giờ_rounded'] = knkh_df['Giờ_time'].apply(round_to_2hour)
 
@@ -722,7 +822,7 @@ def main():
         if (idx + 1) % 50 == 0:
             print(f"Processed {idx + 1} rows, {total_matched} matched so far")
     
-    print(f"Matching process complete. Total matched: {total_matched} out of {len(knkh_df)} rows")
+        print(f"Matching process complete. Total matched: {total_matched} out of {len(knkh_df)} rows")
     
     # Show some sample matches for debugging
     matched_rows = knkh_df[knkh_df['QA_matched'].notna()]
@@ -735,9 +835,36 @@ def main():
     unmatched_rows = knkh_df[knkh_df['QA_matched'].isna()]
     if len(unmatched_rows) > 0:
         print(f"\nSample unmatched records ({len(unmatched_rows)} total):")
-        for idx in unmatched_rows.head(3).index:
+        for idx in unmatched_rows.head(5).index:  # Show more unmatched records
             row = knkh_df.loc[idx]
-            print(f"Ticket {row['Mã ticket']}: Date={row['Ngày SX']}, Item={row['Item']}, Line={row['Line_extracted']}, Time={row['Giờ_extracted']} -> Debug: {row['debug_info']}")
+            print(f"Ticket {row['Mã ticket']}: Date={row['Ngày SX']}, Item={row['Item']}, Line={row['Line_extracted']}, Time={row['Giờ_extracted']}")
+            print(f"  Debug: {row['debug_info']}")
+            print()
+    
+    # Specific debugging for the mentioned tickets
+    problem_tickets = ['1375904/10/2025', '1375704/23/2025']
+    for ticket in problem_tickets:
+        ticket_rows = knkh_df[knkh_df['Mã ticket'].astype(str).str.contains(ticket.replace('/', ''), na=False)]
+        if not ticket_rows.empty:
+            print(f"\nDetailed analysis for ticket {ticket}:")
+            for idx in ticket_rows.index:
+                row = knkh_df.loc[idx]
+                print(f"  Date: {row['Ngày SX']} ({row['Ngày SX_std']})")
+                print(f"  Item: {row['Item']} -> cleaned: {row['Item_clean']}")
+                print(f"  Line: {row['Line_extracted']}")
+                print(f"  Time: {row['Giờ_extracted']} -> parsed: {row['Giờ_time']}")
+                print(f"  Debug: {row['debug_info']}")
+                
+                # Check if there are any AQL records for this date
+                date_matches = aql_df[aql_df['Ngày SX_std'] == row['Ngày SX_std']]
+                print(f"  AQL records for this date: {len(date_matches)}")
+                if len(date_matches) > 0:
+                    print(f"  Available items on this date: {sorted(date_matches['Item_clean'].unique())}")
+                    item_matches = date_matches[date_matches['Item_clean'] == row['Item_clean']]
+                    print(f"  AQL records for this date+item: {len(item_matches)}")
+                    if len(item_matches) > 0:
+                        print(f"  Available lines for this date+item: {sorted(item_matches['Line'].unique())}")
+                print()
 
     # Format dates for Power BI (MM/DD/YYYY)
     knkh_df['Ngày tiếp nhận_formatted'] = knkh_df['Ngày tiếp nhận_std'].apply(format_date_mm_dd_yyyy)
