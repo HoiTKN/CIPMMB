@@ -343,13 +343,18 @@ def create_leader_mapping(aql_data):
     """
     Creates a mapping from leader codes to leader names based on the actual data in the AQL sheet
     by examining what Tên Trưởng ca values appear next to each QA in the same rows
+    IMPORTANT: Uses "Tên Trưởng ca" column (with names) not "Trưởng ca" column (with codes)
     """
-    # Find the leader column - handle renamed columns
-    leader_column = None
+    # Find the leader NAME column specifically (Tên Trưởng ca) - prioritize this over codes
+    leader_name_column = None
+    leader_code_column = None
+    
     for col in aql_data.columns:
-        if any(leader_name in col for leader_name in ['Tên Trường ca', 'Trưởng ca', 'Tên Trưởng ca', 'TruongCa']):
-            leader_column = col
-            break
+        col_lower = col.lower()
+        if 'tên trưởng ca' in col_lower or 'ten truong ca' in col_lower:
+            leader_name_column = col
+        elif ('trưởng ca' in col_lower or 'truong ca' in col_lower) and 'tên' not in col_lower:
+            leader_code_column = col
     
     # Find the QA column
     qa_column = None
@@ -358,12 +363,25 @@ def create_leader_mapping(aql_data):
             qa_column = col
             break
     
-    if not leader_column or not qa_column:
-        print(f"Warning: Could not find both QA column ({qa_column}) and leader column ({leader_column})")
+    print(f"Found columns:")
+    print(f"  QA column: {qa_column}")
+    print(f"  Leader NAME column (Tên Trưởng ca): {leader_name_column}")
+    print(f"  Leader CODE column (Trưởng ca): {leader_code_column}")
+    
+    # Use the name column if available, otherwise fall back to code column
+    if leader_name_column:
+        leader_column = leader_name_column
+        print(f"✓ Using leader NAME column: {leader_column}")
+    elif leader_code_column:
+        leader_column = leader_code_column
+        print(f"⚠ Using leader CODE column: {leader_column} (names not found)")
+    else:
+        print("❌ No leader column found")
         return {}
     
-    print(f"Using leader column: {leader_column}")
-    print(f"Using QA column: {qa_column}")
+    if not qa_column:
+        print("❌ No QA column found")
+        return {}
     
     # Create mapping by examining actual data relationships
     leader_mapping = {}
@@ -377,23 +395,15 @@ def create_leader_mapping(aql_data):
         leader_val = row[leader_column]
         print(f"  QA: '{qa_val}' -> Leader: '{leader_val}'")
         
-        # Store the mapping (leader_val might be a code that we want to map to the actual name)
+        # Store the mapping (keep original values since we're now using the name column)
         leader_mapping[str(leader_val)] = str(leader_val)
     
-    # Now let's see if there are any patterns where we need to map codes to names
-    # Look for rows where the leader might be a single character (like 'A', 'B') 
-    # but we want to use the actual name from other rows
-    unique_leaders = aql_data[leader_column].dropna().unique()
-    name_values = [str(val) for val in unique_leaders if len(str(val)) > 1 and not str(val).isdigit()]
-    code_values = [str(val) for val in unique_leaders if len(str(val)) == 1 and str(val).isalpha()]
-    
-    print(f"\nDetected leader names: {name_values}")
-    print(f"Detected leader codes: {code_values}")
-    
-    # If we have both codes and names, we need to figure out the mapping
-    # For now, keep the mapping as-is since we're directly using the values from the AQL data
-    # The user said the issue is that "B" should map to "Nghị", which means
-    # the AQL data should already contain "Nghị" in the leader column where appropriate
+    # If we're using the name column, we don't need complex mapping
+    # If we're using the code column, we might need to create mappings from codes to names
+    if leader_name_column:
+        print(f"\n✓ Using actual names from {leader_name_column}, no mapping needed")
+    else:
+        print(f"\n⚠ Using codes from {leader_code_column}, might need mapping logic")
     
     print(f"Final leader mapping: {leader_mapping}")
     return leader_mapping
@@ -413,18 +423,37 @@ def find_qa_and_leader(row, aql_data, leader_mapping=None):
             qa_column = col
             break
 
-    # Check for leader column - handle different possible names including renamed ones
-    leader_column = None
+    # Check for leader column - prioritize "Tên Trưởng ca" (names) over "Trưởng ca" (codes)
+    leader_name_column = None
+    leader_code_column = None
+    
     for col in aql_data.columns:
-        if any(leader_name in col for leader_name in ['Tên Trường ca', 'Trưởng ca', 'Tên Trưởng ca', 'TruongCa']):
-            leader_column = col
-            break
+        col_lower = col.lower()
+        if 'tên trưởng ca' in col_lower or 'ten truong ca' in col_lower:
+            leader_name_column = col
+        elif ('trưởng ca' in col_lower or 'truong ca' in col_lower) and 'tên' not in col_lower:
+            leader_code_column = col
+    
+    # Use the name column if available, otherwise fall back to code column
+    if leader_name_column:
+        leader_column = leader_name_column
+    elif leader_code_column:
+        leader_column = leader_code_column
+    else:
+        leader_column = None
 
     if not qa_column:
         return None, None, f"QA column not found in AQL data. Available columns: {list(aql_data.columns)}"
 
     if not leader_column:
         return None, None, f"Leader column not found in AQL data. Available columns: {list(aql_data.columns)}"
+    
+    # Debug info about which columns we're using
+    debug_parts = []
+    if leader_name_column:
+        debug_parts.append(f"Using QA column: {qa_column}, Leader NAME column: {leader_column}")
+    else:
+        debug_parts.append(f"Using QA column: {qa_column}, Leader CODE column: {leader_column}")
 
     # Convert Line_extracted to proper integer for comparison
     complaint_line = row['Line_extracted']
@@ -829,7 +858,7 @@ def main():
             print()
     
     # Specific debugging for the mentioned tickets
-    problem_tickets = ['13757', '13694']  # Updated ticket numbers based on debug data
+    problem_tickets = ['13757', '13694', '13677', '13725']  # Updated with more examples from debug data
     for ticket in problem_tickets:
         ticket_rows = knkh_df[knkh_df['Mã ticket'].astype(str).str.contains(ticket, na=False)]
         if not ticket_rows.empty:
@@ -841,6 +870,8 @@ def main():
                 print(f"  Line: {row['Line_extracted']}")
                 print(f"  Time: {row['Giờ_extracted']} -> parsed: {row['Giờ_time']}")
                 print(f"  Shift: {row['Shift']}")
+                print(f"  QA matched: {row['QA_matched']}")
+                print(f"  Leader matched: {row['Tên Trưởng ca_matched']}")
                 
                 # Check if this should trigger a date adjustment
                 if row['Giờ_time'] is not None:
@@ -859,16 +890,6 @@ def main():
                         print(f"  -> No date adjustment needed")
                 
                 print(f"  Current Debug: {row['debug_info']}")
-                
-                # Check if there are any AQL records for this date
-                date_matches = aql_df[aql_df['Ngày SX_std'] == row['Ngày SX_std']]
-                print(f"  AQL records for original date: {len(date_matches)}")
-                if len(date_matches) > 0:
-                    print(f"  Available items on original date: {sorted(date_matches['Item_clean'].unique())}")
-                    item_matches = date_matches[date_matches['Item_clean'] == row['Item_clean']]
-                    print(f"  AQL records for original date+item: {len(item_matches)}")
-                    if len(item_matches) > 0:
-                        print(f"  Available lines for original date+item: {sorted(item_matches['Line'].unique())}")
                 print()
 
     # Format dates for Power BI (MM/DD/YYYY)
