@@ -332,16 +332,18 @@ def create_leader_mapping(aql_data):
     This ensures both QA and leader come from the same row in the AQL data
     Creates a mapping from leader IDs to leader names based on the data in the AQL sheet
     """
-    # Find the leader column
+    # Find the leader column - handle renamed columns
     leader_column = None
-    for col in ['Tên Trường ca', 'Trưởng ca', 'Tên Trưởng ca', 'TruongCa']:
-        if col in aql_data.columns:
+    for col in aql_data.columns:
+        if any(leader_name in col for leader_name in ['Tên Trường ca', 'Trưởng ca', 'Tên Trưởng ca', 'TruongCa']):
             leader_column = col
             break
     
     if not leader_column:
         print("Warning: No leader column found")
         return {}
+    
+    print(f"Using leader column: {leader_column}")
     
     # Get all unique values in the leader column
     unique_leaders = aql_data[leader_column].dropna().unique()
@@ -385,30 +387,32 @@ def create_leader_mapping(aql_data):
 def find_qa_and_leader(row, aql_data, leader_mapping=None):
     """
     Improved function to match QA and leader from the AQL data sheet
-    with support for leader ID to name mapping
+    with support for leader ID to name mapping and renamed columns
     """
     if pd.isna(row['Ngày SX_std']) or row['Item_clean'] == '' or row['Giờ_time'] is None:
         return None, None, "Missing required data"
 
-    # Check for QA column - handle different possible names
+    # Check for QA column - handle different possible names including renamed ones
     qa_column = None
-    for col in ['QA', 'QA ', ' QA', 'QA  ']:
-        if col in aql_data.columns:
+    for col in aql_data.columns:
+        if col == 'QA' or col.startswith('QA'):
             qa_column = col
             break
 
-    # Check for leader column - handle different possible names
+    # Check for leader column - handle different possible names including renamed ones
     leader_column = None
-    for col in ['Tên Trường ca', 'Trưởng ca', 'Tên Trưởng ca', 'TruongCa']:
-        if col in aql_data.columns:
+    for col in aql_data.columns:
+        if any(leader_name in col for leader_name in ['Tên Trường ca', 'Trưởng ca', 'Tên Trưởng ca', 'TruongCa']):
             leader_column = col
             break
 
     if not qa_column:
-        return None, None, f"QA column not found in AQL data"
+        return None, None, f"QA column not found in AQL data. Available columns: {list(aql_data.columns)}"
 
     if not leader_column:
-        return None, None, f"Leader column not found in AQL data"
+        return None, None, f"Leader column not found in AQL data. Available columns: {list(aql_data.columns)}"
+
+    print(f"Using QA column: {qa_column}, Leader column: {leader_column}")
 
     # 1. Filter AQL data for the same date, item, and line
     matching_rows = aql_data[
@@ -670,7 +674,34 @@ def main():
 
     # Parse time
     knkh_df['Giờ_time'] = knkh_df['Giờ_extracted'].apply(parse_time)
-    aql_df['Giờ_time'] = aql_df['Giờ'].apply(parse_time)
+    
+    # Find the correct Giờ column in AQL data (handle renamed columns)
+    gio_column = None
+    for col in aql_df.columns:
+        if col.startswith('Giờ') or col == 'Giờ':
+            gio_column = col
+            break
+    
+    if gio_column:
+        aql_df['Giờ_time'] = aql_df[gio_column].apply(parse_time)
+        print(f"Using time column: {gio_column}")
+    else:
+        print("Warning: No time column found in AQL data")
+        aql_df['Giờ_time'] = None
+
+    # Also ensure Line column is properly handled in AQL data
+    line_column = None
+    for col in aql_df.columns:
+        if col == 'Line' or col.startswith('Line'):
+            line_column = col
+            break
+    
+    if line_column and line_column != 'Line':
+        # Rename to standard 'Line' for easier processing
+        aql_df['Line'] = aql_df[line_column]
+        print(f"Using line column: {line_column}")
+    elif not line_column:
+        print("Warning: No Line column found in AQL data")
 
     # Round time to 2-hour intervals
     knkh_df['Giờ_rounded'] = knkh_df['Giờ_time'].apply(round_to_2hour)
@@ -689,12 +720,20 @@ def main():
     knkh_df['debug_info'] = None
 
     print("Starting matching process...")
+    total_matched = 0
     for idx, row in knkh_df.iterrows():
         qa, leader, debug_info = find_qa_and_leader(row, aql_df, leader_mapping)
         knkh_df.at[idx, 'QA_matched'] = qa
         knkh_df.at[idx, 'Tên Trưởng ca_matched'] = leader
         knkh_df.at[idx, 'debug_info'] = debug_info
-    print("Matching process complete")
+        if qa is not None:
+            total_matched += 1
+        
+        # Print progress every 50 rows
+        if (idx + 1) % 50 == 0:
+            print(f"Processed {idx + 1} rows, {total_matched} matched so far")
+    
+    print(f"Matching process complete. Total matched: {total_matched} out of {len(knkh_df)} rows")
 
     # Format dates for Power BI (MM/DD/YYYY)
     knkh_df['Ngày tiếp nhận_formatted'] = knkh_df['Ngày tiếp nhận_std'].apply(format_date_mm_dd_yyyy)
