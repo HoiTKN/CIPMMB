@@ -52,11 +52,6 @@ def extract_short_product_name(full_name):
     """
     Extract a shorter version of the product name that includes only brand name (Omachi/Kokomi)
     and the flavor, excluding packaging information.
-    
-    Examples:
-    "Mì dinh dưỡng khoai tây Omachi mì trộn xốt Spaghetti 30gói x 90gr" -> "Omachi mì trộn xốt Spaghetti"
-    "Mì dinh dưỡng khoai tây Omachi Sườn hầm ngũ quả 30gói x 80gr" -> "Omachi Sườn hầm ngũ quả"
-    "Mì Kokomi Pro canh chua tôm 30gói x 82gr" -> "Kokomi Pro canh chua tôm"
     """
     if pd.isna(full_name) or full_name == '':
         return ''
@@ -147,9 +142,6 @@ def extract_production_info(text):
     """
     Extract production information from text with corrected line and machine logic.
     Returns (time, line, machine) tuple.
-    
-    Important: Line numbers can only be 1-8.
-    If a two-digit number is found, the first digit is the line, and the second is the machine.
     """
     if not isinstance(text, str):
         return None, None, None
@@ -328,9 +320,8 @@ def determine_shift(time_obj):
 
 def create_leader_mapping(aql_data):
     """
-    Revised function to match QA and leader from the AQL data sheet
-    This ensures both QA and leader come from the same row in the AQL data
     Creates a mapping from leader IDs to leader names based on the data in the AQL sheet
+    Handles renamed columns due to duplicate headers
     """
     # Find the leader column - handle renamed columns
     leader_column = None
@@ -411,8 +402,6 @@ def find_qa_and_leader(row, aql_data, leader_mapping=None):
 
     if not leader_column:
         return None, None, f"Leader column not found in AQL data. Available columns: {list(aql_data.columns)}"
-
-    print(f"Using QA column: {qa_column}, Leader column: {leader_column}")
 
     # 1. Filter AQL data for the same date, item, and line
     matching_rows = aql_data[
@@ -734,6 +723,21 @@ def main():
             print(f"Processed {idx + 1} rows, {total_matched} matched so far")
     
     print(f"Matching process complete. Total matched: {total_matched} out of {len(knkh_df)} rows")
+    
+    # Show some sample matches for debugging
+    matched_rows = knkh_df[knkh_df['QA_matched'].notna()]
+    if len(matched_rows) > 0:
+        print("\nSample matched records:")
+        for idx in matched_rows.head(3).index:
+            row = knkh_df.loc[idx]
+            print(f"Ticket {row['Mã ticket']}: Date={row['Ngày SX']}, Item={row['Item']}, Line={row['Line_extracted']}, Time={row['Giờ_extracted']} -> QA={row['QA_matched']}, Leader={row['Tên Trưởng ca_matched']}")
+    
+    unmatched_rows = knkh_df[knkh_df['QA_matched'].isna()]
+    if len(unmatched_rows) > 0:
+        print(f"\nSample unmatched records ({len(unmatched_rows)} total):")
+        for idx in unmatched_rows.head(3).index:
+            row = knkh_df.loc[idx]
+            print(f"Ticket {row['Mã ticket']}: Date={row['Ngày SX']}, Item={row['Item']}, Line={row['Line_extracted']}, Time={row['Giờ_extracted']} -> Debug: {row['debug_info']}")
 
     # Format dates for Power BI (MM/DD/YYYY)
     knkh_df['Ngày tiếp nhận_formatted'] = knkh_df['Ngày tiếp nhận_std'].apply(format_date_mm_dd_yyyy)
