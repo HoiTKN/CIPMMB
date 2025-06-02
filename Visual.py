@@ -719,45 +719,67 @@ def main():
     available_columns = [col for col in required_output_columns if col in id_aql_df.columns]
     existing_aql_df = id_aql_df[available_columns].copy()
     
-    # COMPREHENSIVE VHM INCLUSION LOGIC WITH COMPLETE PRODUCTION DATA
-    print("Creating comprehensive dataset with all VHMs from Sample ID sheet...")
+    # REVISED COMPREHENSIVE VHM INCLUSION LOGIC
+    print("Creating comprehensive dataset with ALL existing defect records plus zero-defect VHM records...")
     
-    # Create comprehensive dataset starting from Sample ID data
+    # Start with ALL existing AQL records (both with and without VHM)
     comprehensive_rows = []
     
-    # Process each sample ID record to ensure VHM inclusion
-    for _, sample_row in sample_id_df.iterrows():
-        try:
-            # Get basic sample information
-            vhm_name = sample_row.get('VHM', '')
-            if not vhm_name or vhm_name == '':
-                continue
+    # Step 1: Add ALL existing AQL records to the comprehensive dataset
+    print(f"Step 1: Adding all {len(existing_aql_df)} existing AQL records...")
+    for _, aql_row in existing_aql_df.iterrows():
+        comprehensive_rows.append(aql_row)
+    
+    print(f"Added {len(existing_aql_df)} existing AQL records (both with and without VHM)")
+    
+    # Step 2: Identify VHMs that don't have any defect records and create zero-defect records for them
+    print("Step 2: Identifying VHMs without defect records...")
+    
+    # Get all unique VHMs from sample_id_df
+    all_vhms = set(sample_id_df['VHM'].dropna().unique())
+    
+    # Get all VHMs that already have defect records (non-zero quantities)
+    existing_vhms_with_defects = set(existing_aql_df[
+        (existing_aql_df['VHM'] != '') & 
+        (existing_aql_df['VHM'].notna()) &
+        (existing_aql_df['Số lượng hold ( gói/thùng)'].notna()) & 
+        (existing_aql_df['Số lượng hold ( gói/thùng)'] != '') &
+        (pd.to_numeric(existing_aql_df['Số lượng hold ( gói/thùng)'], errors='coerce') > 0)
+    ]['VHM'].unique())
+    
+    # VHMs that need zero-defect records
+    vhms_needing_zero_defect_records = all_vhms - existing_vhms_with_defects
+    
+    print(f"Total VHMs in sample data: {len(all_vhms)}")
+    print(f"VHMs already with defect records: {len(existing_vhms_with_defects)}")
+    print(f"VHMs needing zero-defect records: {len(vhms_needing_zero_defect_records)}")
+    
+    # Step 3: Create zero-defect records for VHMs that don't have any defect records
+    if vhms_needing_zero_defect_records:
+        print("Step 3: Creating zero-defect records for VHMs without defects...")
+        
+        for vhm_name in vhms_needing_zero_defect_records:
+            try:
+                # Find the sample record for this VHM
+                vhm_sample_records = sample_id_df[sample_id_df['VHM'] == vhm_name]
                 
-            sample_date = standardize_date(sample_row.get('Ngày SX', ''))
-            if sample_date is None:
-                continue
+                if vhm_sample_records.empty:
+                    continue
                 
-            sample_ca = sample_row.get('Ca', '')
-            sample_line = sample_row.get('Line', '')
-            sample_mdg = sample_row.get('MĐG', '')
-            sample_vhm_value = sample_row.get('VHM', '')
-            sample_hao_hut = sample_row.get('% Hao hụt OPP', '')
-            
-            # Check if this VHM already has AQL data (defects) in existing_aql_df
-            matching_aql_records = existing_aql_df[
-                (existing_aql_df['VHM'] == vhm_name) & 
-                (existing_aql_df['Số lượng hold ( gói/thùng)'].notna()) & 
-                (existing_aql_df['Số lượng hold ( gói/thùng)'] != '') &
-                (existing_aql_df['Số lượng hold ( gói/thùng)'] != 0)
-            ]
-            
-            if not matching_aql_records.empty:
-                # VHM has defect records, add all of them
-                for _, aql_row in matching_aql_records.iterrows():
-                    comprehensive_rows.append(aql_row)
-                print(f"Added {len(matching_aql_records)} defect records for VHM: {vhm_name}")
-            else:
-                # VHM has no defect records, create a comprehensive zero-defect record
+                # Use the first sample record for this VHM
+                sample_row = vhm_sample_records.iloc[0]
+                
+                # Get basic sample information
+                sample_date = standardize_date(sample_row.get('Ngày SX', ''))
+                if sample_date is None:
+                    continue
+                    
+                sample_ca = sample_row.get('Ca', '')
+                sample_line = sample_row.get('Line', '')
+                sample_mdg = sample_row.get('MĐG', '')
+                sample_vhm_value = sample_row.get('VHM', '')
+                sample_hao_hut = sample_row.get('% Hao hụt OPP', '')
+                
                 print(f"Creating zero-defect record for VHM: {vhm_name}")
                 
                 # Find representative production data for this VHM's shift/line/MĐG
@@ -823,11 +845,11 @@ def main():
                         representative_record[col] = ''
                 
                 comprehensive_rows.append(pd.Series(representative_record))
-                print(f"  Successfully created comprehensive zero-defect record for VHM: {vhm_name}")
+                print(f"  Successfully created zero-defect record for VHM: {vhm_name}")
                 
-        except Exception as e:
-            print(f"Error processing sample row for VHM inclusion: {e}")
-            continue
+            except Exception as e:
+                print(f"Error creating zero-defect record for VHM {vhm_name}: {e}")
+                continue
     
     # Create comprehensive dataframe
     if comprehensive_rows:
@@ -838,19 +860,35 @@ def main():
         comprehensive_df = comprehensive_df.reindex(columns=available_columns, fill_value='')
         
         print(f"Comprehensive dataset created with {len(comprehensive_df)} total records")
-        print(f"Unique VHMs in comprehensive dataset: {len(comprehensive_df['VHM'].dropna().unique())}")
+        
+        # Show statistics
+        total_records = len(comprehensive_df)
+        records_with_vhm = len(comprehensive_df[
+            (comprehensive_df['VHM'] != '') & 
+            (comprehensive_df['VHM'].notna())
+        ])
+        records_without_vhm = total_records - records_with_vhm
+        unique_vhms = len(comprehensive_df['VHM'].dropna().unique())
+        
+        print(f"Final dataset statistics:")
+        print(f"  Total records: {total_records}")
+        print(f"  Records with VHM: {records_with_vhm}")
+        print(f"  Records without VHM: {records_without_vhm}")
+        print(f"  Unique VHMs: {unique_vhms}")
         
         # Show VHM distribution
-        vhm_counts = comprehensive_df['VHM'].value_counts()
+        vhm_counts = comprehensive_df[comprehensive_df['VHM'] != '']['VHM'].value_counts()
         print("VHM distribution in final dataset:")
-        for vhm, count in vhm_counts.items():
+        for vhm, count in vhm_counts.head(10).items():
             defect_count = len(comprehensive_df[
                 (comprehensive_df['VHM'] == vhm) & 
-                (comprehensive_df['Số lượng hold ( gói/thùng)'] != 0) &
-                (comprehensive_df['Số lượng hold ( gói/thùng)'] != '')
+                (pd.to_numeric(comprehensive_df['Số lượng hold ( gói/thùng)'], errors='coerce') > 0)
             ])
             zero_defect_count = count - defect_count
             print(f"  {vhm}: {count} records ({defect_count} with defects, {zero_defect_count} zero-defect)")
+        
+        if len(vhm_counts) > 10:
+            print(f"  ... and {len(vhm_counts) - 10} more VHMs")
         
         new_df = comprehensive_df
     else:
@@ -890,7 +928,7 @@ def main():
         print(f"Successfully wrote {len(data_to_write)-1} rows to the destination sheet, sorted by Ngày SX (newest first)")
         print(f"Added VHM and % Hao hụt OPP columns based on Ngày SX, Ca, Line, MĐG mapping")
         print(f"Improved handling of comma-separated MĐG values (e.g., '1,2' or '3,4')")
-        print(f"Comprehensive VHM inclusion with complete production data for zero-defect records")
+        print(f"Comprehensive dataset includes ALL defect records (with and without VHM) plus zero-defect VHM records")
         
         # Format the worksheet as a table
         format_as_table(processed_worksheet)
