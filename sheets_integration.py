@@ -1,11 +1,12 @@
 import pandas as pd
+import re
+from datetime import datetime, time
 import gspread
 import os
 import sys
-import time
+import json
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-from datetime import datetime, time
 
 # Define the scopes
 SCOPES = [
@@ -14,7 +15,7 @@ SCOPES = [
 ]
 
 def authenticate():
-    """Authentication using OAuth token"""
+    """Authentication using OAuth token - exactly matching your other scripts"""
     try:
         print("Starting OAuth authentication process...")
         creds = None
@@ -118,518 +119,734 @@ def get_sheet_data_robust(worksheet, sheet_name="Unknown"):
         print(f"Error retrieving data from {sheet_name}: {str(e)}")
         return []
 
-def get_day_of_month(date):
-    """Extract day from date"""
-    if pd.isna(date) or date is None:
-        return None
-    return date.day
+def extract_short_product_name(full_name):
+    """
+    Extract a shorter version of the product name that includes only brand name (Omachi/Kokomi)
+    and the flavor, excluding packaging information.
+    
+    Examples:
+    "Mì dinh dưỡng khoai tây Omachi mì trộn xốt Spaghetti 30gói x 90gr" -> "Omachi mì trộn xốt Spaghetti"
+    "Mì dinh dưỡng khoai tây Omachi Sườn hầm ngũ quả 30gói x 80gr" -> "Omachi Sườn hầm ngũ quả"
+    "Mì Kokomi Pro canh chua tôm 30gói x 82gr" -> "Kokomi Pro canh chua tôm"
+    """
+    if pd.isna(full_name) or full_name == '':
+        return ''
+    
+    full_name = str(full_name).strip()
+    
+    # Pattern to match brand names (Omachi or Kokomi)
+    brand_pattern = r'(Omachi|Kokomi)'
+    brand_match = re.search(brand_pattern, full_name)
+    
+    if not brand_match:
+        return full_name  # Return original if no brand match
+    
+    # Get the start position of brand name
+    start_pos = brand_match.start()
+    
+    # Pattern to match packaging information (e.g., "30gói x 90gr")
+    pkg_pattern = r'\d+\s*gói\s*x\s*\d+\s*gr'
+    pkg_match = re.search(pkg_pattern, full_name)
+    
+    if pkg_match:
+        # End position is where packaging info starts
+        end_pos = pkg_match.start()
+        # Extract text between brand name and packaging info
+        short_name = full_name[start_pos:end_pos].strip()
+    else:
+        # If no packaging info, use rest of string after brand
+        short_name = full_name[start_pos:].strip()
+    
+    return short_name
 
-def get_week_number(date):
-    """Extract week number from date"""
-    if pd.isna(date) or date is None:
-        return None
-    return date.isocalendar()[1]
+def clean_concatenated_dates(date_str):
+    """
+    Clean concatenated dates like '11/04/202511/04/202511/04/2025'
+    Returns the first valid date found
+    """
+    if not isinstance(date_str, str):
+        return date_str
+    
+    # Regular expression to find date patterns in DD/MM/YYYY format
+    date_pattern = r'(\d{1,2}/\d{1,2}/\d{4})'
+    matches = re.findall(date_pattern, date_str)
+    
+    if matches:
+        # Return the first date that parses correctly
+        for match in matches:
+            try:
+                parsed_date = pd.to_datetime(match, format='%d/%m/%Y', dayfirst=True)
+                # Current date as reference
+                current_date = datetime.now()
+                # If date is not more than 1 year in the future, consider it valid
+                if parsed_date <= current_date + pd.Timedelta(days=365):
+                    return match
+            except:
+                continue
+        
+        # If no valid dates found based on future check, return the first match
+        return matches[0]
+    
+    # If no DD/MM/YYYY pattern found, try different patterns
+    # DD-MM-YYYY
+    date_pattern = r'(\d{1,2}-\d{1,2}-\d{4})'
+    matches = re.findall(date_pattern, date_str)
+    if matches:
+        return matches[0]
+    
+    # Try to extract first 10 characters if they look like a date
+    if len(date_str) >= 10 and ('/' in date_str[:10] or '-' in date_str[:10]):
+        return date_str[:10]
+    
+    return date_str
 
-def get_month_number(date):
-    """Extract month number from date"""
-    if pd.isna(date) or date is None:
+def extract_correct_date(text):
+    """Extract the correct Ngày SX from Nội dung phản hồi"""
+    if not isinstance(text, str):
         return None
-    return date.month
+    
+    # Pattern to find "Ngày SX: DD/MM/YYYY"
+    pattern = r'Ngày SX:\s*(\d{1,2}/\d{1,2}/\d{4})'
+    match = re.search(pattern, text)
+    
+    if match:
+        return match.group(1)  # Return the date exactly as it appears in the text
+    
+    return None
+
+def extract_production_info(text):
+    """
+    Extract production information from text with corrected line and machine logic.
+    Returns (time, line, machine) tuple.
+    
+    Important: Line numbers can only be 1-8.
+    If a two-digit number is found, the first digit is the line, and the second is the machine.
+    """
+    if not isinstance(text, str):
+        return None, None, None
+    
+    # Clean and standardize the text
+    text = text.strip()
+    
+    # Capture the entire content inside parentheses after "Nơi SX: I-MBP"
+    parenthesis_pattern = r'Nơi SX:\s*I-MBP\s*\((.*?)\)'
+    parenthesis_match = re.search(parenthesis_pattern, text)
+    
+    if not parenthesis_match:
+        return None, None, None
+    
+    # Get the content inside parentheses
+    content = parenthesis_match.group(1).strip()
+    
+    # Extract time if present
+    time_match = re.search(r'(\d{1,2}:\d{1,2})', content)
+    time_str = time_match.group(1) if time_match else None
+    
+    # Remove time part if found to simplify the remaining content
+    if time_str:
+        content = content.replace(time_str, '').strip()
+    
+    # Find numeric sequences
+    numbers = re.findall(r'\d+', content)
+    
+    if not numbers:
+        return time_str, None, None
+    
+    # Process the numbers found
+    line = None
+    machine = None
+    
+    for num_str in numbers:
+        if len(num_str) == 1:
+            # If it's a single digit (e.g., "8I"), it's likely just the line
+            if 1 <= int(num_str) <= 8:
+                line = num_str
+        elif len(num_str) >= 2:
+            # For two or more digits (e.g., "24I" or "81I06")
+            if int(num_str[0]) <= 8:
+                # The first digit is the line
+                line = num_str[0]
+                # The second digit is the machine
+                machine = num_str[1]
+    
+    # If no line was found through the normal patterns, try a last resort approach
+    if line is None:
+        # Look for patterns like "2I" or "8I"
+        line_match = re.search(r'([1-8])I', content)
+        if line_match:
+            line = line_match.group(1)
+    
+    # Special handling for patterns like "21I" where we interpret as line 2, machine 1
+    digit_sequence_match = re.search(r'(\d)(\d)I', content)
+    if digit_sequence_match:
+        line = digit_sequence_match.group(1)  # First digit as line
+        machine = digit_sequence_match.group(2)  # Second digit as machine
+    
+    return time_str, line, machine
 
 def standardize_date(date_str):
-    """Convert date string to datetime object"""
     try:
         if isinstance(date_str, str):
+            # Handle DD-MMM-YYYY format (e.g., "4-Apr-2025")
+            if '-' in date_str:
+                try:
+                    for fmt in ['%d-%b-%Y', '%d-%B-%Y', '%d-%b-%y', '%d-%B-%y']:
+                        try:
+                            return pd.to_datetime(date_str, format=fmt)
+                        except:
+                            pass
+                except:
+                    pass
+
             # Handle DD/MM/YYYY format
             if '/' in date_str:
                 try:
-                    return pd.to_datetime(date_str, format='%d/%m/%Y', dayfirst=True)
+                    return pd.to_datetime(date_str, format='%d/%m/%Y')
                 except:
                     pass
-            # Try pandas default parsing with dayfirst=True
-            return pd.to_datetime(date_str, dayfirst=True)
+
+            # Last resort: Let pandas try to detect
+            return pd.to_datetime(date_str, format='mixed', dayfirst=True)
+
         return pd.to_datetime(date_str)
     except:
         return None
 
-def parse_hour(hour_str):
-    """Extract hour from hour string"""
-    if pd.isna(hour_str) or not isinstance(hour_str, str):
+def format_date_mm_dd_yyyy(date_obj):
+    """Format a date object to MM/DD/YYYY string format for Power BI"""
+    if pd.isna(date_obj) or date_obj is None:
+        return None
+    return date_obj.strftime('%m/%d/%Y')
+
+def extract_month(date_obj):
+    """Extract month from a datetime object"""
+    if pd.isna(date_obj) or date_obj is None:
+        return None
+    return date_obj.month
+
+def extract_year(date_obj):
+    """Extract year from a datetime object"""
+    if pd.isna(date_obj) or date_obj is None:
+        return None
+    return date_obj.year
+
+def extract_week(date_obj):
+    """Extract ISO week number from a datetime object"""
+    if pd.isna(date_obj) or date_obj is None:
+        return None
+    return date_obj.isocalendar()[1]  # Returns the ISO week number
+
+def clean_item_code(item_code):
+    if pd.isna(item_code) or item_code == '':
+        return ''
+    
+    # Convert to string, remove spaces, and standardize
+    item_str = str(item_code).strip()
+    return item_str
+
+def parse_time(time_str):
+    if pd.isna(time_str) or time_str == '':
         return None
     
-    # Clean the input
-    hour_str = hour_str.lower().strip()
+    time_str = str(time_str).strip().lower()
     
-    # Handle different formats
-    if 'h' in hour_str:
-        try:
-            # Extract hour part before 'h'
-            hour_part = hour_str.split('h')[0]
-            return int(hour_part)
-        except:
-            pass
-    
-    # Handle format like '14:00'
-    if ':' in hour_str:
-        try:
-            hour_part = hour_str.split(':')[0]
-            return int(hour_part)
-        except:
-            pass
-    
-    # Try direct conversion if it's just a number
     try:
-        return int(hour_str)
+        # Handle HH:MM format
+        if ':' in time_str:
+            hours, minutes = map(int, time_str.split(':'))
+            return time(hours, minutes)
+        
+        # Handle "22h" format
+        elif 'h' in time_str:
+            hours = int(time_str.replace('h', ''))
+            return time(hours, 0)
+        
+        # Try to parse as simple hour
+        else:
+            try:
+                hours = int(time_str)
+                return time(hours, 0)
+            except:
+                return None
     except:
         return None
 
-def determine_shift(hour):
-    """Determine shift (Ca) based on hour"""
-    if hour is None:
+def round_to_2hour(t):
+    if t is None:
         return None
     
-    if 6 <= hour < 14:
+    hour = t.hour
+    # Round down to nearest even hour
+    rounded_hour = (hour // 2) * 2
+    return time(rounded_hour, 0)
+
+def determine_shift(time_obj):
+    """Modified to return just the shift number (1, 2, or 3) for Power BI"""
+    if time_obj is None:
+        return None
+    
+    # Create time boundaries
+    shift1_start = time(6, 30)
+    shift1_end = time(14, 30)
+    shift2_end = time(22, 30)
+    
+    if shift1_start <= time_obj < shift1_end:
         return 1
-    elif 14 <= hour < 22:
+    elif shift1_end <= time_obj < shift2_end:
         return 2
     else:
         return 3
 
-def get_target_tv(line):
-    """Determine Target TV based on Line number"""
-    if pd.isna(line):
-        return None
+def create_leader_mapping(aql_data):
+    """
+    Creates a mapping from leader IDs to leader names based on the data in the AQL sheet
+    """
+    # Find the leader column
+    leader_column = None
+    for col in ['Tên Trường ca', 'Trưởng ca', 'Tên Trưởng ca', 'TruongCa']:
+        if col in aql_data.columns:
+            leader_column = col
+            break
     
-    try:
-        line_num = float(line)
-        if 1 <= line_num <= 6:
-            return 0.29
-        elif 7 <= line_num <= 8:
-            return 2.19
-        else:
-            return None
-    except (ValueError, TypeError):
-        return None
-
-def format_as_table(worksheet):
-    """Format worksheet as a table for Power BI"""
-    try:
-        print("Applying table formatting...")
-        time.sleep(2)  # Add delay to avoid rate limits
-        
-        # Get the number of rows and columns
-        rows = worksheet.row_count
-        cols = worksheet.col_count
-        
-        # Only format header row to minimize API calls
-        worksheet.format("A1:Z1", {
-            "backgroundColor": {"red": 0.2, "green": 0.4, "blue": 0.8},
-            "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}}
-        })
-        
-        print("Successfully applied header formatting")
-        
-    except Exception as e:
-        print(f"Warning: Could not apply table formatting (this is non-critical): {str(e)}")
-        # Continue without formatting - this won't affect the data
-
-def create_mapping_key_with_hour_logic(row, sample_id_df):
-    """Create a mapping key considering extended shift logic and MĐG grouping based on actual working hours"""
-    try:
-        # Standardize the date
-        date_std = standardize_date(row['Ngày SX'])
-        if date_std is None:
-            return None
-        
-        date_key = date_std.strftime('%d/%m/%Y')
-        
-        # Parse hour from the main AQL data
-        hour = parse_hour(row.get('Giờ', ''))
-        if hour is None:
-            return None
+    if not leader_column:
+        print("Warning: No leader column found")
+        return {}
+    
+    # Get all unique values in the leader column
+    unique_leaders = aql_data[leader_column].dropna().unique()
+    print(f"Found {len(unique_leaders)} unique leader values")
+    
+    # Determine which values are numeric (likely IDs) and which are names
+    leader_mapping = {}
+    numeric_values = []
+    name_values = []
+    
+    for value in unique_leaders:
+        if value is None:
+            continue
             
-        line = int(float(row['Line'])) if pd.notna(row['Line']) else None
-        mdg = int(float(row['MĐG'])) if pd.notna(row['MĐG']) else None
-        
-        if line is None or mdg is None:
-            return None
-        
-        # Determine which shift codes to look for based on the hour
-        # Priority order: normal shift first, then extended shifts as fallback
-        possible_shift_codes = []
-        
-        if 6 <= hour < 14:  # Ca 1 time (6h-14h)
-            possible_shift_codes = [1, 14]  # Ca 1 first, then Ca 14 as fallback
-        elif 14 <= hour < 18:  # Ca 2 time but also covered by Ca 14 (14h-18h)
-            possible_shift_codes = [2, 14]  # Ca 2 first, then Ca 14 as fallback
-        elif 18 <= hour < 22:  # Ca 2 time but also covered by Ca 34 (18h-22h)
-            possible_shift_codes = [2, 34]  # Ca 2 first, then Ca 34 as fallback
-        elif 22 <= hour <= 23:  # Ca 3 time (22h-23h)
-            possible_shift_codes = [3, 34]  # Ca 3 first, then Ca 34 as fallback
-        elif 0 <= hour < 6:  # Ca 3 time (0h-6h)
-            possible_shift_codes = [3, 34]  # Ca 3 first, then Ca 34 as fallback
-        else:
-            # Fallback to normal shift determination
-            ca = determine_shift(hour)
-            if ca:
-                possible_shift_codes = [ca]
-        
-        # Handle MĐG grouping - determine which MĐG values to look for in sample sheet
-        mdg_lookup_values = []
-        if mdg == 2:
-            # MĐG 2 should look for MĐG 1 in sample sheet (since MĐG 1 covers 1,2)
-            mdg_lookup_values = [1, 2]  # Try 1 first, then 2 as fallback
-        elif mdg == 4:
-            # MĐG 4 should look for MĐG 3 in sample sheet (since MĐG 3 covers 3,4)
-            mdg_lookup_values = [3, 4]  # Try 3 first, then 4 as fallback
-        else:
-            mdg_lookup_values = [mdg]
-        
-        # Try to find a match in sample_id_df for any combination of shift codes and MĐG values
-        for shift_code in possible_shift_codes:
-            for lookup_mdg in mdg_lookup_values:
-                # Check if there's a matching record in sample_id_df
-                try:
-                    matching_records = sample_id_df[
-                        (sample_id_df['Ngày SX'].apply(lambda x: standardize_date(x).strftime('%d/%m/%Y') if standardize_date(x) else None) == date_key) &
-                        (sample_id_df['Ca'].astype(str).str.strip() == str(shift_code)) &
-                        (sample_id_df['Line'].astype(str).str.strip() == str(line)) &
-                        (sample_id_df['MĐG'].astype(str).str.strip() == str(lookup_mdg))
-                    ]
-                    
-                    if not matching_records.empty:
-                        # Return the key that will be used for lookup (using original mdg from AQL data)
-                        return (date_key, shift_code, line, mdg)
-                except Exception as e:
-                    continue
-        
-        return None
-        
-    except (ValueError, TypeError, KeyError):
-        return None
-
-def create_simple_mapping_key(row):
-    """Create mapping keys for sample_id_df records, handling MĐG grouping logic"""
-    try:
-        date_std = standardize_date(row['Ngày SX'])
-        if date_std is None:
-            return []
-        
-        date_key = date_std.strftime('%d/%m/%Y')
-        ca = int(float(row['Ca'])) if pd.notna(row['Ca']) else None
-        line = int(float(row['Line'])) if pd.notna(row['Line']) else None
-        mdg = int(float(row['MĐG'])) if pd.notna(row['MĐG']) else None
-        
-        if ca is None or line is None or mdg is None:
-            return []
-        
-        # Handle MĐG grouping logic
-        keys = []
-        if mdg == 1:
-            # MĐG 1 covers both MĐG 1 and MĐG 2
-            keys.append((date_key, ca, line, 1))
-            keys.append((date_key, ca, line, 2))
-        elif mdg == 3:
-            # MĐG 3 covers both MĐG 3 and MĐG 4
-            keys.append((date_key, ca, line, 3))
-            keys.append((date_key, ca, line, 4))
-        else:
-            # For other MĐG values, use as-is
-            keys.append((date_key, ca, line, mdg))
-            
-        # Validate that all keys are properly formed tuples
-        validated_keys = []
-        for key in keys:
-            if isinstance(key, tuple) and len(key) == 4:
-                validated_keys.append(key)
+        # Check if the value might be numeric
+        try:
+            if str(value).isdigit() or isinstance(value, (int, float)):
+                numeric_values.append(value)
             else:
-                print(f"Warning: Invalid key format generated: {key}")
-                
-        return validated_keys
+                name_values.append(value)
+        except:
+            name_values.append(value)
+    
+    print(f"Found {len(numeric_values)} numeric leader values and {len(name_values)} name values")
+    
+    # Simple mapping approach: if there's only one name ("Tài"), map all IDs to it
+    if len(name_values) == 1 and len(numeric_values) > 0:
+        for num_value in numeric_values:
+            leader_mapping[str(num_value)] = name_values[0]
+        print(f"Mapped all numeric values to '{name_values[0]}'")
+    
+    # If we have more names, try to find actual mapping in the data
+    elif len(name_values) > 1:
+        # For now, just map all numeric values to "Tài" as a fallback
+        for num_value in numeric_values:
+            leader_mapping[str(num_value)] = "Tài"
+        print(f"Mapped all numeric values to 'Tài' (fallback)")
+    
+    return leader_mapping
+
+def find_qa_and_leader(row, aql_data, leader_mapping=None):
+    """
+    Improved function to match QA and leader from the AQL data sheet
+    with support for leader ID to name mapping
+    """
+    if pd.isna(row['Ngày SX_std']) or row['Item_clean'] == '' or row['Giờ_time'] is None:
+        return None, None, "Missing required data"
+    
+    # Check for QA column - handle different possible names
+    qa_column = None
+    for col in ['QA', 'QA ', ' QA', 'QA  ']:
+        if col in aql_data.columns:
+            qa_column = col
+            break
+    
+    # Check for leader column - handle different possible names
+    leader_column = None
+    for col in ['Tên Trường ca', 'Trưởng ca', 'Tên Trưởng ca', 'TruongCa']:
+        if col in aql_data.columns:
+            leader_column = col
+            break
+    
+    if not qa_column:
+        return None, None, f"QA column not found in AQL data"
+    
+    if not leader_column:
+        return None, None, f"Leader column not found in AQL data"
+    
+    # 1. Filter AQL data for the same date, item, and line
+    matching_rows = aql_data[
+        (aql_data['Ngày SX_std'] == row['Ngày SX_std']) & 
+        (aql_data['Item_clean'] == row['Item_clean']) &
+        (aql_data['Line'] == row['Line_extracted'])
+    ]
+    
+    if matching_rows.empty:
+        return None, None, f"No matches for date+item+line"
+    
+    # 2. Get the complaint hour and determine which 2-hour intervals to check
+    complaint_hour = row['Giờ_time'].hour
+    complaint_minute = row['Giờ_time'].minute
+    
+    # Determine which QA check hours to look at
+    if complaint_minute == 0 and complaint_hour % 2 == 0:
+        prev_hour = complaint_hour
+        next_hour = (complaint_hour + 2) % 24
+    else:
+        prev_hour = (complaint_hour // 2) * 2
+        next_hour = (prev_hour + 2) % 24
+    
+    # 3. Find QA records at these times
+    prev_check = matching_rows[matching_rows['Giờ_time'].apply(lambda x: x is not None and x.hour == prev_hour and x.minute == 0)]
+    next_check = matching_rows[matching_rows['Giờ_time'].apply(lambda x: x is not None and x.hour == next_hour and x.minute == 0)]
+    
+    debug_info = f"Complaint at {complaint_hour}:{complaint_minute}, checking {prev_hour}h and {next_hour}h"
+    
+    # 4. Apply the matching rules
+    # 4a. First, check if there's data for the preceding hour
+    if not prev_check.empty:
+        prev_qa = prev_check.iloc[0].get(qa_column)
+        prev_leader = prev_check.iloc[0].get(leader_column)
         
-    except (ValueError, TypeError, KeyError) as e:
-        print(f"Warning: Error in create_simple_mapping_key: {e}")
-        return []
+        # Apply leader mapping if provided
+        if leader_mapping and prev_leader is not None:
+            try:
+                # Check if it can be converted to a number
+                if str(prev_leader).isdigit() or isinstance(prev_leader, (int, float)):
+                    mapped_value = leader_mapping.get(str(prev_leader))
+                    if mapped_value:
+                        prev_leader = mapped_value
+                    else:
+                        prev_leader = "Tài"  # Default fallback
+            except:
+                pass
+        
+        # 4b. Check if there's data for the next hour
+        if not next_check.empty:
+            next_qa = next_check.iloc[0].get(qa_column)
+            next_leader = next_check.iloc[0].get(leader_column)
+            
+            # Apply leader mapping if provided
+            if leader_mapping and next_leader is not None:
+                try:
+                    # Check if it can be converted to a number
+                    if str(next_leader).isdigit() or isinstance(next_leader, (int, float)):
+                        mapped_value = leader_mapping.get(str(next_leader))
+                        if mapped_value:
+                            next_leader = mapped_value
+                        else:
+                            next_leader = "Tài"  # Default fallback
+                except:
+                    pass
+            
+            # 4c. If both QA and leader are the same, use them
+            if prev_qa == next_qa and prev_leader == next_leader:
+                return prev_qa, prev_leader, f"{debug_info} | Same QA and leader for both times"
+        
+        # 4d. Determine based on shift if we need to
+        shift = row['Shift']
+        
+        # For times between 22:30-23:59, we use the next hour's QA (from 0h)
+        if shift == 3 and complaint_hour >= 22:
+            if not next_check.empty:
+                return next_qa, next_leader, f"{debug_info} | Using next hour (0h) based on Shift 3 rule"
+        
+        # For all other cases, use the preceding hour's QA
+        return prev_qa, prev_leader, f"{debug_info} | Using previous hour QA"
+    
+    # If no data for preceding hour, try next hour
+    elif not next_check.empty:
+        next_qa = next_check.iloc[0].get(qa_column)
+        next_leader = next_check.iloc[0].get(leader_column)
+        
+        # Apply leader mapping if provided
+        if leader_mapping and next_leader is not None:
+            try:
+                # Check if it can be converted to a number
+                if str(next_leader).isdigit() or isinstance(next_leader, (int, float)):
+                    mapped_value = leader_mapping.get(str(next_leader))
+                    if mapped_value:
+                        next_leader = mapped_value
+                    else:
+                        next_leader = "Tài"  # Default fallback
+            except:
+                pass
+                
+        return next_qa, next_leader, f"{debug_info} | Only next hour data available"
+    
+    # If no data for either hour, look for any data for same date, item, line
+    if not matching_rows.empty:
+        closest_row = None
+        min_diff = float('inf')
+        
+        for _, aql_row in matching_rows.iterrows():
+            if aql_row['Giờ_time'] is not None:
+                aql_minutes = aql_row['Giờ_time'].hour * 60 + aql_row['Giờ_time'].minute
+                complaint_minutes = complaint_hour * 60 + complaint_minute
+                diff = abs(complaint_minutes - aql_minutes)
+                
+                if diff < min_diff:
+                    min_diff = diff
+                    closest_row = aql_row
+        
+        if closest_row is not None:
+            closest_qa = closest_row.get(qa_column)
+            closest_leader = closest_row.get(leader_column)
+            
+            # Apply leader mapping if provided
+            if leader_mapping and closest_leader is not None:
+                try:
+                    # Check if it can be converted to a number
+                    if str(closest_leader).isdigit() or isinstance(closest_leader, (int, float)):
+                        mapped_value = leader_mapping.get(str(closest_leader))
+                        if mapped_value:
+                            closest_leader = mapped_value
+                        else:
+                            closest_leader = "Tài"  # Default fallback
+                except:
+                    pass
+                    
+            return closest_qa, closest_leader, f"{debug_info} | Using closest time match"
+    
+    return None, None, f"{debug_info} | No matching QA records found"
 
 def main():
-    print("Starting Google Sheets data processing...")
+    print("Starting Google Sheets integration...")
     
     # Authenticate and connect to Google Sheets
     gc = authenticate()
     
-    # Open the source spreadsheet (ID AQL)
-    source_sheet = gc.open_by_url('https://docs.google.com/spreadsheets/d/1MxvsyZTMMO0L5Cf1FzuXoKD634OClCCefeLjv9B49XU/edit')
-    
-    # Open the new sample ID sheet for VHM and % Hao hụt OPP data
-    sample_id_sheet = gc.open_by_url('https://docs.google.com/spreadsheets/d/10R0Os96Ckwfiagbe-SbEut6FOyoMZZNmBc-HjdGKqwU/edit')
-    
+    # Open the source spreadsheets - use your actual spreadsheet URLs
+    knkh_sheet = gc.open_by_url('https://docs.google.com/spreadsheets/d/1vbx_XlnuMzLdkRJkmGRv_kOqf74LU0aGEy5SJRs1LqU/edit')
+    aql_sheet = gc.open_by_url('https://docs.google.com/spreadsheets/d/1MxvsyZTMMO0L5Cf1FzuXoKD634OClCCefeLjv9B49XU/edit')
+
     # Open the destination spreadsheet
-    destination_sheet = gc.open_by_url('https://docs.google.com/spreadsheets/d/1sb7Wz26CVkyUfWUE7NQmWm7_Byhw9eAHPArIUnn3iDA/edit')
+    destination_sheet = gc.open_by_url('https://docs.google.com/spreadsheets/d/1d6uGPbJV6BsOB6XSB1IS3NhfeaMyMBcaQPvOnNg2yA4/edit')
 
-    try:
-        # Get the ID AQL worksheet data using robust method
-        id_aql_worksheet = source_sheet.worksheet('ID AQL')
-        id_aql_data = get_sheet_data_robust(id_aql_worksheet, 'ID AQL')
-        id_aql_df = pd.DataFrame(id_aql_data)
-        
-        # Get the defect code mapping from AQL gói sheet using robust method
-        aql_goi_worksheet = source_sheet.worksheet('AQL gói')
-        aql_goi_data = get_sheet_data_robust(aql_goi_worksheet, 'AQL gói')
-        aql_goi_df = pd.DataFrame(aql_goi_data)
-        
-        # Get the defect code mapping from AQL Tô ly sheet using robust method
-        aql_to_ly_worksheet = source_sheet.worksheet('AQL Tô ly')
-        aql_to_ly_data = get_sheet_data_robust(aql_to_ly_worksheet, 'AQL Tô ly')
-        aql_to_ly_df = pd.DataFrame(aql_to_ly_data)
-        
-        # Get the sample ID data for VHM and % Hao hụt OPP mapping using robust method
-        sample_id_worksheet = sample_id_sheet.get_worksheet(0)  # First worksheet
-        sample_id_data = get_sheet_data_robust(sample_id_worksheet, 'Sample ID (First worksheet)')
-        sample_id_df = pd.DataFrame(sample_id_data)
-        
-        print(f"Retrieved {len(id_aql_df)} ID AQL records, {len(aql_goi_df)} AQL gói records, {len(aql_to_ly_df)} AQL Tô ly records, and {len(sample_id_df)} Sample ID records")
-    
-    except Exception as e:
-        print(f"Error retrieving worksheet data: {str(e)}")
-        sys.exit(1)
+    # Get the worksheet data using robust method
+    knkh_worksheet = knkh_sheet.worksheet('KNKH')
+    knkh_data = get_sheet_data_robust(knkh_worksheet, 'KNKH')
+    knkh_df = pd.DataFrame(knkh_data)
 
-    # Check if required columns exist in dataframes
-    required_columns_check = {
-        'ID AQL': ['Line', 'Defect code', 'Ngày SX', 'Giờ', 'MĐG'],
-        'AQL gói': ['Defect code', 'Defect name'],
-        'AQL Tô ly': ['Defect code', 'Defect name'],
-        'Sample ID': ['Ngày SX', 'Ca', 'Line', 'MĐG', 'VHM', '% Hao hụt OPP']
-    }
-    
-    dataframes = {
-        'ID AQL': id_aql_df,
-        'AQL gói': aql_goi_df,
-        'AQL Tô ly': aql_to_ly_df,
-        'Sample ID': sample_id_df
-    }
-    
-    for sheet_name, required_cols in required_columns_check.items():
-        df = dataframes[sheet_name]
-        missing_cols = [col for col in required_cols if col not in df.columns]
-        if missing_cols:
-            print(f"Warning: Missing columns in {sheet_name}: {missing_cols}")
-            print(f"Available columns in {sheet_name}: {df.columns.tolist()}")
+    aql_worksheet = aql_sheet.worksheet('ID AQL')
+    aql_data = get_sheet_data_robust(aql_worksheet, 'ID AQL')
+    aql_df = pd.DataFrame(aql_data)
 
-    # Convert 'Line' to numeric if it's not already
-    if 'Line' in id_aql_df.columns:
-        id_aql_df['Line'] = pd.to_numeric(id_aql_df['Line'], errors='coerce')
+    print(f"Retrieved {len(knkh_df)} KNKH records and {len(aql_df)} AQL records")
+    print(f"KNKH columns: {list(knkh_df.columns)}")
+    print(f"AQL columns: {list(aql_df.columns)}")
+
+    # Check if required columns exist
+    required_knkh_columns = ['Ngày tiếp nhận', 'Ngày SX', 'Nội dung phản hồi', 'Item', 'Bộ phận chịu trách nhiệm']
+    required_aql_columns = ['Ngày SX', 'Item', 'Giờ']
+    
+    missing_knkh = [col for col in required_knkh_columns if col not in knkh_df.columns]
+    missing_aql = [col for col in required_aql_columns if col not in aql_df.columns]
+    
+    if missing_knkh:
+        print(f"Warning: Missing columns in KNKH data: {missing_knkh}")
+    if missing_aql:
+        print(f"Warning: Missing columns in AQL data: {missing_aql}")
+
+    # Clean concatenated dates for both reception date and production date
+    if 'Ngày tiếp nhận' in knkh_df.columns:
+        knkh_df['Ngày tiếp nhận'] = knkh_df['Ngày tiếp nhận'].apply(clean_concatenated_dates)
+    
+    if 'Ngày SX' in knkh_df.columns:
+        knkh_df['Ngày SX'] = knkh_df['Ngày SX'].apply(clean_concatenated_dates)
+    
+    # Extract correct Ngày SX from Nội dung phản hồi and replace the Ngày SX column
+    if 'Nội dung phản hồi' in knkh_df.columns:
+        knkh_df['Ngày SX_extracted'] = knkh_df['Nội dung phản hồi'].apply(extract_correct_date)
+        
+        # Replace the original Ngày SX with the extracted one when available, keeping the exact format
+        knkh_df['Ngày SX'] = knkh_df.apply(
+            lambda row: row['Ngày SX_extracted'] if row['Ngày SX_extracted'] is not None else row.get('Ngày SX', ''), 
+            axis=1
+        )
+
+    # Standardize dates first for filtering
+    knkh_df['Ngày SX_std'] = knkh_df['Ngày SX'].apply(standardize_date)
+    aql_df['Ngày SX_std'] = aql_df['Ngày SX'].apply(standardize_date)
+    
+    # Create filter date (January 1, 2024)
+    filter_date = pd.to_datetime('2024-01-01')
+    
+    # Filter both DataFrames to only include data from January 1, 2024 onwards
+    knkh_df = knkh_df[knkh_df['Ngày SX_std'] >= filter_date]
+    aql_df = aql_df[aql_df['Ngày SX_std'] >= filter_date]
+    
+    print(f"After date filtering: {len(knkh_df)} KNKH records and {len(aql_df)} AQL records")
+
+    # Extract time, line, and machine information
+    if 'Nội dung phản hồi' in knkh_df.columns:
+        knkh_df[['Giờ_extracted', 'Line_extracted', 'Máy_extracted']] = knkh_df['Nội dung phản hồi'].apply(
+            lambda x: pd.Series(extract_production_info(x))
+        )
     else:
-        print("Warning: 'Line' column not found in ID AQL data")
-        id_aql_df['Line'] = None
+        knkh_df['Giờ_extracted'] = None
+        knkh_df['Line_extracted'] = None
+        knkh_df['Máy_extracted'] = None
 
-    # Standardize defect codes (clean up any leading/trailing spaces)
-    for df_name, df in [('ID AQL', id_aql_df), ('AQL gói', aql_goi_df), ('AQL Tô ly', aql_to_ly_df)]:
-        if 'Defect code' in df.columns:
-            df['Defect code'] = df['Defect code'].astype(str).str.strip()
-        else:
-            print(f"Warning: 'Defect code' column not found in {df_name} data")
+    # Convert to appropriate data types
+    knkh_df['Line_extracted'] = pd.to_numeric(knkh_df['Line_extracted'], errors='coerce')
+    knkh_df['Máy_extracted'] = pd.to_numeric(knkh_df['Máy_extracted'], errors='coerce')
 
-    # Standardize dates
-    if 'Ngày SX' in id_aql_df.columns:
-        id_aql_df['Ngày SX_std'] = id_aql_df['Ngày SX'].apply(standardize_date)
-        
-        # Extract date, week and month
-        id_aql_df['Ngày'] = id_aql_df['Ngày SX_std'].apply(get_day_of_month)
-        id_aql_df['Tuần'] = id_aql_df['Ngày SX_std'].apply(get_week_number)
-        id_aql_df['Tháng'] = id_aql_df['Ngày SX_std'].apply(get_month_number)
+    # Standardize the receipt date
+    if 'Ngày tiếp nhận' in knkh_df.columns:
+        knkh_df['Ngày tiếp nhận_std'] = knkh_df['Ngày tiếp nhận'].apply(standardize_date)
     else:
-        print("Warning: 'Ngày SX' column not found in ID AQL data")
-        id_aql_df['Ngày'] = None
-        id_aql_df['Tuần'] = None
-        id_aql_df['Tháng'] = None
-    
-    # Extract hour and determine shift (Ca)
-    if 'Giờ' in id_aql_df.columns:
-        id_aql_df['hour'] = id_aql_df['Giờ'].apply(parse_hour)
-        id_aql_df['Ca'] = id_aql_df['hour'].apply(determine_shift)
+        knkh_df['Ngày tiếp nhận_std'] = None
+
+    # Clean item codes
+    knkh_df['Item_clean'] = knkh_df['Item'].apply(clean_item_code) if 'Item' in knkh_df.columns else ''
+    aql_df['Item_clean'] = aql_df['Item'].apply(clean_item_code) if 'Item' in aql_df.columns else ''
+
+    # Parse time
+    knkh_df['Giờ_time'] = knkh_df['Giờ_extracted'].apply(parse_time)
+    aql_df['Giờ_time'] = aql_df['Giờ'].apply(parse_time) if 'Giờ' in aql_df.columns else None
+
+    # Round time to 2-hour intervals
+    knkh_df['Giờ_rounded'] = knkh_df['Giờ_time'].apply(round_to_2hour)
+
+    # Determine shift (now just returns 1, 2, or 3)
+    knkh_df['Shift'] = knkh_df['Giờ_time'].apply(determine_shift)
+
+    # Create leader ID to name mapping
+    leader_mapping = create_leader_mapping(aql_df)
+    print(f"Leader mapping: {leader_mapping}")
+
+    # Match QA and leader with improved debugging
+    knkh_df['QA_matched'] = None
+    knkh_df['Tên Trưởng ca_matched'] = None
+    knkh_df['debug_info'] = None
+
+    print("Starting matching process...")
+    for idx, row in knkh_df.iterrows():
+        qa, leader, debug_info = find_qa_and_leader(row, aql_df, leader_mapping)
+        knkh_df.at[idx, 'QA_matched'] = qa
+        knkh_df.at[idx, 'Tên Trưởng ca_matched'] = leader
+        knkh_df.at[idx, 'debug_info'] = debug_info
+    print("Matching process complete")
+
+    # Format dates for Power BI (MM/DD/YYYY)
+    knkh_df['Ngày tiếp nhận_formatted'] = knkh_df['Ngày tiếp nhận_std'].apply(format_date_mm_dd_yyyy)
+    knkh_df['Ngày SX_formatted'] = knkh_df['Ngày SX_std'].apply(format_date_mm_dd_yyyy)
+
+    # Extract month and year from production date (Ngày SX)
+    knkh_df['Tháng sản xuất'] = knkh_df['Ngày SX_std'].apply(extract_month)
+    knkh_df['Năm sản xuất'] = knkh_df['Ngày SX_std'].apply(extract_year)
+
+    # Extract week, month and year from receipt date (Ngày tiếp nhận)
+    knkh_df['Tuần nhận khiếu nại'] = knkh_df['Ngày tiếp nhận_std'].apply(extract_week)
+    knkh_df['Tháng nhận khiếu nại'] = knkh_df['Ngày tiếp nhận_std'].apply(extract_month)
+    knkh_df['Năm nhận khiếu nại'] = knkh_df['Ngày tiếp nhận_std'].apply(extract_year)
+
+    # Filter to only include rows where "Bộ phận chịu trách nhiệm" is "Nhà máy"
+    if 'Bộ phận chịu trách nhiệm' in knkh_df.columns:
+        print(f"Total rows before filtering by 'Bộ phận chịu trách nhiệm': {len(knkh_df)}")
+        knkh_df = knkh_df[knkh_df['Bộ phận chịu trách nhiệm'] == 'Nhà máy']
+        print(f"Rows after filtering for 'Bộ phận chịu trách nhiệm' = 'Nhà máy': {len(knkh_df)}")
     else:
-        print("Warning: 'Giờ' column not found in ID AQL data")
-        id_aql_df['hour'] = None
-        id_aql_df['Ca'] = None
+        print("Warning: 'Bộ phận chịu trách nhiệm' column not found. Skipping filtering.")
+
+    # Create the joined dataframe with all required columns
+    filtered_knkh_df = knkh_df.copy()
     
-    # Add Target TV column based on Line
-    id_aql_df['Target TV'] = id_aql_df['Line'].apply(get_target_tv)
+    # Extract short product names
+    if 'Tên sản phẩm' in filtered_knkh_df.columns:
+        filtered_knkh_df['Tên sản phẩm ngắn'] = filtered_knkh_df['Tên sản phẩm'].apply(extract_short_product_name)
+    else:
+        filtered_knkh_df['Tên sản phẩm ngắn'] = ''
     
-    # Create defect name mapping dictionaries
-    goi_defect_map = {}
-    to_ly_defect_map = {}
-    
-    if 'Defect code' in aql_goi_df.columns and 'Defect name' in aql_goi_df.columns:
-        goi_defect_map = dict(zip(aql_goi_df['Defect code'], aql_goi_df['Defect name']))
-    
-    if 'Defect code' in aql_to_ly_df.columns and 'Defect name' in aql_to_ly_df.columns:
-        to_ly_defect_map = dict(zip(aql_to_ly_df['Defect code'], aql_to_ly_df['Defect name']))
-    
-    # Function to map defect code to defect name based on the Line value
-    def map_defect_name(row):
-        if pd.isna(row.get('Line')) or pd.isna(row.get('Defect code')) or str(row.get('Defect code')) == 'nan':
-            return None
-        
-        try:
-            line = float(row['Line'])
-            defect_code = str(row['Defect code']).strip()
-            
-            if 1 <= line <= 6:
-                return goi_defect_map.get(defect_code, None)
-            elif 7 <= line <= 8:
-                return to_ly_defect_map.get(defect_code, None)
-            else:
-                return None
-        except (ValueError, TypeError):
-            return None
-    
-    # Apply the mapping
-    id_aql_df['Defect name'] = id_aql_df.apply(map_defect_name, axis=1)
-    
-    # Create mapping dictionary for VHM and % Hao hụt OPP from sample_id_df
-    print("Creating VHM and % Hao hụt OPP mapping with MĐG grouping logic...")
-    vhm_mapping = {}
-    hao_hut_mapping = {}
-    
-    # Create mapping from sample_id_df with MĐG grouping
-    for _, row in sample_id_df.iterrows():
-        keys = create_simple_mapping_key(row)  # Returns a list of keys
-        vhm_value = row.get('VHM', '')
-        hao_hut_value = row.get('% Hao hụt OPP', '')
-        
-        # Only process if we got valid keys
-        if keys:  # Check if keys list is not empty
-            for key in keys:  # Iterate through each key in the list
-                if isinstance(key, tuple) and len(key) == 4:  # Validate key format
-                    vhm_mapping[key] = vhm_value
-                    hao_hut_mapping[key] = hao_hut_value
-                    
-            # Debug output for MĐG grouping
-            if len(keys) > 1:
-                try:
-                    mdg_original = int(float(row['MĐG'])) if pd.notna(row['MĐG']) else None
-                    date_str = standardize_date(row['Ngày SX']).strftime('%d/%m/%Y') if standardize_date(row['Ngày SX']) else 'Unknown'
-                    line = int(float(row['Line'])) if pd.notna(row['Line']) else 'Unknown'
-                    ca = int(float(row['Ca'])) if pd.notna(row['Ca']) else 'Unknown'
-                    
-                    if mdg_original == 1:
-                        print(f"Mapped MĐG 1 to cover MĐG 1,2 for {date_str}, Ca {ca}, Line {line}, VHM: {vhm_value}")
-                    elif mdg_original == 3:
-                        print(f"Mapped MĐG 3 to cover MĐG 3,4 for {date_str}, Ca {ca}, Line {line}, VHM: {vhm_value}")
-                except Exception as e:
-                    print(f"Debug output error: {e}")
-    
-    print(f"Created {len(vhm_mapping)} mapping entries for VHM and % Hao hụt OPP")
-    
-    # Function to get VHM based on hour logic
-    def get_vhm(row):
-        key = create_mapping_key_with_hour_logic(row, sample_id_df)
-        result = vhm_mapping.get(key, '') if key else ''
-        
-        # Debug output for specific cases
-        if result and str(row.get('Giờ', '')).strip() in ['12h', '12:00', '12']:
-            hour = parse_hour(row.get('Giờ', ''))
-            print(f"Debug: Hour {hour} -> Key: {key} -> VHM: {result}")
-            
-        return result
-    
-    # Function to get % Hao hụt OPP based on hour logic
-    def get_hao_hut_opp(row):
-        key = create_mapping_key_with_hour_logic(row, sample_id_df)
-        return hao_hut_mapping.get(key, '') if key else ''
-    
-    # Add VHM and % Hao hụt OPP columns to the main dataframe
-    print("Applying VHM and % Hao hụt OPP mapping to main data with MĐG grouping...")
-    id_aql_df['VHM'] = id_aql_df.apply(get_vhm, axis=1)
-    id_aql_df['% Hao hụt OPP'] = id_aql_df.apply(get_hao_hut_opp, axis=1)
-    
-    # Debug: Show mapping statistics
-    vhm_mapped_count = (id_aql_df['VHM'] != '').sum()
-    hao_hut_mapped_count = (id_aql_df['% Hao hụt OPP'] != '').sum()
-    print(f"Successfully mapped VHM for {vhm_mapped_count} out of {len(id_aql_df)} records")
-    print(f"Successfully mapped % Hao hụt OPP for {hao_hut_mapped_count} out of {len(id_aql_df)} records")
-    
-    # Debug: Show MĐG grouping mapping examples
-    if 'MĐG' in id_aql_df.columns:
-        mdg_2_mapped = ((id_aql_df['MĐG'] == 2) & (id_aql_df['VHM'] != '')).sum()
-        mdg_4_mapped = ((id_aql_df['MĐG'] == 4) & (id_aql_df['VHM'] != '')).sum()
-        total_mdg_2 = (id_aql_df['MĐG'] == 2).sum()
-        total_mdg_4 = (id_aql_df['MĐG'] == 4).sum()
-        
-        if total_mdg_2 > 0:
-            print(f"MĐG 2 mapping: {mdg_2_mapped}/{total_mdg_2} records mapped (looking for MĐG 1 in sample sheet)")
-        if total_mdg_4 > 0:
-            print(f"MĐG 4 mapping: {mdg_4_mapped}/{total_mdg_4} records mapped (looking for MĐG 3 in sample sheet)")
-    
-    # Create the new dataframe with required columns (including new VHM and % Hao hụt OPP columns)
-    required_output_columns = [
-        'Ngày SX', 'Ngày', 'Tuần', 'Tháng', 'Sản phẩm', 'Item', 'Giờ', 'Ca', 'Line', 'MĐG', 
-        'SL gói lỗi sau xử lý', 'Defect code', 'Defect name', 'Số lượng hold ( gói/thùng)',
-        'Target TV', 'VHM', '% Hao hụt OPP', 'QA', 'Tên Trưởng ca'
+    # Define the columns we want to keep, checking if they exist first
+    desired_columns = [
+        'Mã ticket', 'Ngày tiếp nhận_formatted', 'Tỉnh', 'Ngày SX_formatted', 'Sản phẩm/Dịch vụ',
+        'Số lượng (ly/hộp/chai/gói/hủ)', 'Nội dung phản hồi', 'Item', 'Tên sản phẩm', 'Tên sản phẩm ngắn',
+        'SL pack/ cây lỗi', 'Tên lỗi', 'Line_extracted', 'Máy_extracted', 'Giờ_extracted',
+        'QA_matched', 'Tên Trưởng ca_matched', 'Shift', 
+        'Tháng sản xuất', 'Năm sản xuất', 'Tuần nhận khiếu nại', 'Tháng nhận khiếu nại', 'Năm nhận khiếu nại',
+        'Bộ phận chịu trách nhiệm', 'debug_info'
     ]
     
-    # Check which columns are available and create the dataframe with available columns
-    available_columns = []
-    for col in required_output_columns:
-        if col in id_aql_df.columns:
-            available_columns.append(col)
-        else:
-            print(f"Warning: Column '{col}' not found in processed data. Skipping.")
-            # Add empty column for missing ones that are critical
-            if col in ['VHM', '% Hao hụt OPP', 'Target TV', 'Ca', 'Ngày', 'Tuần', 'Tháng', 'Defect name']:
-                id_aql_df[col] = ''
-                available_columns.append(col)
+    # Only include columns that actually exist
+    available_columns = [col for col in desired_columns if col in filtered_knkh_df.columns]
+    missing_columns = [col for col in desired_columns if col not in filtered_knkh_df.columns]
     
-    try:
-        new_df = id_aql_df[available_columns].copy()
-    except KeyError as e:
-        print(f"Error: Missing column in source data: {e}")
-        print(f"Available columns: {id_aql_df.columns.tolist()}")
-        sys.exit(1)
+    if missing_columns:
+        print(f"Warning: The following columns are missing and will be skipped: {missing_columns}")
     
-    # Filter to only include rows where 'Số lượng hold ( gói/thùng)' is not empty
-    if 'Số lượng hold ( gói/thùng)' in new_df.columns:
-        print(f"Total rows before filtering: {len(new_df)}")
-        new_df = new_df[new_df['Số lượng hold ( gói/thùng)'].notna() & (new_df['Số lượng hold ( gói/thùng)'] != '')]
-        print(f"Rows after filtering for non-empty 'Số lượng hold ( gói/thùng)': {len(new_df)}")
+    joined_df = filtered_knkh_df[available_columns].copy()
+
+    # Rename columns for clarity
+    column_renames = {
+        'Line_extracted': 'Line',
+        'Máy_extracted': 'Máy',
+        'Giờ_extracted': 'Giờ',
+        'QA_matched': 'QA',
+        'Tên Trưởng ca_matched': 'Tên Trưởng ca',
+        'Ngày tiếp nhận_formatted': 'Ngày tiếp nhận',
+        'Ngày SX_formatted': 'Ngày SX'
+    }
+    
+    # Only rename columns that exist
+    existing_renames = {old: new for old, new in column_renames.items() if old in joined_df.columns}
+    joined_df.rename(columns=existing_renames, inplace=True)
+
+    # Sort by Mã ticket from largest to smallest
+    if 'Mã ticket' in joined_df.columns:
+        joined_df = joined_df.sort_values(by='Mã ticket', ascending=False)
     else:
-        print("Warning: 'Số lượng hold ( gói/thùng)' column not found. Skipping filtering.")
-    
-    # Sort by Ngày SX (newest first) - convert to datetime for proper sorting
-    if 'Ngày SX' in new_df.columns:
-        new_df['Ngày SX_for_sort'] = new_df['Ngày SX'].apply(standardize_date)
-        new_df = new_df.sort_values(by='Ngày SX_for_sort', ascending=False, na_position='last')
-        new_df = new_df.drop(columns=['Ngày SX_for_sort'])  # Remove the temporary sorting column
-        print(f"Data sorted by Ngày SX (newest to oldest)")
-    else:
-        print("Warning: Cannot sort by Ngày SX as column is missing")
-    
+        print("Warning: 'Mã ticket' column not found. Cannot sort.")
+
     # Save to the destination spreadsheet
     try:
-        # Check if the "Processed_Data" worksheet exists in the destination sheet
+        # Check if the "Integrated_Data" worksheet exists in the destination sheet
         try:
-            processed_worksheet = destination_sheet.worksheet('Processed_Data')
-            processed_worksheet.clear()
+            integrated_worksheet = destination_sheet.worksheet('Integrated_Data')
+            integrated_worksheet.clear()
         except gspread.exceptions.WorksheetNotFound:
             # Create a new worksheet if it doesn't exist
-            processed_worksheet = destination_sheet.add_worksheet(
-                title='Processed_Data',
-                rows=new_df.shape[0]+1,
-                cols=new_df.shape[1]
+            integrated_worksheet = destination_sheet.add_worksheet(
+                title='Integrated_Data',
+                rows=joined_df.shape[0]+1,
+                cols=joined_df.shape[1]
             )
 
         # Convert DataFrame to list of lists for Google Sheets
         # Handle NaN values by converting to empty strings
-        new_df_cleaned = new_df.fillna('').infer_objects(copy=False)
-        data_to_write = [new_df_cleaned.columns.tolist()] + new_df_cleaned.values.tolist()
+        joined_df_cleaned = joined_df.fillna('')
+        data_to_write = [joined_df_cleaned.columns.tolist()] + joined_df_cleaned.values.tolist()
 
-        # Update the worksheet - use correct gspread syntax
-        processed_worksheet.update('A1', data_to_write)
-        print(f"Successfully wrote {len(data_to_write)-1} rows to the destination sheet, sorted by Ngày SX (newest first)")
-        print(f"Added VHM and % Hao hụt OPP columns based on Ngày SX, Ca, Line, MĐG mapping")
+        # Update the worksheet
+        integrated_worksheet.update('A1', data_to_write)
+        print(f"Successfully wrote {len(data_to_write)-1} rows to the destination sheet, sorted by Mã ticket (largest to smallest)")
+
+        # Also create a debug worksheet to help troubleshoot matching issues
+        try:
+            debug_worksheet = destination_sheet.worksheet('Debug_Info')
+            debug_worksheet.clear()
+        except gspread.exceptions.WorksheetNotFound:
+            debug_worksheet = destination_sheet.add_worksheet(
+                title='Debug_Info',
+                rows=min(500, len(joined_df)+1), # Limit to 500 rows to avoid exceeding limits
+                cols=8
+            )
+            
+        # Create a simplified debug table with key matching info
+        debug_columns = ['Mã ticket', 'Ngày SX', 'Item', 'Line', 'Giờ', 'QA', 'Tên Trưởng ca', 'debug_info']
+        available_debug_columns = [col for col in debug_columns if col in joined_df.columns]
         
-        # Format the worksheet as a table
-        format_as_table(processed_worksheet)
+        if available_debug_columns:
+            debug_df = joined_df[available_debug_columns]
+            debug_data = [debug_df.columns.tolist()] + debug_df.head(499).fillna('').values.tolist()
+            debug_worksheet.update('A1', debug_data)
+            print(f"Created debug worksheet with matching information")
 
     except Exception as e:
         print(f"Error writing to destination sheet: {str(e)}")
