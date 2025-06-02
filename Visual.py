@@ -609,115 +609,155 @@ def main():
         key = create_mapping_key_with_hour_logic(row, sample_id_df)
         return hao_hut_mapping.get(key, '') if key else ''
     
-    # Add VHM and % Hao hụt OPP columns to the main dataframe
-    print("Applying VHM and % Hao hụt OPP mapping to main data with MĐG grouping...")
+    # Apply VHM and % Hao hụt OPP mapping to existing AQL data
+    print("Applying VHM mapping to existing AQL data...")
     id_aql_df['VHM'] = id_aql_df.apply(get_vhm, axis=1)
     id_aql_df['% Hao hụt OPP'] = id_aql_df.apply(get_hao_hut_opp, axis=1)
     
-    # Debug: Show mapping statistics
+    # Debug: Show mapping statistics for AQL data
     vhm_mapped_count = (id_aql_df['VHM'] != '').sum()
     hao_hut_mapped_count = (id_aql_df['% Hao hụt OPP'] != '').sum()
-    print(f"Successfully mapped VHM for {vhm_mapped_count} out of {len(id_aql_df)} records")
-    print(f"Successfully mapped % Hao hụt OPP for {hao_hut_mapped_count} out of {len(id_aql_df)} records")
+    print(f"Successfully mapped VHM for {vhm_mapped_count} out of {len(id_aql_df)} AQL records")
+    print(f"Successfully mapped % Hao hụt OPP for {hao_hut_mapped_count} out of {len(id_aql_df)} AQL records")
     
-    # Debug: Show MĐG grouping mapping examples
-    if 'MĐG' in id_aql_df.columns:
-        mdg_2_mapped = ((id_aql_df['MĐG'] == 2) & (id_aql_df['VHM'] != '')).sum()
-        mdg_4_mapped = ((id_aql_df['MĐG'] == 4) & (id_aql_df['VHM'] != '')).sum()
-        total_mdg_2 = (id_aql_df['MĐG'] == 2).sum()
-        total_mdg_4 = (id_aql_df['MĐG'] == 4).sum()
-        
-        if total_mdg_2 > 0:
-            print(f"MĐG 2 mapping: {mdg_2_mapped}/{total_mdg_2} records mapped (looking for MĐG 1 in sample sheet)")
-        if total_mdg_4 > 0:
-            print(f"MĐG 4 mapping: {mdg_4_mapped}/{total_mdg_4} records mapped (looking for MĐG 3 in sample sheet)")
-    
-    # Create the new dataframe with required columns (including new VHM and % Hao hụt OPP columns)
+    # Create the new dataframe with required columns for existing AQL data
     required_output_columns = [
         'Ngày SX', 'Ngày', 'Tuần', 'Tháng', 'Sản phẩm', 'Item', 'Giờ', 'Ca', 'Line', 'MĐG', 
         'SL gói lỗi sau xử lý', 'Defect code', 'Defect name', 'Số lượng hold ( gói/thùng)',
         'Target TV', 'VHM', '% Hao hụt OPP', 'QA', 'Tên Trưởng ca'
     ]
     
-    # Add MĐG_Original column if it exists (for tracking original comma-separated values)
+    # Add MĐG_Original column if it exists
     if 'MĐG_Original' in id_aql_df.columns:
         required_output_columns.append('MĐG_Original')
     
-    # Check which columns are available and create the dataframe with available columns
-    available_columns = []
+    # Ensure all required columns exist
     for col in required_output_columns:
-        if col in id_aql_df.columns:
-            available_columns.append(col)
-        else:
-            print(f"Warning: Column '{col}' not found in processed data. Skipping.")
-            # Add empty column for missing ones that are critical
+        if col not in id_aql_df.columns:
             if col in ['VHM', '% Hao hụt OPP', 'Target TV', 'Ca', 'Ngày', 'Tuần', 'Tháng', 'Defect name']:
                 id_aql_df[col] = ''
-                available_columns.append(col)
+            else:
+                print(f"Warning: Column '{col}' not found and will be skipped.")
     
-    try:
-        new_df = id_aql_df[available_columns].copy()
-    except KeyError as e:
-        print(f"Error: Missing column in source data: {e}")
-        print(f"Available columns: {id_aql_df.columns.tolist()}")
-        sys.exit(1)
+    # Filter to available columns
+    available_columns = [col for col in required_output_columns if col in id_aql_df.columns]
+    existing_aql_df = id_aql_df[available_columns].copy()
     
-    # MODIFIED: Enhanced filtering to ensure at least 1 row per VHM
-    if 'Số lượng hold ( gói/thùng)' in new_df.columns and 'VHM' in new_df.columns:
-        print(f"Total rows before filtering: {len(new_df)}")
+    # COMPREHENSIVE VHM INCLUSION LOGIC
+    print("Creating comprehensive dataset with all VHMs from Sample ID sheet...")
+    
+    # Create comprehensive dataset starting from Sample ID data
+    comprehensive_rows = []
+    
+    # Process each sample ID record to ensure VHM inclusion
+    for _, sample_row in sample_id_df.iterrows():
+        try:
+            # Get basic sample information
+            vhm_name = sample_row.get('VHM', '')
+            if not vhm_name or vhm_name == '':
+                continue
+                
+            sample_date = standardize_date(sample_row.get('Ngày SX', ''))
+            if sample_date is None:
+                continue
+                
+            sample_ca = sample_row.get('Ca', '')
+            sample_line = sample_row.get('Line', '')
+            sample_mdg = sample_row.get('MĐG', '')
+            sample_vhm_value = sample_row.get('VHM', '')
+            sample_hao_hut = sample_row.get('% Hao hụt OPP', '')
+            
+            # Check if this VHM already has AQL data (defects) in existing_aql_df
+            matching_aql_records = existing_aql_df[
+                (existing_aql_df['VHM'] == vhm_name) & 
+                (existing_aql_df['Số lượng hold ( gói/thùng)'].notna()) & 
+                (existing_aql_df['Số lượng hold ( gói/thùng)'] != '') &
+                (existing_aql_df['Số lượng hold ( gói/thùng)'] != 0)
+            ]
+            
+            if not matching_aql_records.empty:
+                # VHM has defect records, add all of them
+                for _, aql_row in matching_aql_records.iterrows():
+                    comprehensive_rows.append(aql_row)
+                print(f"Added {len(matching_aql_records)} defect records for VHM: {vhm_name}")
+            else:
+                # VHM has no defect records, create a representative zero-defect record
+                representative_record = {}
+                
+                # Set basic production information
+                representative_record['Ngày SX'] = sample_row.get('Ngày SX', '')
+                representative_record['Ngày'] = sample_date.day if sample_date else ''
+                representative_record['Tuần'] = sample_date.isocalendar()[1] if sample_date else ''
+                representative_record['Tháng'] = sample_date.month if sample_date else ''
+                representative_record['Ca'] = sample_ca
+                representative_record['Line'] = sample_line
+                representative_record['MĐG'] = sample_mdg
+                representative_record['VHM'] = sample_vhm_value
+                representative_record['% Hao hụt OPP'] = sample_hao_hut
+                
+                # Set zero defect information
+                representative_record['Số lượng hold ( gói/thùng)'] = 0
+                representative_record['Defect code'] = ''
+                representative_record['Defect name'] = ''
+                representative_record['SL gói lỗi sau xử lý'] = ''
+                
+                # Set target TV based on line
+                try:
+                    line_num = float(sample_line) if sample_line else None
+                    if line_num and 1 <= line_num <= 6:
+                        representative_record['Target TV'] = 0.29
+                    elif line_num and 7 <= line_num <= 8:
+                        representative_record['Target TV'] = 2.19
+                    else:
+                        representative_record['Target TV'] = ''
+                except:
+                    representative_record['Target TV'] = ''
+                
+                # Fill other columns with empty values
+                for col in available_columns:
+                    if col not in representative_record:
+                        representative_record[col] = ''
+                
+                comprehensive_rows.append(pd.Series(representative_record))
+                print(f"Added zero-defect representative record for VHM: {vhm_name}")
+                
+        except Exception as e:
+            print(f"Error processing sample row for VHM inclusion: {e}")
+            continue
+    
+    # Create comprehensive dataframe
+    if comprehensive_rows:
+        # Convert all rows to DataFrame
+        comprehensive_df = pd.DataFrame(comprehensive_rows)
         
-        # Separate rows with and without defects
-        defect_rows = new_df[new_df['Số lượng hold ( gói/thùng)'].notna() & (new_df['Số lượng hold ( gói/thùng)'] != '')]
-        non_defect_rows = new_df[new_df['Số lượng hold ( gói/thùng)'].isna() | (new_df['Số lượng hold ( gói/thùng)'] == '')]
+        # Ensure column order matches available_columns
+        comprehensive_df = comprehensive_df.reindex(columns=available_columns, fill_value='')
         
-        print(f"Rows with defects (KD status): {len(defect_rows)}")
-        print(f"Rows without defects: {len(non_defect_rows)}")
+        print(f"Comprehensive dataset created with {len(comprehensive_df)} total records")
+        print(f"Unique VHMs in comprehensive dataset: {len(comprehensive_df['VHM'].dropna().unique())}")
         
-        # Get unique VHMs from defect rows
-        vhms_with_defects = set(defect_rows['VHM'].dropna().unique())
-        print(f"VHMs with defects: {len(vhms_with_defects)}")
+        # Show VHM distribution
+        vhm_counts = comprehensive_df['VHM'].value_counts()
+        print("VHM distribution in final dataset:")
+        for vhm, count in vhm_counts.items():
+            defect_count = len(comprehensive_df[
+                (comprehensive_df['VHM'] == vhm) & 
+                (comprehensive_df['Số lượng hold ( gói/thùng)'] != 0) &
+                (comprehensive_df['Số lượng hold ( gói/thùng)'] != '')
+            ])
+            zero_defect_count = count - defect_count
+            print(f"  {vhm}: {count} records ({defect_count} with defects, {zero_defect_count} zero-defect)")
         
-        # Get unique VHMs from non-defect rows that are NOT in defect rows
-        vhms_without_defects = set(non_defect_rows['VHM'].dropna().unique()) - vhms_with_defects
-        print(f"VHMs without any defects: {len(vhms_without_defects)}")
-        
-        # For VHMs without defects, select one representative row per VHM
-        representative_rows = []
-        if len(vhms_without_defects) > 0:
-            for vhm in vhms_without_defects:
-                vhm_rows = non_defect_rows[non_defect_rows['VHM'] == vhm]
-                if not vhm_rows.empty:
-                    # Select the most recent row for this VHM (or first if no date sorting)
-                    representative_row = vhm_rows.iloc[0:1].copy()
-                    # Ensure the defect quantity is set to 0 or empty for clarity
-                    representative_row['Số lượng hold ( gói/thùng)'] = 0
-                    representative_rows.append(representative_row)
-        
-        # Combine defect rows with representative non-defect rows
-        if representative_rows:
-            representative_df = pd.concat(representative_rows, ignore_index=True)
-            new_df = pd.concat([defect_rows, representative_df], ignore_index=True)
-            print(f"Added {len(representative_df)} representative rows for VHMs without defects")
-        else:
-            new_df = defect_rows
-        
-        print(f"Final rows after enhanced filtering: {len(new_df)}")
-        print(f"Total unique VHMs in final dataset: {len(new_df['VHM'].dropna().unique())}")
-        
-    elif 'Số lượng hold ( gói/thùng)' in new_df.columns:
-        # Fallback to original logic if VHM column is missing
-        print("Warning: 'VHM' column not found. Using original filtering logic.")
-        print(f"Total rows before filtering: {len(new_df)}")
-        new_df = new_df[new_df['Số lượng hold ( gói/thùng)'].notna() & (new_df['Số lượng hold ( gói/thùng)'] != '')]
-        print(f"Rows after filtering for non-empty 'Số lượng hold ( gói/thùng)': {len(new_df)}")
+        new_df = comprehensive_df
     else:
-        print("Warning: 'Số lượng hold ( gói/thùng)' column not found. Skipping filtering.")
+        print("Warning: No comprehensive records created, falling back to existing AQL data")
+        new_df = existing_aql_df
     
-    # Sort by Ngày SX (newest first) - convert to datetime for proper sorting
+    # Sort by date (newest first)
     if 'Ngày SX' in new_df.columns:
         new_df['Ngày SX_for_sort'] = new_df['Ngày SX'].apply(standardize_date)
         new_df = new_df.sort_values(by='Ngày SX_for_sort', ascending=False, na_position='last')
-        new_df = new_df.drop(columns=['Ngày SX_for_sort'])  # Remove the temporary sorting column
+        new_df = new_df.drop(columns=['Ngày SX_for_sort'])
         print(f"Data sorted by Ngày SX (newest to oldest)")
     else:
         print("Warning: Cannot sort by Ngày SX as column is missing")
@@ -746,7 +786,7 @@ def main():
         print(f"Successfully wrote {len(data_to_write)-1} rows to the destination sheet, sorted by Ngày SX (newest first)")
         print(f"Added VHM and % Hao hụt OPP columns based on Ngày SX, Ca, Line, MĐG mapping")
         print(f"Improved handling of comma-separated MĐG values (e.g., '1,2' or '3,4')")
-        print(f"Enhanced filtering ensures all VHMs are represented (with zero defects if no KD status)")
+        print(f"Comprehensive VHM inclusion ensures all VHMs from Sample ID sheet are represented")
         
         # Format the worksheet as a table
         format_as_table(processed_worksheet)
