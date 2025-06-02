@@ -662,8 +662,51 @@ def main():
         print(f"Available columns: {id_aql_df.columns.tolist()}")
         sys.exit(1)
     
-    # Filter to only include rows where 'Số lượng hold ( gói/thùng)' is not empty
-    if 'Số lượng hold ( gói/thùng)' in new_df.columns:
+    # MODIFIED: Enhanced filtering to ensure at least 1 row per VHM
+    if 'Số lượng hold ( gói/thùng)' in new_df.columns and 'VHM' in new_df.columns:
+        print(f"Total rows before filtering: {len(new_df)}")
+        
+        # Separate rows with and without defects
+        defect_rows = new_df[new_df['Số lượng hold ( gói/thùng)'].notna() & (new_df['Số lượng hold ( gói/thùng)'] != '')]
+        non_defect_rows = new_df[new_df['Số lượng hold ( gói/thùng)'].isna() | (new_df['Số lượng hold ( gói/thùng)'] == '')]
+        
+        print(f"Rows with defects (KD status): {len(defect_rows)}")
+        print(f"Rows without defects: {len(non_defect_rows)}")
+        
+        # Get unique VHMs from defect rows
+        vhms_with_defects = set(defect_rows['VHM'].dropna().unique())
+        print(f"VHMs with defects: {len(vhms_with_defects)}")
+        
+        # Get unique VHMs from non-defect rows that are NOT in defect rows
+        vhms_without_defects = set(non_defect_rows['VHM'].dropna().unique()) - vhms_with_defects
+        print(f"VHMs without any defects: {len(vhms_without_defects)}")
+        
+        # For VHMs without defects, select one representative row per VHM
+        representative_rows = []
+        if len(vhms_without_defects) > 0:
+            for vhm in vhms_without_defects:
+                vhm_rows = non_defect_rows[non_defect_rows['VHM'] == vhm]
+                if not vhm_rows.empty:
+                    # Select the most recent row for this VHM (or first if no date sorting)
+                    representative_row = vhm_rows.iloc[0:1].copy()
+                    # Ensure the defect quantity is set to 0 or empty for clarity
+                    representative_row['Số lượng hold ( gói/thùng)'] = 0
+                    representative_rows.append(representative_row)
+        
+        # Combine defect rows with representative non-defect rows
+        if representative_rows:
+            representative_df = pd.concat(representative_rows, ignore_index=True)
+            new_df = pd.concat([defect_rows, representative_df], ignore_index=True)
+            print(f"Added {len(representative_df)} representative rows for VHMs without defects")
+        else:
+            new_df = defect_rows
+        
+        print(f"Final rows after enhanced filtering: {len(new_df)}")
+        print(f"Total unique VHMs in final dataset: {len(new_df['VHM'].dropna().unique())}")
+        
+    elif 'Số lượng hold ( gói/thùng)' in new_df.columns:
+        # Fallback to original logic if VHM column is missing
+        print("Warning: 'VHM' column not found. Using original filtering logic.")
         print(f"Total rows before filtering: {len(new_df)}")
         new_df = new_df[new_df['Số lượng hold ( gói/thùng)'].notna() & (new_df['Số lượng hold ( gói/thùng)'] != '')]
         print(f"Rows after filtering for non-empty 'Số lượng hold ( gói/thùng)': {len(new_df)}")
@@ -703,6 +746,7 @@ def main():
         print(f"Successfully wrote {len(data_to_write)-1} rows to the destination sheet, sorted by Ngày SX (newest first)")
         print(f"Added VHM and % Hao hụt OPP columns based on Ngày SX, Ca, Line, MĐG mapping")
         print(f"Improved handling of comma-separated MĐG values (e.g., '1,2' or '3,4')")
+        print(f"Enhanced filtering ensures all VHMs are represented (with zero defects if no KD status)")
         
         # Format the worksheet as a table
         format_as_table(processed_worksheet)
