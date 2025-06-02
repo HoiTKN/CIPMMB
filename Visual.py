@@ -47,6 +47,77 @@ def authenticate():
         print(f"Authentication error: {str(e)}")
         sys.exit(1)
 
+def get_sheet_data_robust(worksheet, sheet_name="Unknown"):
+    """
+    Robust function to get data from worksheet, handling duplicate or empty headers
+    """
+    try:
+        print(f"Attempting to get data from sheet: {sheet_name}")
+        
+        # First, try the normal method
+        try:
+            data = worksheet.get_all_records()
+            print(f"Successfully retrieved data from {sheet_name} using get_all_records()")
+            return data
+        except Exception as e:
+            print(f"get_all_records() failed for {sheet_name}: {str(e)}")
+            print(f"Trying alternative method...")
+            
+        # Alternative method: get all values and handle headers manually
+        all_values = worksheet.get_all_values()
+        if not all_values:
+            print(f"Warning: No data found in {sheet_name}")
+            return []
+            
+        # Get headers and clean them up
+        headers = all_values[0]
+        data_rows = all_values[1:]
+        
+        # Clean up headers - handle duplicates and empty values
+        cleaned_headers = []
+        header_counts = {}
+        
+        for i, header in enumerate(headers):
+            # Convert to string and strip whitespace
+            header = str(header).strip()
+            
+            # Handle empty headers
+            if header == '' or header == 'nan':
+                header = f'Column_{i+1}'
+            
+            # Handle duplicates by adding a suffix
+            original_header = header
+            counter = 1
+            while header in header_counts:
+                header = f"{original_header}_{counter}"
+                counter += 1
+            
+            header_counts[header] = 1
+            cleaned_headers.append(header)
+        
+        print(f"Cleaned headers for {sheet_name}: {cleaned_headers}")
+        
+        # Convert to list of dictionaries
+        data = []
+        for row in data_rows:
+            # Ensure row has same length as headers
+            while len(row) < len(cleaned_headers):
+                row.append('')
+            
+            # Create dictionary for this row
+            row_dict = {}
+            for i, header in enumerate(cleaned_headers):
+                row_dict[header] = row[i] if i < len(row) else ''
+            
+            data.append(row_dict)
+        
+        print(f"Successfully processed {len(data)} rows from {sheet_name}")
+        return data
+        
+    except Exception as e:
+        print(f"Error retrieving data from {sheet_name}: {str(e)}")
+        return []
+
 def get_day_of_month(date):
     """Extract day from date"""
     if pd.isna(date) or date is None:
@@ -296,25 +367,24 @@ def main():
     destination_sheet = gc.open_by_url('https://docs.google.com/spreadsheets/d/1sb7Wz26CVkyUfWUE7NQmWm7_Byhw9eAHPArIUnn3iDA/edit')
 
     try:
-        # Get the ID AQL worksheet data
+        # Get the ID AQL worksheet data using robust method
         id_aql_worksheet = source_sheet.worksheet('ID AQL')
-        id_aql_data = id_aql_worksheet.get_all_records()
+        id_aql_data = get_sheet_data_robust(id_aql_worksheet, 'ID AQL')
         id_aql_df = pd.DataFrame(id_aql_data)
         
-        # Get the defect code mapping from AQL gói sheet
+        # Get the defect code mapping from AQL gói sheet using robust method
         aql_goi_worksheet = source_sheet.worksheet('AQL gói')
-        aql_goi_data = aql_goi_worksheet.get_all_records()
+        aql_goi_data = get_sheet_data_robust(aql_goi_worksheet, 'AQL gói')
         aql_goi_df = pd.DataFrame(aql_goi_data)
         
-        # Get the defect code mapping from AQL Tô ly sheet
+        # Get the defect code mapping from AQL Tô ly sheet using robust method
         aql_to_ly_worksheet = source_sheet.worksheet('AQL Tô ly')
-        aql_to_ly_data = aql_to_ly_worksheet.get_all_records()
+        aql_to_ly_data = get_sheet_data_robust(aql_to_ly_worksheet, 'AQL Tô ly')
         aql_to_ly_df = pd.DataFrame(aql_to_ly_data)
         
-        # Get the sample ID data for VHM and % Hao hụt OPP mapping
-        # Assuming the data is in the first worksheet (Table1)
+        # Get the sample ID data for VHM and % Hao hụt OPP mapping using robust method
         sample_id_worksheet = sample_id_sheet.get_worksheet(0)  # First worksheet
-        sample_id_data = sample_id_worksheet.get_all_records()
+        sample_id_data = get_sheet_data_robust(sample_id_worksheet, 'Sample ID (First worksheet)')
         sample_id_df = pd.DataFrame(sample_id_data)
         
         print(f"Retrieved {len(id_aql_df)} ID AQL records, {len(aql_goi_df)} AQL gói records, {len(aql_to_ly_df)} AQL Tô ly records, and {len(sample_id_df)} Sample ID records")
@@ -323,36 +393,81 @@ def main():
         print(f"Error retrieving worksheet data: {str(e)}")
         sys.exit(1)
 
+    # Check if required columns exist in dataframes
+    required_columns_check = {
+        'ID AQL': ['Line', 'Defect code', 'Ngày SX', 'Giờ', 'MĐG'],
+        'AQL gói': ['Defect code', 'Defect name'],
+        'AQL Tô ly': ['Defect code', 'Defect name'],
+        'Sample ID': ['Ngày SX', 'Ca', 'Line', 'MĐG', 'VHM', '% Hao hụt OPP']
+    }
+    
+    dataframes = {
+        'ID AQL': id_aql_df,
+        'AQL gói': aql_goi_df,
+        'AQL Tô ly': aql_to_ly_df,
+        'Sample ID': sample_id_df
+    }
+    
+    for sheet_name, required_cols in required_columns_check.items():
+        df = dataframes[sheet_name]
+        missing_cols = [col for col in required_cols if col not in df.columns]
+        if missing_cols:
+            print(f"Warning: Missing columns in {sheet_name}: {missing_cols}")
+            print(f"Available columns in {sheet_name}: {df.columns.tolist()}")
+
     # Convert 'Line' to numeric if it's not already
-    id_aql_df['Line'] = pd.to_numeric(id_aql_df['Line'], errors='coerce')
+    if 'Line' in id_aql_df.columns:
+        id_aql_df['Line'] = pd.to_numeric(id_aql_df['Line'], errors='coerce')
+    else:
+        print("Warning: 'Line' column not found in ID AQL data")
+        id_aql_df['Line'] = None
 
     # Standardize defect codes (clean up any leading/trailing spaces)
-    id_aql_df['Defect code'] = id_aql_df['Defect code'].astype(str).str.strip()
-    aql_goi_df['Defect code'] = aql_goi_df['Defect code'].astype(str).str.strip()
-    aql_to_ly_df['Defect code'] = aql_to_ly_df['Defect code'].astype(str).str.strip()
+    for df_name, df in [('ID AQL', id_aql_df), ('AQL gói', aql_goi_df), ('AQL Tô ly', aql_to_ly_df)]:
+        if 'Defect code' in df.columns:
+            df['Defect code'] = df['Defect code'].astype(str).str.strip()
+        else:
+            print(f"Warning: 'Defect code' column not found in {df_name} data")
 
     # Standardize dates
-    id_aql_df['Ngày SX_std'] = id_aql_df['Ngày SX'].apply(standardize_date)
-    
-    # Extract date, week and month
-    id_aql_df['Ngày'] = id_aql_df['Ngày SX_std'].apply(get_day_of_month)
-    id_aql_df['Tuần'] = id_aql_df['Ngày SX_std'].apply(get_week_number)
-    id_aql_df['Tháng'] = id_aql_df['Ngày SX_std'].apply(get_month_number)
+    if 'Ngày SX' in id_aql_df.columns:
+        id_aql_df['Ngày SX_std'] = id_aql_df['Ngày SX'].apply(standardize_date)
+        
+        # Extract date, week and month
+        id_aql_df['Ngày'] = id_aql_df['Ngày SX_std'].apply(get_day_of_month)
+        id_aql_df['Tuần'] = id_aql_df['Ngày SX_std'].apply(get_week_number)
+        id_aql_df['Tháng'] = id_aql_df['Ngày SX_std'].apply(get_month_number)
+    else:
+        print("Warning: 'Ngày SX' column not found in ID AQL data")
+        id_aql_df['Ngày'] = None
+        id_aql_df['Tuần'] = None
+        id_aql_df['Tháng'] = None
     
     # Extract hour and determine shift (Ca)
-    id_aql_df['hour'] = id_aql_df['Giờ'].apply(parse_hour)
-    id_aql_df['Ca'] = id_aql_df['hour'].apply(determine_shift)
+    if 'Giờ' in id_aql_df.columns:
+        id_aql_df['hour'] = id_aql_df['Giờ'].apply(parse_hour)
+        id_aql_df['Ca'] = id_aql_df['hour'].apply(determine_shift)
+    else:
+        print("Warning: 'Giờ' column not found in ID AQL data")
+        id_aql_df['hour'] = None
+        id_aql_df['Ca'] = None
     
     # Add Target TV column based on Line
     id_aql_df['Target TV'] = id_aql_df['Line'].apply(get_target_tv)
     
     # Create defect name mapping dictionaries
-    goi_defect_map = dict(zip(aql_goi_df['Defect code'], aql_goi_df['Defect name']))
-    to_ly_defect_map = dict(zip(aql_to_ly_df['Defect code'], aql_to_ly_df['Defect name']))
+    goi_defect_map = {}
+    to_ly_defect_map = {}
+    
+    if 'Defect code' in aql_goi_df.columns and 'Defect name' in aql_goi_df.columns:
+        goi_defect_map = dict(zip(aql_goi_df['Defect code'], aql_goi_df['Defect name']))
+    
+    if 'Defect code' in aql_to_ly_df.columns and 'Defect name' in aql_to_ly_df.columns:
+        to_ly_defect_map = dict(zip(aql_to_ly_df['Defect code'], aql_to_ly_df['Defect name']))
     
     # Function to map defect code to defect name based on the Line value
     def map_defect_name(row):
-        if pd.isna(row['Line']) or pd.isna(row['Defect code']) or row['Defect code'] == 'nan':
+        if pd.isna(row.get('Line')) or pd.isna(row.get('Defect code')) or str(row.get('Defect code')) == 'nan':
             return None
         
         try:
@@ -435,39 +550,59 @@ def main():
     print(f"Successfully mapped % Hao hụt OPP for {hao_hut_mapped_count} out of {len(id_aql_df)} records")
     
     # Debug: Show MĐG grouping mapping examples
-    mdg_2_mapped = ((id_aql_df['MĐG'] == 2) & (id_aql_df['VHM'] != '')).sum()
-    mdg_4_mapped = ((id_aql_df['MĐG'] == 4) & (id_aql_df['VHM'] != '')).sum()
-    total_mdg_2 = (id_aql_df['MĐG'] == 2).sum()
-    total_mdg_4 = (id_aql_df['MĐG'] == 4).sum()
-    
-    if total_mdg_2 > 0:
-        print(f"MĐG 2 mapping: {mdg_2_mapped}/{total_mdg_2} records mapped (looking for MĐG 1 in sample sheet)")
-    if total_mdg_4 > 0:
-        print(f"MĐG 4 mapping: {mdg_4_mapped}/{total_mdg_4} records mapped (looking for MĐG 3 in sample sheet)")
+    if 'MĐG' in id_aql_df.columns:
+        mdg_2_mapped = ((id_aql_df['MĐG'] == 2) & (id_aql_df['VHM'] != '')).sum()
+        mdg_4_mapped = ((id_aql_df['MĐG'] == 4) & (id_aql_df['VHM'] != '')).sum()
+        total_mdg_2 = (id_aql_df['MĐG'] == 2).sum()
+        total_mdg_4 = (id_aql_df['MĐG'] == 4).sum()
+        
+        if total_mdg_2 > 0:
+            print(f"MĐG 2 mapping: {mdg_2_mapped}/{total_mdg_2} records mapped (looking for MĐG 1 in sample sheet)")
+        if total_mdg_4 > 0:
+            print(f"MĐG 4 mapping: {mdg_4_mapped}/{total_mdg_4} records mapped (looking for MĐG 3 in sample sheet)")
     
     # Create the new dataframe with required columns (including new VHM and % Hao hụt OPP columns)
+    required_output_columns = [
+        'Ngày SX', 'Ngày', 'Tuần', 'Tháng', 'Sản phẩm', 'Item', 'Giờ', 'Ca', 'Line', 'MĐG', 
+        'SL gói lỗi sau xử lý', 'Defect code', 'Defect name', 'Số lượng hold ( gói/thùng)',
+        'Target TV', 'VHM', '% Hao hụt OPP', 'QA', 'Tên Trưởng ca'
+    ]
+    
+    # Check which columns are available and create the dataframe with available columns
+    available_columns = []
+    for col in required_output_columns:
+        if col in id_aql_df.columns:
+            available_columns.append(col)
+        else:
+            print(f"Warning: Column '{col}' not found in processed data. Skipping.")
+            # Add empty column for missing ones that are critical
+            if col in ['VHM', '% Hao hụt OPP', 'Target TV', 'Ca', 'Ngày', 'Tuần', 'Tháng', 'Defect name']:
+                id_aql_df[col] = ''
+                available_columns.append(col)
+    
     try:
-        new_df = id_aql_df[[
-            'Ngày SX', 'Ngày', 'Tuần', 'Tháng', 'Sản phẩm', 'Item', 'Giờ', 'Ca', 'Line', 'MĐG', 
-            'SL gói lỗi sau xử lý', 'Defect code', 'Defect name', 'Số lượng hold ( gói/thùng)',
-            'Target TV', 'VHM', '% Hao hụt OPP', 'QA', 'Tên Trưởng ca'
-        ]].copy()
+        new_df = id_aql_df[available_columns].copy()
     except KeyError as e:
         print(f"Error: Missing column in source data: {e}")
         print(f"Available columns: {id_aql_df.columns.tolist()}")
         sys.exit(1)
     
     # Filter to only include rows where 'Số lượng hold ( gói/thùng)' is not empty
-    print(f"Total rows before filtering: {len(new_df)}")
-    new_df = new_df[new_df['Số lượng hold ( gói/thùng)'].notna() & (new_df['Số lượng hold ( gói/thùng)'] != '')]
-    print(f"Rows after filtering for non-empty 'Số lượng hold ( gói/thùng)': {len(new_df)}")
+    if 'Số lượng hold ( gói/thùng)' in new_df.columns:
+        print(f"Total rows before filtering: {len(new_df)}")
+        new_df = new_df[new_df['Số lượng hold ( gói/thùng)'].notna() & (new_df['Số lượng hold ( gói/thùng)'] != '')]
+        print(f"Rows after filtering for non-empty 'Số lượng hold ( gói/thùng)': {len(new_df)}")
+    else:
+        print("Warning: 'Số lượng hold ( gói/thùng)' column not found. Skipping filtering.")
     
     # Sort by Ngày SX (newest first) - convert to datetime for proper sorting
-    new_df['Ngày SX_for_sort'] = new_df['Ngày SX'].apply(standardize_date)
-    new_df = new_df.sort_values(by='Ngày SX_for_sort', ascending=False, na_position='last')
-    new_df = new_df.drop(columns=['Ngày SX_for_sort'])  # Remove the temporary sorting column
-    
-    print(f"Data sorted by Ngày SX (newest to oldest)")
+    if 'Ngày SX' in new_df.columns:
+        new_df['Ngày SX_for_sort'] = new_df['Ngày SX'].apply(standardize_date)
+        new_df = new_df.sort_values(by='Ngày SX_for_sort', ascending=False, na_position='last')
+        new_df = new_df.drop(columns=['Ngày SX_for_sort'])  # Remove the temporary sorting column
+        print(f"Data sorted by Ngày SX (newest to oldest)")
+    else:
+        print("Warning: Cannot sort by Ngày SX as column is missing")
     
     # Save to the destination spreadsheet
     try:
