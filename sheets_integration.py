@@ -572,12 +572,55 @@ def main():
 
     # Get the worksheet data
     knkh_worksheet = knkh_sheet.worksheet('KNKH')
-    knkh_data = knkh_worksheet.get_all_records()
-    knkh_df = pd.DataFrame(knkh_data)
+    
+    # Handle KNKH data
+    try:
+        knkh_data = knkh_worksheet.get_all_records()
+        knkh_df = pd.DataFrame(knkh_data)
+    except Exception as e:
+        print(f"Error with KNKH get_all_records(), trying alternative method: {e}")
+        # Use get_all_values() as fallback
+        knkh_values = knkh_worksheet.get_all_values()
+        if len(knkh_values) > 1:
+            headers = knkh_values[0]
+            data = knkh_values[1:]
+            knkh_df = pd.DataFrame(data, columns=headers)
+        else:
+            print("No data found in KNKH worksheet")
+            sys.exit(1)
 
     aql_worksheet = aql_sheet.worksheet('ID AQL')
-    aql_data = aql_worksheet.get_all_records()
-    aql_df = pd.DataFrame(aql_data)
+    
+    # Handle AQL data with duplicate header protection
+    try:
+        aql_data = aql_worksheet.get_all_records()
+        aql_df = pd.DataFrame(aql_data)
+    except Exception as e:
+        print(f"Error with AQL get_all_records() (likely duplicate headers): {e}")
+        print("Using alternative method to handle duplicate headers...")
+        
+        # Use get_all_values() and handle duplicate headers
+        aql_values = aql_worksheet.get_all_values()
+        if len(aql_values) > 1:
+            headers = aql_values[0]
+            data = aql_values[1:]
+            
+            # Handle duplicate headers by adding suffixes
+            seen_headers = {}
+            unique_headers = []
+            for header in headers:
+                if header in seen_headers:
+                    seen_headers[header] += 1
+                    unique_headers.append(f"{header}_{seen_headers[header]}")
+                else:
+                    seen_headers[header] = 0
+                    unique_headers.append(header)
+            
+            aql_df = pd.DataFrame(data, columns=unique_headers)
+            print(f"Created AQL DataFrame with headers: {unique_headers}")
+        else:
+            print("No data found in AQL worksheet")
+            sys.exit(1)
 
     print(f"Retrieved {len(knkh_df)} KNKH records and {len(aql_df)} AQL records")
     print(f"KNKH columns: {list(knkh_df.columns)}")
