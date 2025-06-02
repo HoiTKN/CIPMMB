@@ -1,4 +1,4 @@
-import pandas as pdMore actions
+import pandas as pd
 import re
 from datetime import datetime, time
 import gspread
@@ -326,7 +326,6 @@ def determine_shift(time_obj):
     else:
         return 3
 
-def find_qa_and_leader(row, aql_data):
 def create_leader_mapping(aql_data):
     """
     Revised function to match QA and leader from the AQL data sheet
@@ -451,7 +450,6 @@ def find_qa_and_leader(row, aql_data, leader_mapping=None):
             return hang_row[qa_column], hang_row[leader_column], debug_info
     
     # 4. Apply the matching rules as before, but ensure QA and leader come from the same row
-    # 4. Apply the matching rules
     # 4a. First, check if there's data for the preceding hour
     if not prev_check.empty:
         prev_qa = prev_check.iloc[0].get(qa_column)
@@ -502,8 +500,6 @@ def find_qa_and_leader(row, aql_data, leader_mapping=None):
 
         # For all other cases, use the preceding hour's QA and leader from the same row
         return prev_qa, prev_leader, f"{debug_info} | Using previous hour QA and leader"
-        # For all other cases, use the preceding hour's QA
-        return prev_qa, prev_leader, f"{debug_info} | Using previous hour QA"
 
     # If no data for preceding hour, try next hour
     elif not next_check.empty:
@@ -651,7 +647,6 @@ def main():
 
     print("Starting matching process...")
     for idx, row in knkh_df.iterrows():
-        qa, leader, debug_info = find_qa_and_leader(row, aql_df)
         qa, leader, debug_info = find_qa_and_leader(row, aql_df, leader_mapping)
         knkh_df.at[idx, 'QA_matched'] = qa
         knkh_df.at[idx, 'Tên Trưởng ca_matched'] = leader
