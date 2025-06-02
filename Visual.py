@@ -417,6 +417,82 @@ def expand_dataframe_for_multiple_mdg(df):
     
     return pd.DataFrame(expanded_rows)
 
+def find_representative_production_data(sample_date, sample_ca, sample_line, sample_mdg, existing_aql_df):
+    """
+    Find representative production data (Sản phẩm, Item, Giờ, etc.) for a given date/shift/line/MĐG combination
+    """
+    try:
+        # Convert sample data to matching format
+        date_str = sample_date.strftime('%d/%m/%Y') if sample_date else None
+        if not date_str:
+            return None
+            
+        ca_str = str(sample_ca).strip()
+        line_str = str(sample_line).strip()
+        mdg_str = str(sample_mdg).strip()
+        
+        # Look for matching production records in existing AQL data
+        # Priority 1: Exact match on date, shift, line, MĐG
+        matching_records = existing_aql_df[
+            (existing_aql_df['Ngày SX'].apply(lambda x: standardize_date(x).strftime('%d/%m/%Y') if standardize_date(x) else None) == date_str) &
+            (existing_aql_df['Ca'].astype(str).str.strip() == ca_str) &
+            (existing_aql_df['Line'].astype(str).str.strip() == line_str) &
+            (existing_aql_df['MĐG'].astype(str).str.strip() == mdg_str)
+        ]
+        
+        # Priority 2: If no exact MĐG match, try MĐG grouping logic
+        if matching_records.empty:
+            try:
+                mdg_val = int(float(sample_mdg))
+                # Handle MĐG grouping (1 covers 1,2 and 3 covers 3,4)
+                if mdg_val == 2:
+                    # Look for MĐG 1 records
+                    matching_records = existing_aql_df[
+                        (existing_aql_df['Ngày SX'].apply(lambda x: standardize_date(x).strftime('%d/%m/%Y') if standardize_date(x) else None) == date_str) &
+                        (existing_aql_df['Ca'].astype(str).str.strip() == ca_str) &
+                        (existing_aql_df['Line'].astype(str).str.strip() == line_str) &
+                        (existing_aql_df['MĐG'].astype(str).str.strip() == '1')
+                    ]
+                elif mdg_val == 4:
+                    # Look for MĐG 3 records
+                    matching_records = existing_aql_df[
+                        (existing_aql_df['Ngày SX'].apply(lambda x: standardize_date(x).strftime('%d/%m/%Y') if standardize_date(x) else None) == date_str) &
+                        (existing_aql_df['Ca'].astype(str).str.strip() == ca_str) &
+                        (existing_aql_df['Line'].astype(str).str.strip() == line_str) &
+                        (existing_aql_df['MĐG'].astype(str).str.strip() == '3')
+                    ]
+            except:
+                pass
+        
+        # Priority 3: If still no match, try same date and shift (any line/MĐG)
+        if matching_records.empty:
+            matching_records = existing_aql_df[
+                (existing_aql_df['Ngày SX'].apply(lambda x: standardize_date(x).strftime('%d/%m/%Y') if standardize_date(x) else None) == date_str) &
+                (existing_aql_df['Ca'].astype(str).str.strip() == ca_str)
+            ]
+        
+        # Priority 4: If still no match, try same date (any shift)
+        if matching_records.empty:
+            matching_records = existing_aql_df[
+                existing_aql_df['Ngày SX'].apply(lambda x: standardize_date(x).strftime('%d/%m/%Y') if standardize_date(x) else None) == date_str
+            ]
+        
+        # Priority 5: If still no match, try same line (any date)
+        if matching_records.empty:
+            matching_records = existing_aql_df[
+                existing_aql_df['Line'].astype(str).str.strip() == line_str
+            ]
+        
+        # Return the first matching record if found
+        if not matching_records.empty:
+            return matching_records.iloc[0]
+        else:
+            return None
+            
+    except Exception as e:
+        print(f"Error finding representative production data: {e}")
+        return None
+
 def main():
     print("Starting Google Sheets data processing...")
     
@@ -643,7 +719,7 @@ def main():
     available_columns = [col for col in required_output_columns if col in id_aql_df.columns]
     existing_aql_df = id_aql_df[available_columns].copy()
     
-    # COMPREHENSIVE VHM INCLUSION LOGIC
+    # COMPREHENSIVE VHM INCLUSION LOGIC WITH COMPLETE PRODUCTION DATA
     print("Creating comprehensive dataset with all VHMs from Sample ID sheet...")
     
     # Create comprehensive dataset starting from Sample ID data
@@ -681,10 +757,18 @@ def main():
                     comprehensive_rows.append(aql_row)
                 print(f"Added {len(matching_aql_records)} defect records for VHM: {vhm_name}")
             else:
-                # VHM has no defect records, create a representative zero-defect record
+                # VHM has no defect records, create a comprehensive zero-defect record
+                print(f"Creating zero-defect record for VHM: {vhm_name}")
+                
+                # Find representative production data for this VHM's shift/line/MĐG
+                representative_data = find_representative_production_data(
+                    sample_date, sample_ca, sample_line, sample_mdg, existing_aql_df
+                )
+                
+                # Create representative record with complete production information
                 representative_record = {}
                 
-                # Set basic production information
+                # Set basic production information from sample data
                 representative_record['Ngày SX'] = sample_row.get('Ngày SX', '')
                 representative_record['Ngày'] = sample_date.day if sample_date else ''
                 representative_record['Tuần'] = sample_date.isocalendar()[1] if sample_date else ''
@@ -695,11 +779,31 @@ def main():
                 representative_record['VHM'] = sample_vhm_value
                 representative_record['% Hao hụt OPP'] = sample_hao_hut
                 
-                # Set zero defect information
+                # Use representative production data if found
+                if representative_data is not None:
+                    representative_record['Sản phẩm'] = representative_data.get('Sản phẩm', '')
+                    representative_record['Item'] = representative_data.get('Item', '')
+                    representative_record['Giờ'] = representative_data.get('Giờ', '')
+                    representative_record['SL gói lỗi sau xử lý'] = representative_data.get('SL gói lỗi sau xử lý', '')
+                    representative_record['Defect code'] = representative_data.get('Defect code', '')
+                    representative_record['Defect name'] = representative_data.get('Defect name', '')
+                    representative_record['QA'] = representative_data.get('QA', '')
+                    representative_record['Tên Trưởng ca'] = representative_data.get('Tên Trưởng ca', '')
+                    print(f"  Found representative data: {representative_data.get('Sản phẩm', 'N/A')} - {representative_data.get('Item', 'N/A')}")
+                else:
+                    # Fallback values if no representative data found
+                    representative_record['Sản phẩm'] = ''
+                    representative_record['Item'] = ''
+                    representative_record['Giờ'] = ''
+                    representative_record['SL gói lỗi sau xử lý'] = ''
+                    representative_record['Defect code'] = ''
+                    representative_record['Defect name'] = ''
+                    representative_record['QA'] = ''
+                    representative_record['Tên Trưởng ca'] = ''
+                    print(f"  No representative data found, using empty values")
+                
+                # Set zero defect information (this is the key - quantity = 0)
                 representative_record['Số lượng hold ( gói/thùng)'] = 0
-                representative_record['Defect code'] = ''
-                representative_record['Defect name'] = ''
-                representative_record['SL gói lỗi sau xử lý'] = ''
                 
                 # Set target TV based on line
                 try:
@@ -713,13 +817,13 @@ def main():
                 except:
                     representative_record['Target TV'] = ''
                 
-                # Fill other columns with empty values
+                # Fill any remaining columns with empty values
                 for col in available_columns:
                     if col not in representative_record:
                         representative_record[col] = ''
                 
                 comprehensive_rows.append(pd.Series(representative_record))
-                print(f"Added zero-defect representative record for VHM: {vhm_name}")
+                print(f"  Successfully created comprehensive zero-defect record for VHM: {vhm_name}")
                 
         except Exception as e:
             print(f"Error processing sample row for VHM inclusion: {e}")
@@ -786,7 +890,7 @@ def main():
         print(f"Successfully wrote {len(data_to_write)-1} rows to the destination sheet, sorted by Ngày SX (newest first)")
         print(f"Added VHM and % Hao hụt OPP columns based on Ngày SX, Ca, Line, MĐG mapping")
         print(f"Improved handling of comma-separated MĐG values (e.g., '1,2' or '3,4')")
-        print(f"Comprehensive VHM inclusion ensures all VHMs from Sample ID sheet are represented")
+        print(f"Comprehensive VHM inclusion with complete production data for zero-defect records")
         
         # Format the worksheet as a table
         format_as_table(processed_worksheet)
