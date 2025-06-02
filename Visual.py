@@ -13,6 +13,36 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive"
 ]
 
+def parse_mdg_values(mdg_str):
+    """
+    Parse MĐG values that can be single values or comma-separated values like '1,2' or '3,4'
+    Returns a list of integer MĐG values
+    """
+    if pd.isna(mdg_str) or mdg_str is None:
+        return []
+    
+    try:
+        # Convert to string and clean up
+        mdg_str = str(mdg_str).strip()
+        
+        # Check if it contains comma (multiple values)
+        if ',' in mdg_str:
+            # Split by comma and convert each to int
+            mdg_values = []
+            for value in mdg_str.split(','):
+                try:
+                    mdg_val = int(float(value.strip()))
+                    mdg_values.append(mdg_val)
+                except (ValueError, TypeError):
+                    continue
+            return mdg_values
+        else:
+            # Single value
+            mdg_val = int(float(mdg_str))
+            return [mdg_val]
+    except (ValueError, TypeError):
+        return []
+
 def authenticate():
     """Authentication using OAuth token"""
     try:
@@ -249,9 +279,13 @@ def create_mapping_key_with_hour_logic(row, sample_id_df):
             return None
             
         line = int(float(row['Line'])) if pd.notna(row['Line']) else None
-        mdg = int(float(row['MĐG'])) if pd.notna(row['MĐG']) else None
         
-        if line is None or mdg is None:
+        # IMPROVED: Handle comma-separated MĐG values
+        mdg_values = parse_mdg_values(row.get('MĐG', ''))
+        if not mdg_values:
+            return None
+        
+        if line is None:
             return None
         
         # Determine which shift codes to look for based on the hour
@@ -274,20 +308,25 @@ def create_mapping_key_with_hour_logic(row, sample_id_df):
             if ca:
                 possible_shift_codes = [ca]
         
-        # Handle MĐG grouping - determine which MĐG values to look for in sample sheet
-        mdg_lookup_values = []
-        if mdg == 2:
-            # MĐG 2 should look for MĐG 1 in sample sheet (since MĐG 1 covers 1,2)
-            mdg_lookup_values = [1, 2]  # Try 1 first, then 2 as fallback
-        elif mdg == 4:
-            # MĐG 4 should look for MĐG 3 in sample sheet (since MĐG 3 covers 3,4)
-            mdg_lookup_values = [3, 4]  # Try 3 first, then 4 as fallback
-        else:
-            mdg_lookup_values = [mdg]
+        # IMPROVED: Handle multiple MĐG values
+        # For each MĐG value from the parsed list, determine lookup values
+        all_lookup_mdg_values = set()
+        for mdg in mdg_values:
+            mdg_lookup_values = []
+            if mdg == 2:
+                # MĐG 2 should look for MĐG 1 in sample sheet (since MĐG 1 covers 1,2)
+                mdg_lookup_values = [1, 2]  # Try 1 first, then 2 as fallback
+            elif mdg == 4:
+                # MĐG 4 should look for MĐG 3 in sample sheet (since MĐG 3 covers 3,4)
+                mdg_lookup_values = [3, 4]  # Try 3 first, then 4 as fallback
+            else:
+                mdg_lookup_values = [mdg]
+            
+            all_lookup_mdg_values.update(mdg_lookup_values)
         
         # Try to find a match in sample_id_df for any combination of shift codes and MĐG values
         for shift_code in possible_shift_codes:
-            for lookup_mdg in mdg_lookup_values:
+            for lookup_mdg in all_lookup_mdg_values:
                 # Check if there's a matching record in sample_id_df
                 try:
                     matching_records = sample_id_df[
@@ -298,8 +337,8 @@ def create_mapping_key_with_hour_logic(row, sample_id_df):
                     ]
                     
                     if not matching_records.empty:
-                        # Return the key that will be used for lookup (using original mdg from AQL data)
-                        return (date_key, shift_code, line, mdg)
+                        # Return the key using the first MĐG value from the original data
+                        return (date_key, shift_code, line, mdg_values[0])
                 except Exception as e:
                     continue
         
@@ -318,24 +357,29 @@ def create_simple_mapping_key(row):
         date_key = date_std.strftime('%d/%m/%Y')
         ca = int(float(row['Ca'])) if pd.notna(row['Ca']) else None
         line = int(float(row['Line'])) if pd.notna(row['Line']) else None
-        mdg = int(float(row['MĐG'])) if pd.notna(row['MĐG']) else None
         
-        if ca is None or line is None or mdg is None:
+        # IMPROVED: Handle comma-separated MĐG values in sample data
+        mdg_values = parse_mdg_values(row.get('MĐG', ''))
+        if not mdg_values:
             return []
         
-        # Handle MĐG grouping logic
+        if ca is None or line is None:
+            return []
+        
+        # Handle MĐG grouping logic for each MĐG value
         keys = []
-        if mdg == 1:
-            # MĐG 1 covers both MĐG 1 and MĐG 2
-            keys.append((date_key, ca, line, 1))
-            keys.append((date_key, ca, line, 2))
-        elif mdg == 3:
-            # MĐG 3 covers both MĐG 3 and MĐG 4
-            keys.append((date_key, ca, line, 3))
-            keys.append((date_key, ca, line, 4))
-        else:
-            # For other MĐG values, use as-is
-            keys.append((date_key, ca, line, mdg))
+        for mdg in mdg_values:
+            if mdg == 1:
+                # MĐG 1 covers both MĐG 1 and MĐG 2
+                keys.append((date_key, ca, line, 1))
+                keys.append((date_key, ca, line, 2))
+            elif mdg == 3:
+                # MĐG 3 covers both MĐG 3 and MĐG 4
+                keys.append((date_key, ca, line, 3))
+                keys.append((date_key, ca, line, 4))
+            else:
+                # For other MĐG values, use as-is
+                keys.append((date_key, ca, line, mdg))
             
         # Validate that all keys are properly formed tuples
         validated_keys = []
@@ -350,6 +394,28 @@ def create_simple_mapping_key(row):
     except (ValueError, TypeError, KeyError) as e:
         print(f"Warning: Error in create_simple_mapping_key: {e}")
         return []
+
+def expand_dataframe_for_multiple_mdg(df):
+    """
+    Expand dataframe rows that have comma-separated MĐG values into separate rows
+    """
+    expanded_rows = []
+    
+    for _, row in df.iterrows():
+        mdg_values = parse_mdg_values(row.get('MĐG', ''))
+        
+        if len(mdg_values) <= 1:
+            # Single or no MĐG value, keep row as-is
+            expanded_rows.append(row)
+        else:
+            # Multiple MĐG values, create separate row for each
+            for mdg_val in mdg_values:
+                new_row = row.copy()
+                new_row['MĐG'] = mdg_val
+                new_row['MĐG_Original'] = row['MĐG']  # Keep original value for reference
+                expanded_rows.append(new_row)
+    
+    return pd.DataFrame(expanded_rows)
 
 def main():
     print("Starting Google Sheets data processing...")
@@ -371,6 +437,11 @@ def main():
         id_aql_worksheet = source_sheet.worksheet('ID AQL')
         id_aql_data = get_sheet_data_robust(id_aql_worksheet, 'ID AQL')
         id_aql_df = pd.DataFrame(id_aql_data)
+        
+        # IMPROVED: Expand rows with comma-separated MĐG values
+        print(f"Original rows before MĐG expansion: {len(id_aql_df)}")
+        id_aql_df = expand_dataframe_for_multiple_mdg(id_aql_df)
+        print(f"Rows after MĐG expansion: {len(id_aql_df)}")
         
         # Get the defect code mapping from AQL gói sheet using robust method
         aql_goi_worksheet = source_sheet.worksheet('AQL gói')
@@ -507,14 +578,14 @@ def main():
             # Debug output for MĐG grouping
             if len(keys) > 1:
                 try:
-                    mdg_original = int(float(row['MĐG'])) if pd.notna(row['MĐG']) else None
+                    mdg_values = parse_mdg_values(row.get('MĐG', ''))
                     date_str = standardize_date(row['Ngày SX']).strftime('%d/%m/%Y') if standardize_date(row['Ngày SX']) else 'Unknown'
                     line = int(float(row['Line'])) if pd.notna(row['Line']) else 'Unknown'
                     ca = int(float(row['Ca'])) if pd.notna(row['Ca']) else 'Unknown'
                     
-                    if mdg_original == 1:
+                    if 1 in mdg_values:
                         print(f"Mapped MĐG 1 to cover MĐG 1,2 for {date_str}, Ca {ca}, Line {line}, VHM: {vhm_value}")
-                    elif mdg_original == 3:
+                    elif 3 in mdg_values:
                         print(f"Mapped MĐG 3 to cover MĐG 3,4 for {date_str}, Ca {ca}, Line {line}, VHM: {vhm_value}")
                 except Exception as e:
                     print(f"Debug output error: {e}")
@@ -567,6 +638,10 @@ def main():
         'SL gói lỗi sau xử lý', 'Defect code', 'Defect name', 'Số lượng hold ( gói/thùng)',
         'Target TV', 'VHM', '% Hao hụt OPP', 'QA', 'Tên Trưởng ca'
     ]
+    
+    # Add MĐG_Original column if it exists (for tracking original comma-separated values)
+    if 'MĐG_Original' in id_aql_df.columns:
+        required_output_columns.append('MĐG_Original')
     
     # Check which columns are available and create the dataframe with available columns
     available_columns = []
@@ -627,6 +702,7 @@ def main():
         processed_worksheet.update(values=data_to_write, range_name='A1')
         print(f"Successfully wrote {len(data_to_write)-1} rows to the destination sheet, sorted by Ngày SX (newest first)")
         print(f"Added VHM and % Hao hụt OPP columns based on Ngày SX, Ca, Line, MĐG mapping")
+        print(f"Improved handling of comma-separated MĐG values (e.g., '1,2' or '3,4')")
         
         # Format the worksheet as a table
         format_as_table(processed_worksheet)
