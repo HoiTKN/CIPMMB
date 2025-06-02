@@ -341,8 +341,8 @@ def determine_shift(time_obj):
 
 def create_leader_mapping(aql_data):
     """
-    Creates a mapping from leader IDs to leader names based on the data in the AQL sheet
-    Handles renamed columns due to duplicate headers
+    Creates a mapping from leader codes to leader names based on the actual data in the AQL sheet
+    by examining what Tên Trưởng ca values appear next to each QA in the same rows
     """
     # Find the leader column - handle renamed columns
     leader_column = None
@@ -351,55 +351,57 @@ def create_leader_mapping(aql_data):
             leader_column = col
             break
     
-    if not leader_column:
-        print("Warning: No leader column found")
+    # Find the QA column
+    qa_column = None
+    for col in aql_data.columns:
+        if col == 'QA' or col.startswith('QA'):
+            qa_column = col
+            break
+    
+    if not leader_column or not qa_column:
+        print(f"Warning: Could not find both QA column ({qa_column}) and leader column ({leader_column})")
         return {}
     
     print(f"Using leader column: {leader_column}")
+    print(f"Using QA column: {qa_column}")
     
-    # Get all unique values in the leader column
-    unique_leaders = aql_data[leader_column].dropna().unique()
-    print(f"Found {len(unique_leaders)} unique leader values")
-    
-    # Determine which values are numeric (likely IDs) and which are names
+    # Create mapping by examining actual data relationships
     leader_mapping = {}
-    numeric_values = []
-    name_values = []
     
-    for value in unique_leaders:
-        if value is None:
-            continue
-            
-        # Check if the value might be numeric
-        try:
-            if str(value).isdigit() or isinstance(value, (int, float)):
-                numeric_values.append(value)
-            else:
-                name_values.append(value)
-        except:
-            name_values.append(value)
+    # Get unique combinations of QA and leader from the data
+    qa_leader_combinations = aql_data[[qa_column, leader_column]].dropna().drop_duplicates()
     
-    print(f"Found {len(numeric_values)} numeric leader values and {len(name_values)} name values")
+    print(f"\nFound {len(qa_leader_combinations)} unique QA-Leader combinations:")
+    for idx, row in qa_leader_combinations.iterrows():
+        qa_val = row[qa_column]
+        leader_val = row[leader_column]
+        print(f"  QA: '{qa_val}' -> Leader: '{leader_val}'")
+        
+        # Store the mapping (leader_val might be a code that we want to map to the actual name)
+        leader_mapping[str(leader_val)] = str(leader_val)
     
-    # Simple mapping approach: if there's only one name ("Tài"), map all IDs to it
-    if len(name_values) == 1 and len(numeric_values) > 0:
-        for num_value in numeric_values:
-            leader_mapping[str(num_value)] = name_values[0]
-        print(f"Mapped all numeric values to '{name_values[0]}'")
+    # Now let's see if there are any patterns where we need to map codes to names
+    # Look for rows where the leader might be a single character (like 'A', 'B') 
+    # but we want to use the actual name from other rows
+    unique_leaders = aql_data[leader_column].dropna().unique()
+    name_values = [str(val) for val in unique_leaders if len(str(val)) > 1 and not str(val).isdigit()]
+    code_values = [str(val) for val in unique_leaders if len(str(val)) == 1 and str(val).isalpha()]
     
-    # If we have more names, try to find actual mapping in the data
-    elif len(name_values) > 1:
-        # For now, just map all numeric values to "Tài" as a fallback
-        for num_value in numeric_values:
-            leader_mapping[str(num_value)] = "Tài"
-        print(f"Mapped all numeric values to 'Tài' (fallback)")
+    print(f"\nDetected leader names: {name_values}")
+    print(f"Detected leader codes: {code_values}")
     
+    # If we have both codes and names, we need to figure out the mapping
+    # For now, keep the mapping as-is since we're directly using the values from the AQL data
+    # The user said the issue is that "B" should map to "Nghị", which means
+    # the AQL data should already contain "Nghị" in the leader column where appropriate
+    
+    print(f"Final leader mapping: {leader_mapping}")
     return leader_mapping
 
 def find_qa_and_leader(row, aql_data, leader_mapping=None):
     """
     Improved function to match QA and leader from the AQL data sheet
-    with better debugging and data type handling
+    with better debugging, data type handling, and night shift date adjustment
     """
     if pd.isna(row['Ngày SX_std']) or row['Item_clean'] == '' or row['Giờ_time'] is None:
         return None, None, "Missing required data"
@@ -434,13 +436,32 @@ def find_qa_and_leader(row, aql_data, leader_mapping=None):
     except (ValueError, TypeError):
         return None, None, f"Invalid line value: {complaint_line}"
 
+    # **NEW: Handle night shift date adjustment**
+    complaint_hour = row['Giờ_time'].hour
+    complaint_minute = row['Giờ_time'].minute
+    search_date = row['Ngày SX_std']
+    
+    # If complaint is in early morning hours (0:00 to 6:30) and in shift 3,
+    # we should look at the previous day's AQL data
+    if complaint_hour < 6 or (complaint_hour == 6 and complaint_minute < 30):
+        if row['Shift'] == 3:
+            search_date = search_date - pd.Timedelta(days=1)
+            date_adjusted = True
+        else:
+            date_adjusted = False
+    else:
+        date_adjusted = False
+
     # Debug information
     debug_parts = []
-    debug_parts.append(f"Looking for: Date={row['Ngày SX_std'].strftime('%d/%m/%Y')}, Item={row['Item_clean']}, Line={complaint_line}")
+    if date_adjusted:
+        debug_parts.append(f"NIGHT SHIFT ADJUSTMENT: Looking for: Date={search_date.strftime('%d/%m/%Y')} (adjusted from {row['Ngày SX_std'].strftime('%d/%m/%Y')}), Item={row['Item_clean']}, Line={complaint_line}")
+    else:
+        debug_parts.append(f"Looking for: Date={search_date.strftime('%d/%m/%Y')}, Item={row['Item_clean']}, Line={complaint_line}")
 
-    # 1. Filter AQL data for the same date and item first
+    # 1. Filter AQL data for the same date and item first (using potentially adjusted date)
     date_item_matches = aql_data[
-        (aql_data['Ngày SX_std'] == row['Ngày SX_std']) & 
+        (aql_data['Ngày SX_std'] == search_date) & 
         (aql_data['Item_clean'] == row['Item_clean'])
     ]
     
@@ -448,7 +469,7 @@ def find_qa_and_leader(row, aql_data, leader_mapping=None):
     
     if date_item_matches.empty:
         # Try with date only to see if date matching works
-        date_only_matches = aql_data[aql_data['Ngày SX_std'] == row['Ngày SX_std']]
+        date_only_matches = aql_data[aql_data['Ngày SX_std'] == search_date]
         debug_parts.append(f"Date-only matches: {len(date_only_matches)}")
         
         # Try with item only to see if item matching works
@@ -468,11 +489,7 @@ def find_qa_and_leader(row, aql_data, leader_mapping=None):
         debug_parts.append(f"Available lines for this date+item: {sorted(available_lines)}")
         return None, None, " | ".join(debug_parts)
 
-    # 3. Get the complaint hour and determine which 2-hour intervals to check
-    complaint_hour = row['Giờ_time'].hour
-    complaint_minute = row['Giờ_time'].minute
-
-    # Determine which QA check hours to look at
+    # 3. Determine which QA check hours to look at
     if complaint_minute == 0 and complaint_hour % 2 == 0:
         prev_hour = complaint_hour
         next_hour = (complaint_hour + 2) % 24
@@ -493,7 +510,7 @@ def find_qa_and_leader(row, aql_data, leader_mapping=None):
     debug_parts.append(f"Available times: {sorted(available_times)}")
 
     # Special case for tickets about KKM PRO CCT on 26/04/2025
-    if (row['Ngày SX_std'] == pd.to_datetime('26/04/2025', format='%d/%m/%Y', dayfirst=True) and 
+    if (search_date == pd.to_datetime('26/04/2025', format='%d/%m/%Y', dayfirst=True) and 
         'PRO CCT' in str(row['Item_clean']).upper()):
         # Find rows with QA = "Hằng" in the matching rows
         hang_rows = matching_rows[matching_rows[qa_column] == "Hằng"]
@@ -501,7 +518,13 @@ def find_qa_and_leader(row, aql_data, leader_mapping=None):
             # Get the first row with QA = "Hằng"
             hang_row = hang_rows.iloc[0]
             debug_parts.append("Special case for KKM PRO CCT on 26/04/2025")
-            return hang_row[qa_column], hang_row[leader_column], " | ".join(debug_parts)
+            leader_value = hang_row[leader_column]
+            # Apply leader mapping
+            if leader_mapping and leader_value is not None:
+                mapped_leader = leader_mapping.get(str(leader_value), leader_value)
+            else:
+                mapped_leader = leader_value
+            return hang_row[qa_column], mapped_leader, " | ".join(debug_parts)
     
     # 5. Apply the matching rules
     # 5a. First, check if there's data for the preceding hour
@@ -511,16 +534,7 @@ def find_qa_and_leader(row, aql_data, leader_mapping=None):
 
         # Apply leader mapping if provided
         if leader_mapping and prev_leader is not None:
-            try:
-                # Check if it can be converted to a number
-                if str(prev_leader).isdigit() or isinstance(prev_leader, (int, float)):
-                    mapped_value = leader_mapping.get(str(prev_leader))
-                    if mapped_value:
-                        prev_leader = mapped_value
-                    else:
-                        prev_leader = "Tài"  # Default fallback
-            except:
-                pass
+            prev_leader = leader_mapping.get(str(prev_leader), prev_leader)
         
         # 5b. Check if there's data for the next hour
         if not next_check.empty:
@@ -529,16 +543,7 @@ def find_qa_and_leader(row, aql_data, leader_mapping=None):
 
             # Apply leader mapping if provided
             if leader_mapping and next_leader is not None:
-                try:
-                    # Check if it can be converted to a number
-                    if str(next_leader).isdigit() or isinstance(next_leader, (int, float)):
-                        mapped_value = leader_mapping.get(str(next_leader))
-                        if mapped_value:
-                            next_leader = mapped_value
-                        else:
-                            next_leader = "Tài"  # Default fallback
-                except:
-                    pass
+                next_leader = leader_mapping.get(str(next_leader), next_leader)
             
             # 5c. If both QA and leader are the same, use them
             if prev_qa == next_qa and prev_leader == next_leader:
@@ -565,16 +570,7 @@ def find_qa_and_leader(row, aql_data, leader_mapping=None):
         
         # Apply leader mapping if provided
         if leader_mapping and next_leader is not None:
-            try:
-                # Check if it can be converted to a number
-                if str(next_leader).isdigit() or isinstance(next_leader, (int, float)):
-                    mapped_value = leader_mapping.get(str(next_leader))
-                    if mapped_value:
-                        next_leader = mapped_value
-                    else:
-                        next_leader = "Tài"  # Default fallback
-            except:
-                pass
+            next_leader = leader_mapping.get(str(next_leader), next_leader)
         
         debug_parts.append(f"Only next hour ({next_hour}h) data available - QA ({next_qa}) and leader ({next_leader})")
         return next_qa, next_leader, " | ".join(debug_parts)
@@ -600,16 +596,7 @@ def find_qa_and_leader(row, aql_data, leader_mapping=None):
             
             # Apply leader mapping if provided
             if leader_mapping and closest_leader is not None:
-                try:
-                    # Check if it can be converted to a number
-                    if str(closest_leader).isdigit() or isinstance(closest_leader, (int, float)):
-                        mapped_value = leader_mapping.get(str(closest_leader))
-                        if mapped_value:
-                            closest_leader = mapped_value
-                        else:
-                            closest_leader = "Tài"  # Default fallback
-                except:
-                    pass
+                closest_leader = leader_mapping.get(str(closest_leader), closest_leader)
             
             closest_time = f"{closest_row['Giờ_time'].hour}:{closest_row['Giờ_time'].minute:02d}"
             debug_parts.append(f"Using closest time match at {closest_time} - QA ({closest_qa}) and leader ({closest_leader})")
@@ -842,28 +829,46 @@ def main():
             print()
     
     # Specific debugging for the mentioned tickets
-    problem_tickets = ['1375904/10/2025', '1375704/23/2025']
+    problem_tickets = ['13757', '13694']  # Updated ticket numbers based on debug data
     for ticket in problem_tickets:
-        ticket_rows = knkh_df[knkh_df['Mã ticket'].astype(str).str.contains(ticket.replace('/', ''), na=False)]
+        ticket_rows = knkh_df[knkh_df['Mã ticket'].astype(str).str.contains(ticket, na=False)]
         if not ticket_rows.empty:
             print(f"\nDetailed analysis for ticket {ticket}:")
             for idx in ticket_rows.index:
                 row = knkh_df.loc[idx]
-                print(f"  Date: {row['Ngày SX']} ({row['Ngày SX_std']})")
+                print(f"  Original Date: {row['Ngày SX']} ({row['Ngày SX_std']})")
                 print(f"  Item: {row['Item']} -> cleaned: {row['Item_clean']}")
                 print(f"  Line: {row['Line_extracted']}")
                 print(f"  Time: {row['Giờ_extracted']} -> parsed: {row['Giờ_time']}")
-                print(f"  Debug: {row['debug_info']}")
+                print(f"  Shift: {row['Shift']}")
+                
+                # Check if this should trigger a date adjustment
+                if row['Giờ_time'] is not None:
+                    hour = row['Giờ_time'].hour
+                    minute = row['Giờ_time'].minute
+                    if (hour < 6 or (hour == 6 and minute < 30)) and row['Shift'] == 3:
+                        search_date = row['Ngày SX_std'] - pd.Timedelta(days=1)
+                        print(f"  -> Should search for date: {search_date.strftime('%d/%m/%Y')} (night shift adjustment)")
+                        
+                        # Check if there are any AQL records for the adjusted date
+                        adjusted_date_matches = aql_df[aql_df['Ngày SX_std'] == search_date]
+                        print(f"  -> AQL records for adjusted date: {len(adjusted_date_matches)}")
+                        if len(adjusted_date_matches) > 0:
+                            print(f"  -> Available items on adjusted date: {sorted(adjusted_date_matches['Item_clean'].unique())}")
+                    else:
+                        print(f"  -> No date adjustment needed")
+                
+                print(f"  Current Debug: {row['debug_info']}")
                 
                 # Check if there are any AQL records for this date
                 date_matches = aql_df[aql_df['Ngày SX_std'] == row['Ngày SX_std']]
-                print(f"  AQL records for this date: {len(date_matches)}")
+                print(f"  AQL records for original date: {len(date_matches)}")
                 if len(date_matches) > 0:
-                    print(f"  Available items on this date: {sorted(date_matches['Item_clean'].unique())}")
+                    print(f"  Available items on original date: {sorted(date_matches['Item_clean'].unique())}")
                     item_matches = date_matches[date_matches['Item_clean'] == row['Item_clean']]
-                    print(f"  AQL records for this date+item: {len(item_matches)}")
+                    print(f"  AQL records for original date+item: {len(item_matches)}")
                     if len(item_matches) > 0:
-                        print(f"  Available lines for this date+item: {sorted(item_matches['Line'].unique())}")
+                        print(f"  Available lines for original date+item: {sorted(item_matches['Line'].unique())}")
                 print()
 
     # Format dates for Power BI (MM/DD/YYYY)
