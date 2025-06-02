@@ -48,6 +48,77 @@ def authenticate():
         print(f"Authentication error: {str(e)}")
         sys.exit(1)
 
+def get_sheet_data_robust(worksheet, sheet_name="Unknown"):
+    """
+    Robust function to get data from worksheet, handling duplicate or empty headers
+    """
+    try:
+        print(f"Attempting to get data from sheet: {sheet_name}")
+        
+        # First, try the normal method
+        try:
+            data = worksheet.get_all_records()
+            print(f"Successfully retrieved data from {sheet_name} using get_all_records()")
+            return data
+        except Exception as e:
+            print(f"get_all_records() failed for {sheet_name}: {str(e)}")
+            print(f"Trying alternative method...")
+            
+        # Alternative method: get all values and handle headers manually
+        all_values = worksheet.get_all_values()
+        if not all_values:
+            print(f"Warning: No data found in {sheet_name}")
+            return []
+            
+        # Get headers and clean them up
+        headers = all_values[0]
+        data_rows = all_values[1:]
+        
+        # Clean up headers - handle duplicates and empty values
+        cleaned_headers = []
+        header_counts = {}
+        
+        for i, header in enumerate(headers):
+            # Convert to string and strip whitespace
+            header = str(header).strip()
+            
+            # Handle empty headers
+            if header == '' or header == 'nan':
+                header = f'Column_{i+1}'
+            
+            # Handle duplicates by adding a suffix
+            original_header = header
+            counter = 1
+            while header in header_counts:
+                header = f"{original_header}_{counter}"
+                counter += 1
+            
+            header_counts[header] = 1
+            cleaned_headers.append(header)
+        
+        print(f"Cleaned headers for {sheet_name}: {cleaned_headers}")
+        
+        # Convert to list of dictionaries
+        data = []
+        for row in data_rows:
+            # Ensure row has same length as headers
+            while len(row) < len(cleaned_headers):
+                row.append('')
+            
+            # Create dictionary for this row
+            row_dict = {}
+            for i, header in enumerate(cleaned_headers):
+                row_dict[header] = row[i] if i < len(row) else ''
+            
+            data.append(row_dict)
+        
+        print(f"Successfully processed {len(data)} rows from {sheet_name}")
+        return data
+        
+    except Exception as e:
+        print(f"Error retrieving data from {sheet_name}: {str(e)}")
+        return []
+
 def extract_short_product_name(full_name):
     """
     Extract a shorter version of the product name that includes only brand name (Omachi/Kokomi)
@@ -557,31 +628,47 @@ def main():
     # Open the destination spreadsheet
     destination_sheet = gc.open_by_url('https://docs.google.com/spreadsheets/d/1d6uGPbJV6BsOB6XSB1IS3NhfeaMyMBcaQPvOnNg2yA4/edit')
 
-    # Get the worksheet data
+    # Get the worksheet data using robust method
     knkh_worksheet = knkh_sheet.worksheet('KNKH')
-    knkh_data = knkh_worksheet.get_all_records()
+    knkh_data = get_sheet_data_robust(knkh_worksheet, 'KNKH')
     knkh_df = pd.DataFrame(knkh_data)
 
     aql_worksheet = aql_sheet.worksheet('ID AQL')
-    aql_data = aql_worksheet.get_all_records()
+    aql_data = get_sheet_data_robust(aql_worksheet, 'ID AQL')
     aql_df = pd.DataFrame(aql_data)
 
     print(f"Retrieved {len(knkh_df)} KNKH records and {len(aql_df)} AQL records")
     print(f"KNKH columns: {list(knkh_df.columns)}")
     print(f"AQL columns: {list(aql_df.columns)}")
 
+    # Check if required columns exist
+    required_knkh_columns = ['Ngày tiếp nhận', 'Ngày SX', 'Nội dung phản hồi', 'Item', 'Bộ phận chịu trách nhiệm']
+    required_aql_columns = ['Ngày SX', 'Item', 'Giờ']
+    
+    missing_knkh = [col for col in required_knkh_columns if col not in knkh_df.columns]
+    missing_aql = [col for col in required_aql_columns if col not in aql_df.columns]
+    
+    if missing_knkh:
+        print(f"Warning: Missing columns in KNKH data: {missing_knkh}")
+    if missing_aql:
+        print(f"Warning: Missing columns in AQL data: {missing_aql}")
+
     # Clean concatenated dates for both reception date and production date
-    knkh_df['Ngày tiếp nhận'] = knkh_df['Ngày tiếp nhận'].apply(clean_concatenated_dates)
-    knkh_df['Ngày SX'] = knkh_df['Ngày SX'].apply(clean_concatenated_dates)
+    if 'Ngày tiếp nhận' in knkh_df.columns:
+        knkh_df['Ngày tiếp nhận'] = knkh_df['Ngày tiếp nhận'].apply(clean_concatenated_dates)
+    
+    if 'Ngày SX' in knkh_df.columns:
+        knkh_df['Ngày SX'] = knkh_df['Ngày SX'].apply(clean_concatenated_dates)
     
     # Extract correct Ngày SX from Nội dung phản hồi and replace the Ngày SX column
-    knkh_df['Ngày SX_extracted'] = knkh_df['Nội dung phản hồi'].apply(extract_correct_date)
-    
-    # Replace the original Ngày SX with the extracted one when available, keeping the exact format
-    knkh_df['Ngày SX'] = knkh_df.apply(
-        lambda row: row['Ngày SX_extracted'] if row['Ngày SX_extracted'] is not None else row['Ngày SX'], 
-        axis=1
-    )
+    if 'Nội dung phản hồi' in knkh_df.columns:
+        knkh_df['Ngày SX_extracted'] = knkh_df['Nội dung phản hồi'].apply(extract_correct_date)
+        
+        # Replace the original Ngày SX with the extracted one when available, keeping the exact format
+        knkh_df['Ngày SX'] = knkh_df.apply(
+            lambda row: row['Ngày SX_extracted'] if row['Ngày SX_extracted'] is not None else row.get('Ngày SX', ''), 
+            axis=1
+        )
 
     # Standardize dates first for filtering
     knkh_df['Ngày SX_std'] = knkh_df['Ngày SX'].apply(standardize_date)
@@ -597,24 +684,32 @@ def main():
     print(f"After date filtering: {len(knkh_df)} KNKH records and {len(aql_df)} AQL records")
 
     # Extract time, line, and machine information
-    knkh_df[['Giờ_extracted', 'Line_extracted', 'Máy_extracted']] = knkh_df['Nội dung phản hồi'].apply(
-        lambda x: pd.Series(extract_production_info(x))
-    )
+    if 'Nội dung phản hồi' in knkh_df.columns:
+        knkh_df[['Giờ_extracted', 'Line_extracted', 'Máy_extracted']] = knkh_df['Nội dung phản hồi'].apply(
+            lambda x: pd.Series(extract_production_info(x))
+        )
+    else:
+        knkh_df['Giờ_extracted'] = None
+        knkh_df['Line_extracted'] = None
+        knkh_df['Máy_extracted'] = None
 
     # Convert to appropriate data types
     knkh_df['Line_extracted'] = pd.to_numeric(knkh_df['Line_extracted'], errors='coerce')
     knkh_df['Máy_extracted'] = pd.to_numeric(knkh_df['Máy_extracted'], errors='coerce')
 
     # Standardize the receipt date
-    knkh_df['Ngày tiếp nhận_std'] = knkh_df['Ngày tiếp nhận'].apply(standardize_date)
+    if 'Ngày tiếp nhận' in knkh_df.columns:
+        knkh_df['Ngày tiếp nhận_std'] = knkh_df['Ngày tiếp nhận'].apply(standardize_date)
+    else:
+        knkh_df['Ngày tiếp nhận_std'] = None
 
     # Clean item codes
-    knkh_df['Item_clean'] = knkh_df['Item'].apply(clean_item_code)
-    aql_df['Item_clean'] = aql_df['Item'].apply(clean_item_code)
+    knkh_df['Item_clean'] = knkh_df['Item'].apply(clean_item_code) if 'Item' in knkh_df.columns else ''
+    aql_df['Item_clean'] = aql_df['Item'].apply(clean_item_code) if 'Item' in aql_df.columns else ''
 
     # Parse time
     knkh_df['Giờ_time'] = knkh_df['Giờ_extracted'].apply(parse_time)
-    aql_df['Giờ_time'] = aql_df['Giờ'].apply(parse_time)
+    aql_df['Giờ_time'] = aql_df['Giờ'].apply(parse_time) if 'Giờ' in aql_df.columns else None
 
     # Round time to 2-hour intervals
     knkh_df['Giờ_rounded'] = knkh_df['Giờ_time'].apply(round_to_2hour)
@@ -653,27 +748,43 @@ def main():
     knkh_df['Năm nhận khiếu nại'] = knkh_df['Ngày tiếp nhận_std'].apply(extract_year)
 
     # Filter to only include rows where "Bộ phận chịu trách nhiệm" is "Nhà máy"
-    print(f"Total rows before filtering by 'Bộ phận chịu trách nhiệm': {len(knkh_df)}")
-    knkh_df = knkh_df[knkh_df['Bộ phận chịu trách nhiệm'] == 'Nhà máy']
-    print(f"Rows after filtering for 'Bộ phận chịu trách nhiệm' = 'Nhà máy': {len(knkh_df)}")
+    if 'Bộ phận chịu trách nhiệm' in knkh_df.columns:
+        print(f"Total rows before filtering by 'Bộ phận chịu trách nhiệm': {len(knkh_df)}")
+        knkh_df = knkh_df[knkh_df['Bộ phận chịu trách nhiệm'] == 'Nhà máy']
+        print(f"Rows after filtering for 'Bộ phận chịu trách nhiệm' = 'Nhà máy': {len(knkh_df)}")
+    else:
+        print("Warning: 'Bộ phận chịu trách nhiệm' column not found. Skipping filtering.")
 
     # Create the joined dataframe with all required columns
     filtered_knkh_df = knkh_df.copy()
     
     # Extract short product names
-    filtered_knkh_df['Tên sản phẩm ngắn'] = filtered_knkh_df['Tên sản phẩm'].apply(extract_short_product_name)
+    if 'Tên sản phẩm' in filtered_knkh_df.columns:
+        filtered_knkh_df['Tên sản phẩm ngắn'] = filtered_knkh_df['Tên sản phẩm'].apply(extract_short_product_name)
+    else:
+        filtered_knkh_df['Tên sản phẩm ngắn'] = ''
     
-    joined_df = filtered_knkh_df[[
+    # Define the columns we want to keep, checking if they exist first
+    desired_columns = [
         'Mã ticket', 'Ngày tiếp nhận_formatted', 'Tỉnh', 'Ngày SX_formatted', 'Sản phẩm/Dịch vụ',
         'Số lượng (ly/hộp/chai/gói/hủ)', 'Nội dung phản hồi', 'Item', 'Tên sản phẩm', 'Tên sản phẩm ngắn',
         'SL pack/ cây lỗi', 'Tên lỗi', 'Line_extracted', 'Máy_extracted', 'Giờ_extracted',
         'QA_matched', 'Tên Trưởng ca_matched', 'Shift', 
         'Tháng sản xuất', 'Năm sản xuất', 'Tuần nhận khiếu nại', 'Tháng nhận khiếu nại', 'Năm nhận khiếu nại',
-        'Bộ phận chịu trách nhiệm', 'debug_info'  # Added debug_info column for troubleshooting
-    ]].copy()
+        'Bộ phận chịu trách nhiệm', 'debug_info'
+    ]
+    
+    # Only include columns that actually exist
+    available_columns = [col for col in desired_columns if col in filtered_knkh_df.columns]
+    missing_columns = [col for col in desired_columns if col not in filtered_knkh_df.columns]
+    
+    if missing_columns:
+        print(f"Warning: The following columns are missing and will be skipped: {missing_columns}")
+    
+    joined_df = filtered_knkh_df[available_columns].copy()
 
     # Rename columns for clarity
-    joined_df.rename(columns={
+    column_renames = {
         'Line_extracted': 'Line',
         'Máy_extracted': 'Máy',
         'Giờ_extracted': 'Giờ',
@@ -681,10 +792,17 @@ def main():
         'Tên Trưởng ca_matched': 'Tên Trưởng ca',
         'Ngày tiếp nhận_formatted': 'Ngày tiếp nhận',
         'Ngày SX_formatted': 'Ngày SX'
-    }, inplace=True)
+    }
+    
+    # Only rename columns that exist
+    existing_renames = {old: new for old, new in column_renames.items() if old in joined_df.columns}
+    joined_df.rename(columns=existing_renames, inplace=True)
 
     # Sort by Mã ticket from largest to smallest
-    joined_df = joined_df.sort_values(by='Mã ticket', ascending=False)
+    if 'Mã ticket' in joined_df.columns:
+        joined_df = joined_df.sort_values(by='Mã ticket', ascending=False)
+    else:
+        print("Warning: 'Mã ticket' column not found. Cannot sort.")
 
     # Save to the destination spreadsheet
     try:
@@ -706,7 +824,7 @@ def main():
         data_to_write = [joined_df_cleaned.columns.tolist()] + joined_df_cleaned.values.tolist()
 
         # Update the worksheet
-        integrated_worksheet.update('A1', data_to_write)
+        integrated_worksheet.update(values=data_to_write, range_name='A1')
         print(f"Successfully wrote {len(data_to_write)-1} rows to the destination sheet, sorted by Mã ticket (largest to smallest)")
 
         # Also create a debug worksheet to help troubleshoot matching issues
@@ -721,10 +839,14 @@ def main():
             )
             
         # Create a simplified debug table with key matching info
-        debug_df = joined_df[['Mã ticket', 'Ngày SX', 'Item', 'Line', 'Giờ', 'QA', 'Tên Trưởng ca', 'debug_info']]
-        debug_data = [debug_df.columns.tolist()] + debug_df.head(499).fillna('').values.tolist()
-        debug_worksheet.update('A1', debug_data)
-        print(f"Created debug worksheet with matching information")
+        debug_columns = ['Mã ticket', 'Ngày SX', 'Item', 'Line', 'Giờ', 'QA', 'Tên Trưởng ca', 'debug_info']
+        available_debug_columns = [col for col in debug_columns if col in joined_df.columns]
+        
+        if available_debug_columns:
+            debug_df = joined_df[available_debug_columns]
+            debug_data = [debug_df.columns.tolist()] + debug_df.head(499).fillna('').values.tolist()
+            debug_worksheet.update(values=debug_data, range_name='A1')
+            print(f"Created debug worksheet with matching information")
 
     except Exception as e:
         print(f"Error writing to destination sheet: {str(e)}")
