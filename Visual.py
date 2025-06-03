@@ -417,16 +417,29 @@ def expand_dataframe_for_multiple_mdg(df):
     
     return pd.DataFrame(expanded_rows)
 
-def find_representative_production_data(sample_date, sample_ca, sample_line, sample_mdg, existing_aql_df):
+def find_representative_production_data(vhm_name, sample_id_df, existing_aql_df):
     """
-    Find representative production data (Sản phẩm, Item, Giờ, etc.) for a given date/shift/line/MĐG combination
+    Find representative production data for a given VHM using the best available sample data
     """
     try:
-        # Convert sample data to matching format
-        date_str = sample_date.strftime('%d/%m/%Y') if sample_date else None
-        if not date_str:
-            return None
+        # Get sample records for this VHM
+        vhm_sample_records = sample_id_df[sample_id_df['VHM'] == vhm_name]
+        
+        if vhm_sample_records.empty:
+            return None, None
+        
+        # Use the first (or most recent) sample record for this VHM
+        sample_row = vhm_sample_records.iloc[0]
+        
+        sample_date = standardize_date(sample_row.get('Ngày SX', ''))
+        sample_ca = sample_row.get('Ca', '')
+        sample_line = sample_row.get('Line', '')
+        sample_mdg = sample_row.get('MĐG', '')
+        
+        if sample_date is None:
+            return sample_row, None
             
+        date_str = sample_date.strftime('%d/%m/%Y')
         ca_str = str(sample_ca).strip()
         line_str = str(sample_line).strip()
         mdg_str = str(sample_mdg).strip()
@@ -483,15 +496,13 @@ def find_representative_production_data(sample_date, sample_ca, sample_line, sam
                 existing_aql_df['Line'].astype(str).str.strip() == line_str
             ]
         
-        # Return the first matching record if found
-        if not matching_records.empty:
-            return matching_records.iloc[0]
-        else:
-            return None
+        # Return both sample data and representative production data
+        production_data = matching_records.iloc[0] if not matching_records.empty else None
+        return sample_row, production_data
             
     except Exception as e:
-        print(f"Error finding representative production data: {e}")
-        return None
+        print(f"Error finding representative production data for VHM {vhm_name}: {e}")
+        return None, None
 
 def main():
     print("Starting Google Sheets data processing...")
@@ -719,180 +730,166 @@ def main():
     available_columns = [col for col in required_output_columns if col in id_aql_df.columns]
     existing_aql_df = id_aql_df[available_columns].copy()
     
-    # REVISED COMPREHENSIVE VHM INCLUSION LOGIC
-    print("Creating comprehensive dataset with ALL existing defect records plus zero-defect VHM records...")
+    # OPTIMIZED COMPREHENSIVE DATASET CREATION
+    print("Creating optimized comprehensive dataset...")
     
-    # Start with ALL existing AQL records (both with and without VHM)
+    # Step 1: Filter for records with actual defects (hold quantity > 0)
+    # Convert hold quantity to numeric for proper filtering
+    existing_aql_df['Số lượng hold ( gói/thùng)_numeric'] = pd.to_numeric(
+        existing_aql_df['Số lượng hold ( gói/thùng)'], errors='coerce'
+    )
+    
+    # Get records with actual defects (hold quantity > 0)
+    defect_records = existing_aql_df[
+        (existing_aql_df['Số lượng hold ( gói/thùng)_numeric'] > 0)
+    ].copy()
+    
+    # Remove the temporary numeric column
+    defect_records = defect_records.drop(columns=['Số lượng hold ( gói/thùng)_numeric'])
+    
+    print(f"Step 1: Found {len(defect_records)} records with actual defects (hold quantity > 0)")
+    
+    # Step 2: Identify unique VHMs that have defects vs those that don't
+    defect_records_with_vhm = defect_records[
+        (defect_records['VHM'] != '') & 
+        (defect_records['VHM'].notna())
+    ]
+    
+    vhms_with_defects = set(defect_records_with_vhm['VHM'].unique())
+    all_vhms_from_sample = set(sample_id_df['VHM'].dropna().unique())
+    vhms_without_defects = all_vhms_from_sample - vhms_with_defects
+    
+    print(f"Step 2: VHM Analysis:")
+    print(f"  - Total unique VHMs in sample data: {len(all_vhms_from_sample)}")
+    print(f"  - VHMs with defect records: {len(vhms_with_defects)}")
+    print(f"  - VHMs without defect records: {len(vhms_without_defects)}")
+    
+    # Step 3: Start comprehensive dataset with all defect records
     comprehensive_rows = []
     
-    # Step 1: Add ALL existing AQL records to the comprehensive dataset
-    print(f"Step 1: Adding all {len(existing_aql_df)} existing AQL records...")
-    for _, aql_row in existing_aql_df.iterrows():
-        comprehensive_rows.append(aql_row)
+    # Add all defect records (both with and without VHM)
+    for _, defect_row in defect_records.iterrows():
+        comprehensive_rows.append(defect_row)
     
-    print(f"Added {len(existing_aql_df)} existing AQL records (both with and without VHM)")
+    print(f"Step 3: Added {len(defect_records)} defect records to comprehensive dataset")
     
-    # Step 2: Identify VHMs that don't have any defect records and create zero-defect records for them
-    print("Step 2: Identifying VHMs without defect records...")
-    
-    # Get all unique VHMs from sample_id_df
-    all_vhms = set(sample_id_df['VHM'].dropna().unique())
-    
-    # Get all VHMs that already have defect records (non-zero quantities)
-    existing_vhms_with_defects = set(existing_aql_df[
-        (existing_aql_df['VHM'] != '') & 
-        (existing_aql_df['VHM'].notna()) &
-        (existing_aql_df['Số lượng hold ( gói/thùng)'].notna()) & 
-        (existing_aql_df['Số lượng hold ( gói/thùng)'] != '') &
-        (pd.to_numeric(existing_aql_df['Số lượng hold ( gói/thùng)'], errors='coerce') > 0)
-    ]['VHM'].unique())
-    
-    # VHMs that need zero-defect records
-    vhms_needing_zero_defect_records = all_vhms - existing_vhms_with_defects
-    
-    print(f"Total VHMs in sample data: {len(all_vhms)}")
-    print(f"VHMs already with defect records: {len(existing_vhms_with_defects)}")
-    print(f"VHMs needing zero-defect records: {len(vhms_needing_zero_defect_records)}")
-    
-    # Step 3: Create zero-defect records for VHMs that don't have any defect records
-    if vhms_needing_zero_defect_records:
-        print("Step 3: Creating zero-defect records for VHMs without defects...")
+    # Step 4: Create ONE zero-defect record per VHM that doesn't have defects
+    if vhms_without_defects:
+        print(f"Step 4: Creating zero-defect records for {len(vhms_without_defects)} VHMs without defects...")
         
-        for vhm_name in vhms_needing_zero_defect_records:
+        zero_defect_count = 0
+        for vhm_name in vhms_without_defects:
             try:
-                # Find the sample record for this VHM
-                vhm_sample_records = sample_id_df[sample_id_df['VHM'] == vhm_name]
-                
-                if vhm_sample_records.empty:
-                    continue
-                
-                # Use the first sample record for this VHM
-                sample_row = vhm_sample_records.iloc[0]
-                
-                # Get basic sample information
-                sample_date = standardize_date(sample_row.get('Ngày SX', ''))
-                if sample_date is None:
-                    continue
-                    
-                sample_ca = sample_row.get('Ca', '')
-                sample_line = sample_row.get('Line', '')
-                sample_mdg = sample_row.get('MĐG', '')
-                sample_vhm_value = sample_row.get('VHM', '')
-                sample_hao_hut = sample_row.get('% Hao hụt OPP', '')
-                
-                print(f"Creating zero-defect record for VHM: {vhm_name}")
-                
-                # Find representative production data for this VHM's shift/line/MĐG
-                representative_data = find_representative_production_data(
-                    sample_date, sample_ca, sample_line, sample_mdg, existing_aql_df
+                # Find representative data for this VHM
+                sample_data, production_data = find_representative_production_data(
+                    vhm_name, sample_id_df, existing_aql_df
                 )
                 
-                # Create representative record with complete production information
-                representative_record = {}
+                if sample_data is None:
+                    print(f"  Warning: No sample data found for VHM: {vhm_name}")
+                    continue
                 
-                # Set basic production information from sample data
-                representative_record['Ngày SX'] = sample_row.get('Ngày SX', '')
-                representative_record['Ngày'] = sample_date.day if sample_date else ''
-                representative_record['Tuần'] = sample_date.isocalendar()[1] if sample_date else ''
-                representative_record['Tháng'] = sample_date.month if sample_date else ''
-                representative_record['Ca'] = sample_ca
-                representative_record['Line'] = sample_line
-                representative_record['MĐG'] = sample_mdg
-                representative_record['VHM'] = sample_vhm_value
-                representative_record['% Hao hụt OPP'] = sample_hao_hut
+                # Create zero-defect record
+                zero_defect_record = {}
                 
-                # Use representative production data if found
-                if representative_data is not None:
-                    representative_record['Sản phẩm'] = representative_data.get('Sản phẩm', '')
-                    representative_record['Item'] = representative_data.get('Item', '')
-                    representative_record['Giờ'] = representative_data.get('Giờ', '')
-                    representative_record['SL gói lỗi sau xử lý'] = representative_data.get('SL gói lỗi sau xử lý', '')
-                    representative_record['Defect code'] = representative_data.get('Defect code', '')
-                    representative_record['Defect name'] = representative_data.get('Defect name', '')
-                    representative_record['QA'] = representative_data.get('QA', '')
-                    representative_record['Tên Trưởng ca'] = representative_data.get('Tên Trưởng ca', '')
-                    print(f"  Found representative data: {representative_data.get('Sản phẩm', 'N/A')} - {representative_data.get('Item', 'N/A')}")
+                # Basic information from sample data
+                sample_date = standardize_date(sample_data.get('Ngày SX', ''))
+                zero_defect_record['Ngày SX'] = sample_data.get('Ngày SX', '')
+                zero_defect_record['Ngày'] = sample_date.day if sample_date else ''
+                zero_defect_record['Tuần'] = sample_date.isocalendar()[1] if sample_date else ''
+                zero_defect_record['Tháng'] = sample_date.month if sample_date else ''
+                zero_defect_record['Ca'] = sample_data.get('Ca', '')
+                zero_defect_record['Line'] = sample_data.get('Line', '')
+                zero_defect_record['MĐG'] = sample_data.get('MĐG', '')
+                zero_defect_record['VHM'] = sample_data.get('VHM', '')
+                zero_defect_record['% Hao hụt OPP'] = sample_data.get('% Hao hụt OPP', '')
+                
+                # Production information from representative data (if available)
+                if production_data is not None:
+                    zero_defect_record['Sản phẩm'] = production_data.get('Sản phẩm', '')
+                    zero_defect_record['Item'] = production_data.get('Item', '')
+                    zero_defect_record['Giờ'] = production_data.get('Giờ', '')
+                    zero_defect_record['SL gói lỗi sau xử lý'] = production_data.get('SL gói lỗi sau xử lý', '')
+                    zero_defect_record['Defect code'] = production_data.get('Defect code', '')
+                    zero_defect_record['Defect name'] = production_data.get('Defect name', '')
+                    zero_defect_record['QA'] = production_data.get('QA', '')
+                    zero_defect_record['Tên Trưởng ca'] = production_data.get('Tên Trưởng ca', '')
                 else:
-                    # Fallback values if no representative data found
-                    representative_record['Sản phẩm'] = ''
-                    representative_record['Item'] = ''
-                    representative_record['Giờ'] = ''
-                    representative_record['SL gói lỗi sau xử lý'] = ''
-                    representative_record['Defect code'] = ''
-                    representative_record['Defect name'] = ''
-                    representative_record['QA'] = ''
-                    representative_record['Tên Trưởng ca'] = ''
-                    print(f"  No representative data found, using empty values")
+                    # Use empty values if no production data found
+                    zero_defect_record['Sản phẩm'] = ''
+                    zero_defect_record['Item'] = ''
+                    zero_defect_record['Giờ'] = ''
+                    zero_defect_record['SL gói lỗi sau xử lý'] = ''
+                    zero_defect_record['Defect code'] = ''
+                    zero_defect_record['Defect name'] = ''
+                    zero_defect_record['QA'] = ''
+                    zero_defect_record['Tên Trưởng ca'] = ''
                 
-                # Set zero defect information (this is the key - quantity = 0)
-                representative_record['Số lượng hold ( gói/thùng)'] = 0
+                # Zero defect quantity (this is the key)
+                zero_defect_record['Số lượng hold ( gói/thùng)'] = 0
                 
-                # Set target TV based on line
+                # Target TV based on line
                 try:
-                    line_num = float(sample_line) if sample_line else None
+                    line_num = float(sample_data.get('Line', '')) if sample_data.get('Line', '') else None
                     if line_num and 1 <= line_num <= 6:
-                        representative_record['Target TV'] = 0.29
+                        zero_defect_record['Target TV'] = 0.29
                     elif line_num and 7 <= line_num <= 8:
-                        representative_record['Target TV'] = 2.19
+                        zero_defect_record['Target TV'] = 2.19
                     else:
-                        representative_record['Target TV'] = ''
+                        zero_defect_record['Target TV'] = ''
                 except:
-                    representative_record['Target TV'] = ''
+                    zero_defect_record['Target TV'] = ''
                 
                 # Fill any remaining columns with empty values
                 for col in available_columns:
-                    if col not in representative_record:
-                        representative_record[col] = ''
+                    if col not in zero_defect_record:
+                        zero_defect_record[col] = ''
                 
-                comprehensive_rows.append(pd.Series(representative_record))
-                print(f"  Successfully created zero-defect record for VHM: {vhm_name}")
+                comprehensive_rows.append(pd.Series(zero_defect_record))
+                zero_defect_count += 1
+                
+                print(f"  Created zero-defect record for VHM: {vhm_name}")
                 
             except Exception as e:
-                print(f"Error creating zero-defect record for VHM {vhm_name}: {e}")
+                print(f"  Error creating zero-defect record for VHM {vhm_name}: {e}")
                 continue
-    
-    # Create comprehensive dataframe
-    if comprehensive_rows:
-        # Convert all rows to DataFrame
-        comprehensive_df = pd.DataFrame(comprehensive_rows)
         
-        # Ensure column order matches available_columns
+        print(f"Step 4: Successfully created {zero_defect_count} zero-defect records")
+    
+    # Step 5: Create final comprehensive dataframe
+    if comprehensive_rows:
+        comprehensive_df = pd.DataFrame(comprehensive_rows)
         comprehensive_df = comprehensive_df.reindex(columns=available_columns, fill_value='')
         
-        print(f"Comprehensive dataset created with {len(comprehensive_df)} total records")
+        print(f"Step 5: Final comprehensive dataset created")
+        print(f"  Total records: {len(comprehensive_df)}")
         
-        # Show statistics
+        # Statistics
         total_records = len(comprehensive_df)
         records_with_vhm = len(comprehensive_df[
             (comprehensive_df['VHM'] != '') & 
             (comprehensive_df['VHM'].notna())
         ])
         records_without_vhm = total_records - records_with_vhm
-        unique_vhms = len(comprehensive_df['VHM'].dropna().unique())
         
-        print(f"Final dataset statistics:")
-        print(f"  Total records: {total_records}")
-        print(f"  Records with VHM: {records_with_vhm}")
-        print(f"  Records without VHM: {records_without_vhm}")
-        print(f"  Unique VHMs: {unique_vhms}")
+        # Convert hold quantity to numeric for statistics
+        comprehensive_df['temp_numeric'] = pd.to_numeric(
+            comprehensive_df['Số lượng hold ( gói/thùng)'], errors='coerce'
+        )
+        defect_records_count = len(comprehensive_df[comprehensive_df['temp_numeric'] > 0])
+        zero_defect_records_count = len(comprehensive_df[comprehensive_df['temp_numeric'] == 0])
+        comprehensive_df = comprehensive_df.drop(columns=['temp_numeric'])
         
-        # Show VHM distribution
-        vhm_counts = comprehensive_df[comprehensive_df['VHM'] != '']['VHM'].value_counts()
-        print("VHM distribution in final dataset:")
-        for vhm, count in vhm_counts.head(10).items():
-            defect_count = len(comprehensive_df[
-                (comprehensive_df['VHM'] == vhm) & 
-                (pd.to_numeric(comprehensive_df['Số lượng hold ( gói/thùng)'], errors='coerce') > 0)
-            ])
-            zero_defect_count = count - defect_count
-            print(f"  {vhm}: {count} records ({defect_count} with defects, {zero_defect_count} zero-defect)")
-        
-        if len(vhm_counts) > 10:
-            print(f"  ... and {len(vhm_counts) - 10} more VHMs")
+        print(f"Final dataset breakdown:")
+        print(f"  - Total records: {total_records}")
+        print(f"  - Records with VHM: {records_with_vhm}")
+        print(f"  - Records without VHM: {records_without_vhm}")
+        print(f"  - Records with defects (hold qty > 0): {defect_records_count}")
+        print(f"  - Zero-defect records (hold qty = 0): {zero_defect_records_count}")
         
         new_df = comprehensive_df
     else:
-        print("Warning: No comprehensive records created, falling back to existing AQL data")
+        print("Warning: No comprehensive records created")
         new_df = existing_aql_df
     
     # Sort by date (newest first)
@@ -925,10 +922,11 @@ def main():
 
         # Update the worksheet - use new parameter order
         processed_worksheet.update(values=data_to_write, range_name='A1')
-        print(f"Successfully wrote {len(data_to_write)-1} rows to the destination sheet, sorted by Ngày SX (newest first)")
-        print(f"Added VHM and % Hao hụt OPP columns based on Ngày SX, Ca, Line, MĐG mapping")
-        print(f"Improved handling of comma-separated MĐG values (e.g., '1,2' or '3,4')")
-        print(f"Comprehensive dataset includes ALL defect records (with and without VHM) plus zero-defect VHM records")
+        print(f"Successfully wrote {len(data_to_write)-1} rows to the destination sheet")
+        print(f"Dataset includes:")
+        print(f"  - ALL defect records with hold quantity > 0 (mapped with VHM where possible)")
+        print(f"  - ONE zero-defect record per unique VHM that has no defects")
+        print(f"  - Defect records without VHM for analysis by other factors (week, shift, line, etc.)")
         
         # Format the worksheet as a table
         format_as_table(processed_worksheet)
