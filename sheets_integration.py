@@ -146,7 +146,13 @@ def extract_production_info(text):
     Handles patterns like:
     - "21:17 22I" -> time="21:17", line="2", machine="2"
     - "Nơi SX: I-MBP (8I06)" -> line="8", machine=None
-    - "Nơi SX: MBP" -> searches for time and line info elsewhere
+    - "Nơi SX: I-MBP (13:19 23)" -> time="13:19", line="2", machine="3"
+    - "Nơi SX: I-MBP (14:27 21 I )" -> time="14:27", line="2", machine="1"
+    - "Nơi SX: I-MBP (22:51 24 I )" -> time="22:51", line="2", machine="4"
+    
+    NEW IMPROVEMENT: Now handles 2-digit codes after time where:
+    - First digit = line number (1-8)
+    - Second digit = machine number (0-9)
     """
     if not isinstance(text, str):
         return None, None, None
@@ -169,12 +175,30 @@ def extract_production_info(text):
     if parenthesis_match:
         content = parenthesis_match.group(1).strip()
         
+        # NEW PATTERN: Look for 2-digit numbers after time (like "13:19 23" or "14:27 21")
+        if time_str:
+            # Look for pattern: time followed by space and 2-digit number
+            time_number_pattern = rf'{re.escape(time_str)}\s+(\d{{2}})'
+            time_number_match = re.search(time_number_pattern, content)
+            if time_number_match:
+                digits = time_number_match.group(1)
+                first_digit = int(digits[0])
+                second_digit = int(digits[1])
+                
+                # Check if first digit is valid line number (1-8)
+                if 1 <= first_digit <= 8:
+                    line = str(first_digit)
+                    machine = str(second_digit)
+                    return time_str, line, machine
+        
+        # EXISTING PATTERN: Look for patterns like "8I06", "21I", "2I", etc.
         # Remove time part if found to simplify processing
         if time_str:
-            content = content.replace(time_str, '').strip()
+            content_for_i_pattern = content.replace(time_str, '').strip()
+        else:
+            content_for_i_pattern = content
         
-        # Look for patterns like "8I06", "21I", "2I", etc.
-        line_machine_match = re.search(r'(\d+)I', content)
+        line_machine_match = re.search(r'(\d+)I', content_for_i_pattern)
         if line_machine_match:
             digits = line_machine_match.group(1)
             if len(digits) == 1 and 1 <= int(digits) <= 8:
@@ -210,7 +234,21 @@ def extract_production_info(text):
         mbp_pos = text.find("Nơi SX: MBP")
         surrounding_text = text[max(0, mbp_pos-20):mbp_pos+50]
         
-        # Look for line info in surrounding text
+        # First try the new 2-digit pattern in surrounding text
+        if time_str:
+            time_number_pattern = rf'{re.escape(time_str)}\s+(\d{{2}})'
+            time_number_match = re.search(time_number_pattern, surrounding_text)
+            if time_number_match:
+                digits = time_number_match.group(1)
+                first_digit = int(digits[0])
+                second_digit = int(digits[1])
+                
+                if 1 <= first_digit <= 8:
+                    line = str(first_digit)
+                    machine = str(second_digit)
+                    return time_str, line, machine
+        
+        # Fall back to looking for "I" patterns in surrounding text
         line_pattern = r'(\d+)I'
         line_match = re.search(line_pattern, surrounding_text)
         if line_match:
@@ -729,15 +767,23 @@ def main():
 
     print(f"After date filtering: {len(knkh_df)} KNKH records and {len(aql_df)} AQL records")
 
-    # Extract time, line, and machine information
+    # Extract time, line, and machine information using improved function
     knkh_df[['Giờ_extracted', 'Line_extracted', 'Máy_extracted']] = knkh_df['Nội dung phản hồi'].apply(
         lambda x: pd.Series(extract_production_info(x))
     )
 
     # Test the extraction for specific patterns mentioned by user
-    test_text = "Thông tin phản hồi: - Anh Thành phản ánh mua ở tạp hóa 1 gói mì Kokomi pro chanh chua về mở ra bên trong gói rau rỗng không có rau, khách hàng liên hệ nhờ hỗ trợ đổi giùm Mì Kokomi Pro canh chua tôm 30gói x 82gr: Rỗng gói gia vị Ngày SX: 24/04/2025 Ngày HH: 24/10/2025 21:17 22I Nơi SX: MBP"
-    test_time, test_line, test_machine = extract_production_info(test_text)
-    print(f"Test extraction for '21:17 22I': Time={test_time}, Line={test_line}, Machine={test_machine}")
+    test_texts = [
+        "Nơi SX: I-MBP (13:19 23)",
+        "Nơi SX: I-MBP (14:27 21 I )",
+        "Nơi SX: I-MBP (22:51 24 I )",
+        "21:17 22I"
+    ]
+    
+    print("\nTesting improved extraction function:")
+    for test_text in test_texts:
+        test_time, test_line, test_machine = extract_production_info(test_text)
+        print(f"'{test_text}' -> Time={test_time}, Line={test_line}, Machine={test_machine}")
 
     # Convert to appropriate data types
     knkh_df['Line_extracted'] = pd.to_numeric(knkh_df['Line_extracted'], errors='coerce')
@@ -856,41 +902,6 @@ def main():
             print(f"Ticket {row['Mã ticket']}: Date={row['Ngày SX']}, Item={row['Item']}, Line={row['Line_extracted']}, Time={row['Giờ_extracted']}")
             print(f"  Debug: {row['debug_info']}")
             print()
-    
-    # Specific debugging for the mentioned tickets
-    problem_tickets = ['13757', '13694', '13677', '13725']  # Updated with more examples from debug data
-    for ticket in problem_tickets:
-        ticket_rows = knkh_df[knkh_df['Mã ticket'].astype(str).str.contains(ticket, na=False)]
-        if not ticket_rows.empty:
-            print(f"\nDetailed analysis for ticket {ticket}:")
-            for idx in ticket_rows.index:
-                row = knkh_df.loc[idx]
-                print(f"  Original Date: {row['Ngày SX']} ({row['Ngày SX_std']})")
-                print(f"  Item: {row['Item']} -> cleaned: {row['Item_clean']}")
-                print(f"  Line: {row['Line_extracted']}")
-                print(f"  Time: {row['Giờ_extracted']} -> parsed: {row['Giờ_time']}")
-                print(f"  Shift: {row['Shift']}")
-                print(f"  QA matched: {row['QA_matched']}")
-                print(f"  Leader matched: {row['Tên Trưởng ca_matched']}")
-                
-                # Check if this should trigger a date adjustment
-                if row['Giờ_time'] is not None:
-                    hour = row['Giờ_time'].hour
-                    minute = row['Giờ_time'].minute
-                    if (hour < 6 or (hour == 6 and minute < 30)) and row['Shift'] == 3:
-                        search_date = row['Ngày SX_std'] - pd.Timedelta(days=1)
-                        print(f"  -> Should search for date: {search_date.strftime('%d/%m/%Y')} (night shift adjustment)")
-                        
-                        # Check if there are any AQL records for the adjusted date
-                        adjusted_date_matches = aql_df[aql_df['Ngày SX_std'] == search_date]
-                        print(f"  -> AQL records for adjusted date: {len(adjusted_date_matches)}")
-                        if len(adjusted_date_matches) > 0:
-                            print(f"  -> Available items on adjusted date: {sorted(adjusted_date_matches['Item_clean'].unique())}")
-                    else:
-                        print(f"  -> No date adjustment needed")
-                
-                print(f"  Current Debug: {row['debug_info']}")
-                print()
 
     # Format dates for Power BI (MM/DD/YYYY)
     knkh_df['Ngày tiếp nhận_formatted'] = knkh_df['Ngày tiếp nhận_std'].apply(format_date_mm_dd_yyyy)
