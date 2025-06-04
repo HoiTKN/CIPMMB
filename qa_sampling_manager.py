@@ -93,7 +93,7 @@ def get_or_create_sheet(name, rows=100, cols=20):
     return worksheet
 
 # Get the main sampling schedule sheet and create history sheet if needed
-sampling_schedule = get_or_create_sheet('Sheet1')  # Main sheet with sampling schedule
+sampling_schedule = get_or_create_sheet('KHLM')  # Main sheet with sampling schedule
 sampling_history = get_or_create_sheet('Lịch sử mẫu')  # History sheet to track samples
 
 # 3. Helper function to parse dates in different formats
