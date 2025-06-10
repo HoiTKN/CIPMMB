@@ -143,8 +143,11 @@ def extract_production_info(text):
     Extract production information from text with improved line and machine logic.
     Returns (time, line, machine) tuple.
     
+    FIXED: Now handles spaces around colons in time patterns like "23 :12"
+    
     Handles patterns like:
     - "21:17 22I" -> time="21:17", line="2", machine="2"
+    - "23 :12 23I" -> time="23:12", line="2", machine="3" (NEW FIX)
     - "Nơi SX: I-MBP (8I06)" -> line="8", machine=None
     - "Nơi SX: I-MBP (13:19 23)" -> time="13:19", line="2", machine="3"
     - "Nơi SX: I-MBP (14:27 21 I )" -> time="14:27", line="2", machine="1"
@@ -160,9 +163,13 @@ def extract_production_info(text):
     # Clean and standardize the text
     text = text.strip()
     
-    # Extract time first (anywhere in the text)
-    time_match = re.search(r'(\d{1,2}:\d{1,2})', text)
-    time_str = time_match.group(1) if time_match else None
+    # FIXED: Extract time first (anywhere in the text) - now handles spaces around colon
+    time_match = re.search(r'(\d{1,2}\s*:\s*\d{1,2})', text)
+    time_str = None
+    if time_match:
+        # Clean up the time string by removing spaces
+        raw_time = time_match.group(1)
+        time_str = re.sub(r'\s*:\s*', ':', raw_time)  # Replace " : " or " :" or ": " with ":"
 
     # Try to find line and machine info in different patterns
     line = None
@@ -178,6 +185,7 @@ def extract_production_info(text):
         # NEW PATTERN: Look for 2-digit numbers after time (like "13:19 23" or "14:27 21")
         if time_str:
             # Look for pattern: time followed by space and 2-digit number
+            # Use the cleaned time_str for pattern matching
             time_number_pattern = rf'{re.escape(time_str)}\s+(\d{{2}})'
             time_number_match = re.search(time_number_pattern, content)
             if time_number_match:
@@ -190,11 +198,29 @@ def extract_production_info(text):
                     line = str(first_digit)
                     machine = str(second_digit)
                     return time_str, line, machine
+            
+            # ALSO try with the original raw time pattern to catch cases like "23 :12 23"
+            if raw_time != time_str:
+                raw_time_pattern = rf'{re.escape(raw_time)}\s+(\d{{2}})'
+                raw_time_match = re.search(raw_time_pattern, content)
+                if raw_time_match:
+                    digits = raw_time_match.group(1)
+                    first_digit = int(digits[0])
+                    second_digit = int(digits[1])
+                    
+                    # Check if first digit is valid line number (1-8)
+                    if 1 <= first_digit <= 8:
+                        line = str(first_digit)
+                        machine = str(second_digit)
+                        return time_str, line, machine
         
         # EXISTING PATTERN: Look for patterns like "8I06", "21I", "2I", etc.
         # Remove time part if found to simplify processing
         if time_str:
             content_for_i_pattern = content.replace(time_str, '').strip()
+            # Also remove the raw time pattern if different
+            if time_match and time_match.group(1) != time_str:
+                content_for_i_pattern = content_for_i_pattern.replace(time_match.group(1), '').strip()
         else:
             content_for_i_pattern = content
         
@@ -777,10 +803,11 @@ def main():
         "Nơi SX: I-MBP (13:19 23)",
         "Nơi SX: I-MBP (14:27 21 I )",
         "Nơi SX: I-MBP (22:51 24 I )",
-        "21:17 22I"
+        "21:17 22I",
+        "Nơi SX: I-MBP (23 :12 23I)"  # NEW TEST CASE from user
     ]
     
-    print("\nTesting improved extraction function:")
+    print("\nTesting improved extraction function (including the fix for spaces around colon):")
     for test_text in test_texts:
         test_time, test_line, test_machine = extract_production_info(test_text)
         print(f"'{test_text}' -> Time={test_time}, Line={test_line}, Machine={test_machine}")
