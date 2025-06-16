@@ -291,28 +291,37 @@ def extract_production_info(text):
     return time_str, line, machine
 
 def standardize_date(date_str):
+    """Improved date standardization with explicit format handling"""
     try:
         if isinstance(date_str, str):
+            date_str = date_str.strip()
+            
+            # Handle DD/MM/YYYY format specifically
+            if re.match(r'^\d{1,2}/\d{1,2}/\d{4}$', date_str):
+                return pd.to_datetime(date_str, format='%d/%m/%Y')
+            
+            # Handle MM/DD/YYYY format specifically  
+            if re.match(r'^\d{1,2}/\d{1,2}/\d{4}$', date_str):
+                # Try DD/MM/YYYY first (since dayfirst=True)
+                try:
+                    return pd.to_datetime(date_str, format='%d/%m/%Y')
+                except:
+                    # Fall back to MM/DD/YYYY
+                    return pd.to_datetime(date_str, format='%m/%d/%Y')
+            
             # Handle DD-MMM-YYYY format (e.g., "4-Apr-2025")
             if '-' in date_str:
-                try:
-                    for fmt in ['%d-%b-%Y', '%d-%B-%Y', '%d-%b-%y', '%d-%B-%y']:
-                        try:
-                            return pd.to_datetime(date_str, format=fmt)
-                        except:
-                            pass
-                except:
-                    pass
+                for fmt in ['%d-%b-%Y', '%d-%B-%Y', '%d-%b-%y', '%d-%B-%y']:
+                    try:
+                        return pd.to_datetime(date_str, format=fmt)
+                    except:
+                        continue
 
-            # Handle DD/MM/YYYY format
-            if '/' in date_str:
-                try:
-                    return pd.to_datetime(date_str, format='%d/%m/%Y', dayfirst=True)
-                except:
-                    pass
-
-            # Last resort: Let pandas try to detect with dayfirst=True
-            return pd.to_datetime(date_str, dayfirst=True)
+            # Last resort: Let pandas try to detect, but suppress warnings
+            import warnings
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                return pd.to_datetime(date_str, dayfirst=True)
 
         return pd.to_datetime(date_str)
     except:
@@ -579,7 +588,7 @@ def find_qa_and_leader(row, aql_data, leader_mapping=None):
     if matching_rows.empty:
         # Show available lines for this date+item combination
         available_lines = date_item_matches['Line'].dropna().unique()
-        debug_parts.append(f"Available lines for this date+item: {sorted(available_lines)}")
+        debug_parts.append(f"Available lines for this date+item: {sorted([x for x in available_lines if pd.notna(x)])}")
         return None, None, " | ".join(debug_parts)
 
     # 3. Determine which QA check hours to look at
@@ -603,7 +612,7 @@ def find_qa_and_leader(row, aql_data, leader_mapping=None):
     debug_parts.append(f"Available times: {sorted(available_times)}")
 
     # Special case for tickets about KKM PRO CCT on 26/04/2025
-    if (search_date == pd.to_datetime('26/04/2025', format='%d/%m/%Y', dayfirst=True) and 
+    if (search_date == pd.to_datetime('26/04/2025', format='%d/%m/%Y') and 
         'PRO CCT' in str(row['Item_clean']).upper()):
         # Find rows with QA = "Hằng" in the matching rows
         hang_rows = matching_rows[matching_rows[qa_column] == "Hằng"]
@@ -861,6 +870,11 @@ def main():
     elif not line_column:
         print("Warning: No Line column found in AQL data")
 
+    # FIXED: Convert AQL Line column to numeric BEFORE any sorting operations
+    if 'Line' in aql_df.columns:
+        aql_df['Line'] = pd.to_numeric(aql_df['Line'], errors='coerce')
+        print(f"Converted Line column to numeric")
+
     # Debug: Check AQL data sample to understand structure
     print("\nAQL Data Sample:")
     if len(aql_df) > 0:
@@ -870,15 +884,19 @@ def main():
             print(f"Row {idx}: Date={row.get('Ngày SX')}, Item={row.get('Item')}, Line={row.get('Line')}, Time={row.get(gio_column) if gio_column else 'N/A'}")
         print()
     
-    # Debug: Check data types
+    # Debug: Check data types - NOW SAFE because Line is already converted to numeric
     print("Data type checking:")
     print(f"AQL Line column type: {aql_df['Line'].dtype if 'Line' in aql_df.columns else 'N/A'}")
-    print(f"AQL Line unique values: {sorted(aql_df['Line'].dropna().unique()) if 'Line' in aql_df.columns else 'N/A'}")
     
-    # Ensure AQL Line column is properly converted to numeric for matching
+    # FIXED: Safe sorting - only include non-null numeric values
     if 'Line' in aql_df.columns:
-        aql_df['Line'] = pd.to_numeric(aql_df['Line'], errors='coerce')
-        print(f"After conversion - AQL Line unique values: {sorted(aql_df['Line'].dropna().unique())}")
+        valid_lines = aql_df['Line'].dropna()
+        if len(valid_lines) > 0:
+            print(f"AQL Line unique values: {sorted(valid_lines.unique())}")
+        else:
+            print("AQL Line unique values: No valid numeric values found")
+    else:
+        print("AQL Line unique values: N/A")
     print()
 
     # Round time to 2-hour intervals
@@ -911,7 +929,7 @@ def main():
         if (idx + 1) % 50 == 0:
             print(f"Processed {idx + 1} rows, {total_matched} matched so far")
     
-        print(f"Matching process complete. Total matched: {total_matched} out of {len(knkh_df)} rows")
+    print(f"Matching process complete. Total matched: {total_matched} out of {len(knkh_df)} rows")
     
     # Show some sample matches for debugging
     matched_rows = knkh_df[knkh_df['QA_matched'].notna()]
