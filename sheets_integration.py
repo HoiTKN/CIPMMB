@@ -291,30 +291,38 @@ def extract_production_info(text):
     return time_str, line, machine
 
 def standardize_date(date_str):
-    """SIMPLIFIED date standardization - handles Google Sheets date formats"""
+    """Improved date standardization with explicit format handling"""
     try:
-        if pd.isna(date_str) or date_str == '':
-            return None
-            
         if isinstance(date_str, str):
             date_str = date_str.strip()
             
-            # Handle empty strings
-            if date_str == '' or date_str.lower() in ['nan', 'none', 'null']:
-                return None
+            # Handle DD/MM/YYYY format specifically
+            if re.match(r'^\d{1,2}/\d{1,2}/\d{4}$', date_str):
+                return pd.to_datetime(date_str, format='%d/%m/%Y')
             
-            # Try pandas auto-detection with different settings
-            # First try without dayfirst (for M/D/YYYY format like 6/19/2025)
-            try:
-                return pd.to_datetime(date_str, dayfirst=False)
-            except:
-                # Then try with dayfirst (for D/M/YYYY format)
+            # Handle MM/DD/YYYY format specifically  
+            if re.match(r'^\d{1,2}/\d{1,2}/\d{4}$', date_str):
+                # Try DD/MM/YYYY first (since dayfirst=True)
                 try:
-                    return pd.to_datetime(date_str, dayfirst=True)
+                    return pd.to_datetime(date_str, format='%d/%m/%Y')
                 except:
-                    return None
-        
-        # If it's already a datetime object or can be converted
+                    # Fall back to MM/DD/YYYY
+                    return pd.to_datetime(date_str, format='%m/%d/%Y')
+            
+            # Handle DD-MMM-YYYY format (e.g., "4-Apr-2025")
+            if '-' in date_str:
+                for fmt in ['%d-%b-%Y', '%d-%B-%Y', '%d-%b-%y', '%d-%B-%y']:
+                    try:
+                        return pd.to_datetime(date_str, format=fmt)
+                    except:
+                        continue
+
+            # Last resort: Let pandas try to detect, but suppress warnings
+            import warnings
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                return pd.to_datetime(date_str, dayfirst=True)
+
         return pd.to_datetime(date_str)
     except:
         return None
@@ -782,7 +790,6 @@ def main():
     )
 
     # Standardize dates first for filtering
-    knkh_df['Ngày tiếp nhận_std'] = knkh_df['Ngày tiếp nhận'].apply(standardize_date)
     knkh_df['Ngày SX_std'] = knkh_df['Ngày SX'].apply(standardize_date)
     aql_df['Ngày SX_std'] = aql_df['Ngày SX'].apply(standardize_date)
 
@@ -824,6 +831,9 @@ def main():
         row = knkh_df.loc[idx]
         print(f"Ticket {row['Mã ticket']}: '{row['Giờ_extracted']}' -> Line: {row['Line_extracted']}, Machine: {row['Máy_extracted']}")
     print()
+
+    # Standardize the receipt date
+    knkh_df['Ngày tiếp nhận_std'] = knkh_df['Ngày tiếp nhận'].apply(standardize_date)
 
     # Clean item codes
     knkh_df['Item_clean'] = knkh_df['Item'].apply(clean_item_code)
