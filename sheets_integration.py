@@ -290,24 +290,50 @@ def extract_production_info(text):
 
     return time_str, line, machine
 
-def standardize_date(date_str):
-    """Improved date standardization with explicit format handling"""
+def standardize_date(date_str, debug_info=None):
+    """Improved date standardization with explicit format handling and better error handling"""
     try:
         if isinstance(date_str, str):
             date_str = date_str.strip()
+            
+            # Handle empty strings
+            if date_str == '' or date_str.lower() in ['nan', 'none', 'null']:
+                return None
             
             # Handle DD/MM/YYYY format specifically
             if re.match(r'^\d{1,2}/\d{1,2}/\d{4}$', date_str):
                 return pd.to_datetime(date_str, format='%d/%m/%Y')
             
-            # Handle MM/DD/YYYY format specifically  
+            # Handle M/D/YYYY or MM/DD/YYYY format (common in Google Sheets)
+            # Try month first for dates like 6/19/2025
             if re.match(r'^\d{1,2}/\d{1,2}/\d{4}$', date_str):
-                # Try DD/MM/YYYY first (since dayfirst=True)
-                try:
-                    return pd.to_datetime(date_str, format='%d/%m/%Y')
-                except:
-                    # Fall back to MM/DD/YYYY
-                    return pd.to_datetime(date_str, format='%m/%d/%Y')
+                parts = date_str.split('/')
+                day = int(parts[0])
+                month = int(parts[1])
+                
+                # If day > 12, it's likely MM/DD/YYYY format
+                if day > 12:
+                    try:
+                        return pd.to_datetime(date_str, format='%m/%d/%Y')
+                    except:
+                        pass
+                # If month > 12, it's likely DD/MM/YYYY format
+                elif month > 12:
+                    try:
+                        return pd.to_datetime(date_str, format='%d/%m/%Y')
+                    except:
+                        pass
+                else:
+                    # Ambiguous case - try both formats
+                    # First try DD/MM/YYYY (dayfirst=True)
+                    try:
+                        return pd.to_datetime(date_str, format='%d/%m/%Y')
+                    except:
+                        # Fall back to MM/DD/YYYY
+                        try:
+                            return pd.to_datetime(date_str, format='%m/%d/%Y')
+                        except:
+                            pass
             
             # Handle DD-MMM-YYYY format (e.g., "4-Apr-2025")
             if '-' in date_str:
@@ -317,14 +343,21 @@ def standardize_date(date_str):
                     except:
                         continue
 
-            # Last resort: Let pandas try to detect, but suppress warnings
+            # Last resort: Let pandas try to detect
             import warnings
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                return pd.to_datetime(date_str, dayfirst=True)
+                # Try with dayfirst=False for dates like 6/19/2025
+                try:
+                    return pd.to_datetime(date_str, dayfirst=False)
+                except:
+                    # Then try with dayfirst=True
+                    return pd.to_datetime(date_str, dayfirst=True)
 
         return pd.to_datetime(date_str)
-    except:
+    except Exception as e:
+        if debug_info:
+            print(f"Failed to parse date '{date_str}': {str(e)} - Debug: {debug_info}")
         return None
 
 def format_date_mm_dd_yyyy(date_obj):
@@ -789,18 +822,73 @@ def main():
         axis=1
     )
 
-    # Standardize dates first for filtering
-    knkh_df['Ngày SX_std'] = knkh_df['Ngày SX'].apply(standardize_date)
-    aql_df['Ngày SX_std'] = aql_df['Ngày SX'].apply(standardize_date)
+    # DEBUG: Print sample dates before standardization
+    print("\nSample dates before standardization:")
+    sample_count = min(10, len(knkh_df))
+    for idx in knkh_df.head(sample_count).index:
+        row = knkh_df.loc[idx]
+        print(f"Ticket {row['Mã ticket']}: Ngày tiếp nhận='{row['Ngày tiếp nhận']}', Ngày SX='{row['Ngày SX']}'")
+
+    # Standardize dates first for filtering - with debug info
+    print("\nStandardizing dates...")
+    failed_reception_dates = []
+    failed_production_dates = []
+    
+    for idx, row in knkh_df.iterrows():
+        # Standardize reception date
+        reception_date_raw = row['Ngày tiếp nhận']
+        reception_date_std = standardize_date(reception_date_raw, f"Ticket {row['Mã ticket']}")
+        knkh_df.at[idx, 'Ngày tiếp nhận_std'] = reception_date_std
+        
+        if reception_date_std is None and reception_date_raw and str(reception_date_raw).strip() != '':
+            failed_reception_dates.append((row['Mã ticket'], reception_date_raw))
+        
+        # Standardize production date
+        production_date_raw = row['Ngày SX']
+        production_date_std = standardize_date(production_date_raw, f"Ticket {row['Mã ticket']}")
+        knkh_df.at[idx, 'Ngày SX_std'] = production_date_std
+        
+        if production_date_std is None and production_date_raw and str(production_date_raw).strip() != '':
+            failed_production_dates.append((row['Mã ticket'], production_date_raw))
+    
+    # Also standardize AQL dates
+    aql_df['Ngày SX_std'] = aql_df['Ngày SX'].apply(lambda x: standardize_date(x))
+
+    # Report failed date parsing
+    if failed_reception_dates:
+        print(f"\nWARNING: Failed to parse {len(failed_reception_dates)} reception dates:")
+        for ticket, date in failed_reception_dates[:5]:  # Show first 5
+            print(f"  Ticket {ticket}: '{date}'")
+        if len(failed_reception_dates) > 5:
+            print(f"  ... and {len(failed_reception_dates) - 5} more")
+    
+    if failed_production_dates:
+        print(f"\nWARNING: Failed to parse {len(failed_production_dates)} production dates:")
+        for ticket, date in failed_production_dates[:5]:  # Show first 5
+            print(f"  Ticket {ticket}: '{date}'")
+        if len(failed_production_dates) > 5:
+            print(f"  ... and {len(failed_production_dates) - 5} more")
 
     # Create filter date (January 1, 2024)
     filter_date = pd.to_datetime('2024-01-01')
 
     # Filter both DataFrames to only include data from January 1, 2024 onwards
-    knkh_df = knkh_df[knkh_df['Ngày SX_std'] >= filter_date]
-    aql_df = aql_df[aql_df['Ngày SX_std'] >= filter_date]
+    # IMPORTANT: Keep rows with valid reception dates even if production date is invalid
+    print(f"\nBefore filtering: {len(knkh_df)} KNKH records")
+    
+    # For KNKH, we filter based on production date, but keep rows with valid reception dates
+    knkh_df_filtered = knkh_df[
+        (knkh_df['Ngày SX_std'] >= filter_date) |  # Has valid production date after filter
+        (knkh_df['Ngày SX_std'].isna() & knkh_df['Ngày tiếp nhận_std'].notna())  # OR has no production date but has reception date
+    ]
+    
+    aql_df_filtered = aql_df[aql_df['Ngày SX_std'] >= filter_date]
 
-    print(f"After date filtering: {len(knkh_df)} KNKH records and {len(aql_df)} AQL records")
+    print(f"After date filtering: {len(knkh_df_filtered)} KNKH records and {len(aql_df_filtered)} AQL records")
+
+    # Continue with filtered data
+    knkh_df = knkh_df_filtered
+    aql_df = aql_df_filtered
 
     # Extract time, line, and machine information using improved function
     knkh_df[['Giờ_extracted', 'Line_extracted', 'Máy_extracted']] = knkh_df['Nội dung phản hồi'].apply(
@@ -831,9 +919,6 @@ def main():
         row = knkh_df.loc[idx]
         print(f"Ticket {row['Mã ticket']}: '{row['Giờ_extracted']}' -> Line: {row['Line_extracted']}, Machine: {row['Máy_extracted']}")
     print()
-
-    # Standardize the receipt date
-    knkh_df['Ngày tiếp nhận_std'] = knkh_df['Ngày tiếp nhận'].apply(standardize_date)
 
     # Clean item codes
     knkh_df['Item_clean'] = knkh_df['Item'].apply(clean_item_code)
@@ -972,6 +1057,15 @@ def main():
     # Extract short product names
     filtered_knkh_df['Tên sản phẩm ngắn'] = filtered_knkh_df['Tên sản phẩm'].apply(extract_short_product_name)
 
+    # Debug: Check for missing reception dates before creating joined_df
+    print(f"\nChecking for missing reception dates:")
+    missing_reception = filtered_knkh_df[filtered_knkh_df['Ngày tiếp nhận_formatted'].isna()]
+    if len(missing_reception) > 0:
+        print(f"Found {len(missing_reception)} rows with missing reception dates after formatting:")
+        for idx in missing_reception.head(5).index:
+            row = filtered_knkh_df.loc[idx]
+            print(f"  Ticket {row['Mã ticket']}: Original='{row['Ngày tiếp nhận']}', Standardized={row['Ngày tiếp nhận_std']}, Formatted={row['Ngày tiếp nhận_formatted']}")
+
     joined_df = filtered_knkh_df[[
         'Mã ticket', 'Ngày tiếp nhận_formatted', 'Tỉnh', 'Ngày SX_formatted', 'Sản phẩm/Dịch vụ',
         'Số lượng (ly/hộp/chai/gói/hủ)', 'Nội dung phản hồi', 'Item', 'Tên sản phẩm', 'Tên sản phẩm ngắn',
@@ -1034,6 +1128,28 @@ def main():
         debug_data = [debug_df.columns.tolist()] + debug_df.head(499).fillna('').values.tolist()
         debug_worksheet.update('A1', debug_data)
         print(f"Created debug worksheet with matching information")
+
+        # Create a date parsing errors worksheet
+        try:
+            errors_worksheet = destination_sheet.worksheet('Date_Errors')
+            errors_worksheet.clear()
+        except gspread.exceptions.WorksheetNotFound:
+            errors_worksheet = destination_sheet.add_worksheet(
+                title='Date_Errors',
+                rows=min(100, len(failed_reception_dates) + len(failed_production_dates) + 2),
+                cols=3
+            )
+        
+        # Prepare error data
+        error_data = [['Ticket', 'Date Type', 'Failed Date Value']]
+        for ticket, date_val in failed_reception_dates[:50]:
+            error_data.append([ticket, 'Ngày tiếp nhận', date_val])
+        for ticket, date_val in failed_production_dates[:50]:
+            error_data.append([ticket, 'Ngày SX', date_val])
+        
+        if len(error_data) > 1:
+            errors_worksheet.update('A1', error_data)
+            print(f"Created date errors worksheet with {len(error_data)-1} error records")
 
     except Exception as e:
         print(f"Error writing to destination sheet: {str(e)}")
