@@ -27,4 +27,4 @@ jobs:
       - name: Run cleaning script
         env:
           GOOGLE_TOKEN_JSON: ${{ secrets.GOOGLE_TOKEN_JSON }}
-       run: python sheets_integration.py
+        run: python sheets_integration.py
