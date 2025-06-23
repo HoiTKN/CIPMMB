@@ -619,21 +619,11 @@ def send_email_report(updated_values):
             # Define email recipient lists
             ro_recipients = [
                 "mmb-ktcncsd@msc.masangroup.com", 
-                "thinnx@msc.masangroup.com", 
                 "mmb-baotri-utilities@msc.masangroup.com", 
-                "binhnt@msc.masangroup.com", 
-                "toandv@msc.masangroup.com",
-                "khoal@msc.masangroup.com"
             ]
             
             other_recipients = [
                 "mmb-ktcncsd@msc.masangroup.com",
-                "datnd@msc.masangroup.com",
-                "chungnt2@msc.masangroup.com",
-                "luannt4@msc.masangroup.com",
-                "quangnd2@msc.masangroup.com",
-                "haitm1@msc.masangroup.com",
-                "khoal@msc.masangroup.com"
             ]
             
             # Send RO station email if there are relevant items
