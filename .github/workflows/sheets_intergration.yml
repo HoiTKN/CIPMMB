@@ -1,5 +1,4 @@
-name: Cleaning Schedule
-
+name: sheets_intergration
 on:
   schedule:
     # Run at midnight Vietnam time (UTC+7) which is 17:00 UTC
