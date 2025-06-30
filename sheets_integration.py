@@ -713,15 +713,15 @@ def main():
     # Authenticate and connect to Google Sheets
     gc = authenticate()
 
-    # Open the source spreadsheets - use your actual spreadsheet URLs
-    knkh_sheet = gc.open_by_url('https://docs.google.com/spreadsheets/d/1vbx_XlnuMzLdkRJkmGRv_kOqf74LU0aGEy5SJRs1LqU/edit')
+    # Open the source spreadsheets - UPDATED URL AND WORKSHEET NAME
+    knkh_sheet = gc.open_by_url('https://docs.google.com/spreadsheets/d/1Z5mtkH-Yb4jg-2N_Fqr3i44Ta_YTFYHBoxw1YhB4RrQ/edit')
     aql_sheet = gc.open_by_url('https://docs.google.com/spreadsheets/d/1MxvsyZTMMO0L5Cf1FzuXoKD634OClCCefeLjv9B49XU/edit')
 
     # Open the destination spreadsheet
     destination_sheet = gc.open_by_url('https://docs.google.com/spreadsheets/d/1d6uGPbJV6BsOB6XSB1IS3NhfeaMyMBcaQPvOnNg2yA4/edit')
 
-    # Get the worksheet data
-    knkh_worksheet = knkh_sheet.worksheet('KNKH')
+    # Get the worksheet data - UPDATED WORKSHEET NAME
+    knkh_worksheet = knkh_sheet.worksheet('MMB')  # Changed from 'KNKH' to 'MMB'
     
     # Handle KNKH data
     try:
@@ -736,7 +736,7 @@ def main():
             data = knkh_values[1:]
             knkh_df = pd.DataFrame(data, columns=headers)
         else:
-            print("No data found in KNKH worksheet")
+            print("No data found in MMB worksheet")
             sys.exit(1)
 
     aql_worksheet = aql_sheet.worksheet('ID AQL')
