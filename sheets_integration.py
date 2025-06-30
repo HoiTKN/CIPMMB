@@ -112,11 +112,21 @@ def clean_concatenated_dates(date_str):
         return matches[0]
 
     # If no DD/MM/YYYY pattern found, try different patterns
+    # DD-Mon-YYYY format (e.g., "26-Jun-2025")
+    date_pattern = r'(\d{1,2}-[A-Za-z]{3}-\d{4})'
+    matches = re.findall(date_pattern, date_str)
+    if matches:
+        return matches[0]
+    
     # DD-MM-YYYY
     date_pattern = r'(\d{1,2}-\d{1,2}-\d{4})'
     matches = re.findall(date_pattern, date_str)
     if matches:
         return matches[0]
+
+    # Try to extract first 11 characters if they look like a date (for DD-Mon-YYYY format)
+    if len(date_str) >= 11 and '-' in date_str and any(month in date_str[:11] for month in ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']):
+        return date_str[:11]
 
     # Try to extract first 10 characters if they look like a date
     if len(date_str) >= 10 and ('/' in date_str[:10] or '-' in date_str[:10]):
@@ -777,9 +787,17 @@ def main():
     print(f"AQL columns: {list(aql_df.columns)}")
 
     # Clean concatenated dates for both reception date and production date
+    print("\nProcessing dates...")
     knkh_df['Ngày tiếp nhận'] = knkh_df['Ngày tiếp nhận'].apply(clean_concatenated_dates)
     knkh_df['Ngày SX'] = knkh_df['Ngày SX'].apply(clean_concatenated_dates)
-
+    
+    # Debug: Show some examples of date cleaning
+    print("\nSample date cleaning results:")
+    sample_tickets = knkh_df[knkh_df['Mã ticket'].isin(['13898', '13899'])][['Mã ticket', 'Ngày tiếp nhận', 'Ngày SX']]
+    if not sample_tickets.empty:
+        for idx, row in sample_tickets.iterrows():
+            print(f"Ticket {row['Mã ticket']}: Ngày tiếp nhận='{row['Ngày tiếp nhận']}', Ngày SX='{row['Ngày SX']}'")
+    
     # Extract correct Ngày SX from Nội dung phản hồi and replace the Ngày SX column
     knkh_df['Ngày SX_extracted'] = knkh_df['Nội dung phản hồi'].apply(extract_correct_date)
 
@@ -834,6 +852,19 @@ def main():
 
     # Standardize the receipt date
     knkh_df['Ngày tiếp nhận_std'] = knkh_df['Ngày tiếp nhận'].apply(standardize_date)
+    
+    # Debug: Show date processing for tickets 13898 and 13899
+    print("\nDebug - Date processing for tickets 13898 and 13899:")
+    debug_tickets = knkh_df[knkh_df['Mã ticket'].isin(['13898', '13899'])][['Mã ticket', 'Ngày tiếp nhận', 'Ngày tiếp nhận_std', 'Ngày SX', 'Ngày SX_std']]
+    if not debug_tickets.empty:
+        for idx, row in debug_tickets.iterrows():
+            print(f"\nTicket {row['Mã ticket']}:")
+            print(f"  Original Ngày tiếp nhận: '{row['Ngày tiếp nhận']}'")
+            print(f"  Standardized Ngày tiếp nhận: {row['Ngày tiếp nhận_std']}")
+            print(f"  Original Ngày SX: '{row['Ngày SX']}'")
+            print(f"  Standardized Ngày SX: {row['Ngày SX_std']}")
+    else:
+        print("  Tickets 13898 and 13899 not found in data")
 
     # Clean item codes
     knkh_df['Item_clean'] = knkh_df['Item'].apply(clean_item_code)
