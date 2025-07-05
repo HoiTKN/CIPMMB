@@ -1171,3 +1171,16 @@ if __name__ == "__main__":
         sys.exit(1)
     
     main()
+if __name__ == "__main__":
+    # First check if required packages are installed
+    package_imports = {
+        'office365-rest-python-client': 'office365',
+        'openpyxl': 'openpyxl'
+    }
+    missing_packages = []
+    
+    for package, import_name in package_imports.items():
+        try:
+            __import__(import_name)
+        except ImportError:
+            missing_packages.append(package)
