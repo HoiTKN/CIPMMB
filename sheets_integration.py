@@ -1155,32 +1155,4 @@ def main():
         sys.exit(1)
 
 if __name__ == "__main__":
-    # First check if required packages are installed
-    required_packages = ['office365-rest-python-client', 'openpyxl']
-    missing_packages = []
-    
-    for package in required_packages:
-        try:
-            __import__(package.replace('-', '_'))
-        except ImportError:
-            missing_packages.append(package)
-    
-    if missing_packages:
-        print(f"Missing required packages: {', '.join(missing_packages)}")
-        print(f"Please install them using: pip install {' '.join(missing_packages)}")
-        sys.exit(1)
-    
     main()
-if __name__ == "__main__":
-    # First check if required packages are installed
-    package_imports = {
-        'office365-rest-python-client': 'office365',
-        'openpyxl': 'openpyxl'
-    }
-    missing_packages = []
-    
-    for package, import_name in package_imports.items():
-        try:
-            __import__(import_name)
-        except ImportError:
-            missing_packages.append(package)
