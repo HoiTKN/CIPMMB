@@ -22,7 +22,12 @@ jobs:
     
     - name: Install dependencies
       run: |
-        pip install gspread google-auth pandas openpyxl office365-rest-python-client
+        python -m pip install --upgrade pip
+        pip install gspread
+        pip install google-auth
+        pip install pandas
+        pip install openpyxl
+        pip install office365-rest-python-client
     
     - name: Run integration script
       env:
