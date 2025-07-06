@@ -35,12 +35,3 @@ jobs:
         SHAREPOINT_USERNAME: ${{ secrets.SHAREPOINT_USERNAME }}
         SHAREPOINT_PASSWORD: ${{ secrets.SHAREPOINT_PASSWORD }}
       run: python sheets_integration.py
-      continue-on-error: true  # Continue even if SharePoint fails
-    
-    - name: Upload Excel file as artifact
-      uses: actions/upload-artifact@v3
-      if: always()  # Always upload, whether success or failure
-      with:
-        name: data-knkh-output
-        path: Data_KNKH_output.xlsx
-        retention-days: 30  # Keep for 30 days
