@@ -7,12 +7,7 @@ import sys
 import json
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-from openpyxl import Workbook
-from openpyxl.utils.dataframe import dataframe_to_rows
-from office365.runtime.auth.user_credential import UserCredential
-from office365.sharepoint.client_context import ClientContext
-from office365.sharepoint.files.file import File
-import io
+# Only needed for local fallback save
 
 # Define the scopes for Google Sheets
 SCOPES = [
@@ -53,96 +48,6 @@ def authenticate_google():
     except Exception as e:
         print(f"Authentication error: {str(e)}")
         sys.exit(1)
-
-def authenticate_sharepoint():
-    """Authenticate to SharePoint using credentials from environment variables"""
-    try:
-        # Get SharePoint credentials from environment variables
-        username = os.environ.get('SHAREPOINT_USERNAME')
-        password = os.environ.get('SHAREPOINT_PASSWORD')
-        
-        if not username or not password:
-            print("Error: SHAREPOINT_USERNAME and SHAREPOINT_PASSWORD environment variables must be set")
-            sys.exit(1)
-        
-        # SharePoint site URL
-        site_url = "https://masangroup-my.sharepoint.com/personal/hoitkn_msc_masangroup_com"
-        
-        # Create client context
-        ctx = ClientContext(site_url).with_credentials(UserCredential(username, password))
-        
-        # Test authentication
-        web = ctx.web
-        ctx.load(web)
-        ctx.execute_query()
-        print(f"Successfully authenticated to SharePoint as {username}")
-        
-        return ctx
-    except Exception as e:
-        print(f"SharePoint authentication error: {str(e)}")
-        sys.exit(1)
-
-def save_to_sharepoint_excel(ctx, df, file_path, sheet_name='Integrated_Data'):
-    """Save DataFrame to Excel file on SharePoint"""
-    try:
-        print(f"Creating Excel file with {len(df)} rows...")
-        
-        # Create a new workbook
-        wb = Workbook()
-        ws = wb.active
-        ws.title = sheet_name
-        
-        # Write DataFrame to worksheet
-        for r in dataframe_to_rows(df, index=False, header=True):
-            ws.append(r)
-        
-        # Auto-adjust column widths
-        for column in ws.columns:
-            max_length = 0
-            column_letter = column[0].column_letter
-            for cell in column:
-                try:
-                    if len(str(cell.value)) > max_length:
-                        max_length = len(str(cell.value))
-                except:
-                    pass
-            adjusted_width = min(max_length + 2, 50)
-            ws.column_dimensions[column_letter].width = adjusted_width
-        
-        # Save to memory buffer
-        excel_buffer = io.BytesIO()
-        wb.save(excel_buffer)
-        excel_buffer.seek(0)
-        
-        # Upload to SharePoint
-        print(f"Uploading to SharePoint: {file_path}")
-        target_file = ctx.web.get_file_by_server_relative_url(file_path)
-        target_file.save_binary_stream(excel_buffer.read())
-        ctx.execute_query()
-        
-        print(f"Successfully uploaded Excel file to SharePoint")
-        return True
-        
-    except Exception as e:
-        print(f"Error saving to SharePoint: {str(e)}")
-        
-        # Try alternative method - save locally first
-        print("Attempting to save locally first...")
-        local_file = "Data_KNKH_temp.xlsx"
-        df.to_excel(local_file, index=False, sheet_name=sheet_name)
-        print(f"Saved locally to {local_file}")
-        
-        # Upload local file
-        with open(local_file, 'rb') as content_file:
-            file_content = content_file.read()
-            target_file = ctx.web.get_file_by_server_relative_url(file_path)
-            target_file.save_binary_stream(file_content)
-            ctx.execute_query()
-        
-        # Clean up local file
-        os.remove(local_file)
-        print("Successfully uploaded via local file method")
-        return True
 
 def extract_short_product_name(full_name):
     """
@@ -814,17 +719,20 @@ def find_qa_and_leader(row, aql_data, leader_mapping=None):
     return None, None, " | ".join(debug_parts)
 
 def main():
-    print("Starting Google Sheets integration with SharePoint output...")
+    print("Starting Google Sheets integration with Google Sheets output...")
 
     # Authenticate and connect to Google Sheets
     gc = authenticate_google()
 
-    # Open the source spreadsheets - UPDATED URL AND WORKSHEET NAME
+    # Open the source spreadsheets - INPUT sources remain the same
     knkh_sheet = gc.open_by_url('https://docs.google.com/spreadsheets/d/1Z5mtkH-Yb4jg-2N_Fqr3i44Ta_YTFYHBoxw1YhB4RrQ/edit')
     aql_sheet = gc.open_by_url('https://docs.google.com/spreadsheets/d/1MxvsyZTMMO0L5Cf1FzuXoKD634OClCCefeLjv9B49XU/edit')
+    
+    # Open the OUTPUT destination spreadsheet - NEW integrated data sheet
+    output_sheet = gc.open_by_url('https://docs.google.com/spreadsheets/d/1amiTEXhcjXVrjyAr8DV4hnjEvIc7iACUWJLDVXOOuWQ/edit')
 
-    # Get the worksheet data - UPDATED WORKSHEET NAME
-    knkh_worksheet = knkh_sheet.worksheet('MMB')  # Changed from 'KNKH' to 'MMB'
+    # Get the worksheet data
+    knkh_worksheet = knkh_sheet.worksheet('MMB')  # Using 'MMB' worksheet as specified
     
     # Handle KNKH data
     try:
@@ -1119,30 +1027,99 @@ def main():
     # Sort by Mã ticket from largest to smallest
     joined_df = joined_df.sort_values(by='Mã ticket', ascending=False)
 
-    # Save to SharePoint
+    # Save to Google Sheets (integrated data output)
     try:
-        # Authenticate to SharePoint
-        ctx = authenticate_sharepoint()
+        print(f"\nWriting {len(joined_df)} rows to integrated Google Sheets...")
         
-        # The relative path for the file on SharePoint
-        # Based on the URL you provided, the file path should be:
-        file_path = "https://docs.google.com/spreadsheets/d/1amiTEXhcjXVrjyAr8DV4hnjEvIc7iACUWJLDVXOOuWQ/edit?gid=0#gid=0"
+        # Get or create the worksheet for integrated data
+        try:
+            output_worksheet = output_sheet.worksheet('Integrated_Data')
+            print("Found existing 'Integrated_Data' worksheet")
+        except:
+            print("Creating new 'Integrated_Data' worksheet")
+            output_worksheet = output_sheet.add_worksheet(title='Integrated_Data', rows=len(joined_df)+10, cols=len(joined_df.columns))
         
-        # Save the main data
-        save_to_sharepoint_excel(ctx, joined_df, file_path, 'Integrated_Data')
+        # Clear existing data
+        output_worksheet.clear()
         
-        print(f"\nSuccessfully wrote {len(joined_df)} rows to SharePoint Excel file")
+        # Prepare data for upload (convert to list of lists)
+        # Get headers
+        headers = joined_df.columns.tolist()
         
-        # Also save debug info as a separate sheet (optional)
-        # Note: To add multiple sheets to the same file, you'd need to download, modify, and re-upload
-        # For now, we'll skip the debug sheet or save it as a separate file
+        # Convert DataFrame to list of lists (including headers)
+        data_to_upload = [headers] + joined_df.values.tolist()
+        
+        # Convert any NaN/None values to empty strings for Google Sheets
+        for i, row in enumerate(data_to_upload):
+            for j, cell in enumerate(row):
+                if pd.isna(cell) or cell is None:
+                    data_to_upload[i][j] = ''
+                else:
+                    data_to_upload[i][j] = str(cell)
+        
+        # Upload data in chunks to avoid API limits
+        chunk_size = 1000  # Adjust based on your data size and API limits
+        total_rows = len(data_to_upload)
+        
+        for start_row in range(0, total_rows, chunk_size):
+            end_row = min(start_row + chunk_size, total_rows)
+            chunk_data = data_to_upload[start_row:end_row]
+            
+            # Define the range for this chunk
+            start_cell = f'A{start_row + 1}'
+            end_cell = f'{chr(65 + len(headers) - 1)}{start_row + len(chunk_data)}'
+            range_name = f'{start_cell}:{end_cell}'
+            
+            print(f"Uploading rows {start_row + 1} to {start_row + len(chunk_data)} ({range_name})")
+            
+            # Upload this chunk
+            output_worksheet.update(range_name, chunk_data, value_input_option='USER_ENTERED')
+        
+        print(f"✓ Successfully wrote {len(joined_df)} rows to Google Sheets")
+        print(f"✓ Data written to: {output_sheet.url}")
+        
+        # Optionally create a debug sheet
+        try:
+            debug_worksheet = output_sheet.worksheet('Debug_Info')
+            print("Found existing 'Debug_Info' worksheet")
+        except:
+            print("Creating new 'Debug_Info' worksheet for debugging")
+            debug_worksheet = output_sheet.add_worksheet(title='Debug_Info', rows=510, cols=10)
+        
+        # Clear and upload debug data (first 500 rows only)
+        debug_worksheet.clear()
+        debug_df = joined_df[['Mã ticket', 'Ngày SX', 'Item', 'Line', 'Giờ', 'QA', 'Tên Trưởng ca', 'debug_info']].head(500)
+        
+        debug_headers = debug_df.columns.tolist()
+        debug_data = [debug_headers] + debug_df.values.tolist()
+        
+        # Convert debug data
+        for i, row in enumerate(debug_data):
+            for j, cell in enumerate(row):
+                if pd.isna(cell) or cell is None:
+                    debug_data[i][j] = ''
+                else:
+                    debug_data[i][j] = str(cell)
+        
+        debug_worksheet.update('A1', debug_data, value_input_option='USER_ENTERED')
+        print("✓ Debug information uploaded to 'Debug_Info' sheet")
         
     except Exception as e:
-        print(f"Error writing to SharePoint: {str(e)}")
+        print(f"Error writing to Google Sheets: {str(e)}")
         
         # Fallback: save locally
         print("\nFalling back to local save...")
         local_filename = "Data_KNKH_output.xlsx"
+        
+        # Import openpyxl for local save fallback
+        try:
+            from openpyxl import Workbook
+        except ImportError:
+            print("openpyxl not available, saving as CSV instead")
+            joined_df.to_csv("Data_KNKH_output.csv", index=False)
+            print(f"Data saved locally to Data_KNKH_output.csv")
+            return
+        
         with pd.ExcelWriter(local_filename, engine='openpyxl') as writer:
             joined_df.to_excel(writer, sheet_name='Integrated_Data', index=False)
             
@@ -1151,8 +1128,8 @@ def main():
             debug_df.head(500).to_excel(writer, sheet_name='Debug_Info', index=False)
         
         print(f"Data saved locally to {local_filename}")
-        print("Please upload this file manually to SharePoint")
-        sys.exit(1)
+        print("Please upload this file manually or check your Google Sheets permissions")
+        return
 
 if __name__ == "__main__":
     main()
