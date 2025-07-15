@@ -1,6 +1,6 @@
 """
-SharePoint Configuration for QA Data Processing - Delegation Flow
-Cấu hình cho delegation flow (không cần CLIENT_SECRET)
+SharePoint Configuration for QA Data Processing - Delegation Flow (CORRECTED)
+Cấu hình cho delegation flow với cấu trúc file đúng
 """
 
 import os
@@ -30,37 +30,42 @@ SHAREPOINT_CONFIG = {
     'base_url': 'masangroup.sharepoint.com'
 }
 
-# File Paths Configuration - Updated for SharePoint
+# File Paths Configuration - CORRECTED to match Visual.py logic
 FILE_PATHS = {
-    # Sample ID file - chứa VHM và % Hao hụt OPP data
+    # Sample ID file - SOURCE SHEET chứa ID AQL, AQL gói, AQL Tô ly data
     'sample_id': {
         'filename': 'Sample ID.xlsx',
         'folder': 'Shared Documents',
-        'description': 'Sample ID - VHM and % Hao hụt OPP data',
-        'sheets': ['Sheet1']
-    },
-    
-    # Data SX file - chứa ID AQL, AQL gói, AQL Tô ly data
-    'data_sx': {
-        'filename': 'Data SX.xlsx',
-        'folder': 'Shared Documents',
-        'description': 'Data SX - Production and Quality data',
+        'description': 'Sample ID - Source sheet with ID AQL, AQL gói, AQL Tô ly data',
         'sheets': ['ID AQL', 'AQL gói', 'AQL Tô ly']
     },
     
-    # CF data file - output file
+    # Data SX file - SAMPLE ID SHEET chứa VHM và % Hao hụt OPP data
+    'data_sx': {
+        'filename': 'Data SX.xlsx',
+        'folder': 'Shared Documents',
+        'description': 'Data SX - Sample ID sheet with VHM and % Hao hụt OPP data',
+        'sheets': ['Sheet1']  # Usually first sheet for sample data
+    },
+    
+    # CF data file - DESTINATION SHEET cho processed output
     'cf_data_output': {
         'filename': 'CF data.xlsx',
         'folder': 'Shared Documents',
-        'description': 'CF data - Processed output data',
+        'description': 'CF data - Destination sheet for processed output',
         'sheets': ['Processed_Data']
     }
 }
 
-# SharePoint File IDs (extracted from URLs)
+# SharePoint File IDs (CORRECTED mapping)
 SHAREPOINT_FILE_IDS = {
+    # Sample ID = Source sheet (ID AQL, AQL gói, AQL Tô ly)
     'sample_id': '8220CAEA-0CD9-585B-D483-DE0A82A98564',
+    
+    # Data SX = Sample ID sheet (VHM và % Hao hụt OPP)  
     'data_sx': '6CB4A738-1EDD-4BC4-9996-43A815D3F5CF',
+    
+    # CF data = Destination sheet (Output)
     'cf_data_output': 'E1B65B6F-6A53-52E0-1BB3-3BCA75A32F63'
 }
 
@@ -91,9 +96,12 @@ QA_CONFIG = {
         3: [3, 4]   # MĐG 3 covers MĐG 3 and 4
     },
     'required_columns': {
+        # Source sheet columns (Sample ID.xlsx)
         'id_aql': ['Line', 'Defect code', 'Ngày SX', 'Giờ', 'MĐG'],
         'aql_goi': ['Defect code', 'Defect name'],
         'aql_to_ly': ['Defect code', 'Defect name'],
+        
+        # Sample ID sheet columns (Data SX.xlsx)
         'sample_id': ['Ngày SX', 'Ca', 'Line', 'MĐG', 'VHM', '% Hao hụt OPP']
     }
 }
