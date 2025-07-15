@@ -1,4 +1,4 @@
-name: QA Data Processing - SharePoint Graph API
+name: QA Data Processing - Delegation Flow (Daily)
 
 on:
   # Chạy hàng ngày lúc 8:00 AM Vietnam time (1:00 AM UTC)
@@ -13,9 +13,14 @@ on:
         required: false
         default: 'false'
         type: boolean
+      test_mode:
+        description: 'Test mode - limited file processing'
+        required: false
+        default: 'true'
+        type: boolean
 
 jobs:
-  process-qa-data:
+  test-delegation-flow:
     runs-on: ubuntu-latest
     
     steps:
@@ -23,55 +28,84 @@ jobs:
       uses: actions/checkout@v4
     
     - name: 🐍 Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: '3.9'
     
     - name: 📦 Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt
+        pip install pandas>=1.5.0 openpyxl>=3.0.0 requests>=2.28.0 msal>=1.24.0
     
-    - name: 🔍 Verify environment
+    - name: 🔍 Verify environment and dependencies
       run: |
         echo "Python version: $(python --version)"
         echo "Current directory: $(pwd)"
         echo "Files in directory: $(ls -la)"
-        pip list | grep -E "(pandas|msal|requests)"
+        pip list | grep -E "(pandas|msal|requests|openpyxl)"
+        echo "Environment check complete"
     
-    - name: 🏭 Process QA data from SharePoint
+    - name: 🔧 Test basic configuration
       env:
         TENANT_ID: ${{ secrets.TENANT_ID }}
         CLIENT_ID: ${{ secrets.CLIENT_ID }}
-        CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
         SHAREPOINT_SITE_URL: ${{ secrets.SHAREPOINT_SITE_URL }}
         DEBUG_MODE: ${{ github.event.inputs.debug_mode }}
+        TEST_MODE: ${{ github.event.inputs.test_mode }}
       run: |
-        echo "🚀 Starting QA data processing..."
-        echo "Using Tenant ID: $TENANT_ID"
-        echo "Using Client ID: $CLIENT_ID"
+        echo "🧪 Testing delegation flow configuration..."
+        echo "Tenant ID: ${TENANT_ID:0:8}..."
+        echo "Client ID: ${CLIENT_ID:0:8}..."
         echo "SharePoint Site: $SHAREPOINT_SITE_URL"
-        python sharepoint_graph_api.py
+        echo "Debug Mode: $DEBUG_MODE"
+        echo "Test Mode: $TEST_MODE"
+        
+        # Test if we can import required modules
+        python -c "
+        import msal
+        import requests
+        import pandas as pd
+        print('✅ All imports successful')
+        
+        # Test basic MSAL setup
+        try:
+            app = msal.PublicClientApplication('$CLIENT_ID', authority='https://login.microsoftonline.com/$TENANT_ID')
+            print('✅ MSAL PublicClientApplication created successfully')
+        except Exception as e:
+            print(f'❌ MSAL setup failed: {e}')
+        "
     
-    - name: 📊 Upload processed QA data
+    - name: 🔑 Attempt delegation authentication
+      env:
+        TENANT_ID: ${{ secrets.TENANT_ID }}
+        CLIENT_ID: ${{ secrets.CLIENT_ID }}
+        SHAREPOINT_SITE_URL: ${{ secrets.SHAREPOINT_SITE_URL }}
+      run: |
+        echo "🔑 Attempting delegation authentication..."
+        python github_delegation_runner.py
+    
+    - name: 📊 Upload any generated data
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: qa-processed-data-${{ github.run_number }}
+        name: qa-delegation-results-${{ github.run_number }}
         path: |
           output/
           *.xlsx
           *.csv
+          *.json
+          *.log
         retention-days: 30
     
     - name: 📋 Create processing summary
       if: always()
       run: |
-        echo "## 🏭 QA Data Processing Summary" >> $GITHUB_STEP_SUMMARY
+        echo "## 🔑 Delegation Flow Test Summary" >> $GITHUB_STEP_SUMMARY
         echo "**Run Date**: $(date)" >> $GITHUB_STEP_SUMMARY
         echo "**Repository**: ${{ github.repository }}" >> $GITHUB_STEP_SUMMARY
         echo "**Workflow**: ${{ github.workflow }}" >> $GITHUB_STEP_SUMMARY
         echo "**Run Number**: ${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Test Mode**: ${{ github.event.inputs.test_mode }}" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         
         if [ -d "output" ]; then
@@ -85,15 +119,29 @@ jobs:
         
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "### 🔗 Download Results:" >> $GITHUB_STEP_SUMMARY
-        echo "Check the **Artifacts** section below to download processed data." >> $GITHUB_STEP_SUMMARY
+        echo "Check the **Artifacts** section below to download any generated data." >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 💡 Notes:" >> $GITHUB_STEP_SUMMARY
+        echo "- Delegation flow may require manual authentication setup" >> $GITHUB_STEP_SUMMARY
+        echo "- Check logs above for authentication details" >> $GITHUB_STEP_SUMMARY
+        echo "- Consider asking IT team about service principal for automation" >> $GITHUB_STEP_SUMMARY
     
-    - name: 🚨 Notify on failure
+    - name: 🚨 Handle authentication challenges
       if: failure()
       run: |
-        echo "❌ QA Data Processing Failed!"
-        echo "Check the logs above for error details."
-        echo "Common issues:"
-        echo "1. CLIENT_SECRET not set correctly"
-        echo "2. SharePoint permissions"
-        echo "3. File paths changed"
+        echo "❌ Delegation Flow Test Failed!"
+        echo ""
+        echo "🔍 Common issues:"
+        echo "1. Interactive authentication not possible in GitHub Actions"
+        echo "2. Need service principal or pre-authenticated tokens"
+        echo "3. SharePoint permissions may require different approach"
+        echo ""
+        echo "💡 Solutions:"
+        echo "1. Ask IT team about service principal with delegated permissions"
+        echo "2. Consider hybrid approach (local + GitHub)"
+        echo "3. Use application flow with CLIENT_SECRET"
+        echo ""
+        echo "📧 Message for IT team:"
+        echo "Need automation-friendly authentication for SharePoint API access"
+        echo "Current delegation flow requires browser interaction"
         exit 1
