@@ -1,0 +1,99 @@
+name: QA Data Processing - SharePoint Graph API
+
+on:
+  # Chạy hàng ngày lúc 8:00 AM Vietnam time (1:00 AM UTC)
+  schedule:
+    - cron: '0 1 * * *'
+  
+  # Cho phép chạy thủ công
+  workflow_dispatch:
+    inputs:
+      debug_mode:
+        description: 'Enable debug output'
+        required: false
+        default: 'false'
+        type: boolean
+
+jobs:
+  process-qa-data:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 📥 Checkout repository
+      uses: actions/checkout@v3
+    
+    - name: 🐍 Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+    
+    - name: 📦 Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: 🔍 Verify environment
+      run: |
+        echo "Python version: $(python --version)"
+        echo "Current directory: $(pwd)"
+        echo "Files in directory: $(ls -la)"
+        pip list | grep -E "(pandas|msal|requests)"
+    
+    - name: 🏭 Process QA data from SharePoint
+      env:
+        TENANT_ID: ${{ secrets.TENANT_ID }}
+        CLIENT_ID: ${{ secrets.CLIENT_ID }}
+        CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+        SHAREPOINT_SITE_URL: ${{ secrets.SHAREPOINT_SITE_URL }}
+        DEBUG_MODE: ${{ github.event.inputs.debug_mode }}
+      run: |
+        echo "🚀 Starting QA data processing..."
+        echo "Using Tenant ID: $TENANT_ID"
+        echo "Using Client ID: $CLIENT_ID"
+        echo "SharePoint Site: $SHAREPOINT_SITE_URL"
+        python sharepoint_graph_api.py
+    
+    - name: 📊 Upload processed QA data
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: qa-processed-data-${{ github.run_number }}
+        path: |
+          output/
+          *.xlsx
+          *.csv
+        retention-days: 30
+    
+    - name: 📋 Create processing summary
+      if: always()
+      run: |
+        echo "## 🏭 QA Data Processing Summary" >> $GITHUB_STEP_SUMMARY
+        echo "**Run Date**: $(date)" >> $GITHUB_STEP_SUMMARY
+        echo "**Repository**: ${{ github.repository }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Workflow**: ${{ github.workflow }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Run Number**: ${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        if [ -d "output" ]; then
+          echo "### 📁 Generated Files:" >> $GITHUB_STEP_SUMMARY
+          ls -la output/ | while read line; do
+            echo "- $line" >> $GITHUB_STEP_SUMMARY
+          done
+        else
+          echo "### ❌ No output files generated" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 🔗 Download Results:" >> $GITHUB_STEP_SUMMARY
+        echo "Check the **Artifacts** section below to download processed data." >> $GITHUB_STEP_SUMMARY
+    
+    - name: 🚨 Notify on failure
+      if: failure()
+      run: |
+        echo "❌ QA Data Processing Failed!"
+        echo "Check the logs above for error details."
+        echo "Common issues:"
+        echo "1. CLIENT_SECRET not set correctly"
+        echo "2. SharePoint permissions"
+        echo "3. File paths changed"
+        exit 1
