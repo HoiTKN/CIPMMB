@@ -148,6 +148,7 @@ class SharePointDelegationProcessor:
                     return None
             else:
                 self.log(f"❌ Error getting site ID: {response.status_code}")
+                self.log(f"Response text: {response.text[:200]}")
                 return None
                 
         except Exception as e:
@@ -194,6 +195,8 @@ class SharePointDelegationProcessor:
                             sheets_data = {}
                             
                             for sheet_name in excel_file.sheet_names:
+                                # Reset position for each sheet
+                                excel_data.seek(0)
                                 df = pd.read_excel(excel_data, sheet_name=sheet_name)
                                 sheets_data[sheet_name] = df
                                 self.log(f"✅ Sheet '{sheet_name}': {len(df)} rows")
@@ -510,7 +513,7 @@ def find_representative_production_data(vhm_name, sample_id_df, existing_aql_df)
         line_str = str(sample_line).strip()
         mdg_str = str(sample_mdg).strip()
         
-        # Priority-based matching logic (same as original)
+        # Priority 1: Exact match
         matching_records = existing_aql_df[
             (existing_aql_df['Ngày SX'].apply(lambda x: standardize_date(x).strftime('%d/%m/%Y') if standardize_date(x) else None) == date_str) &
             (existing_aql_df['Ca'].astype(str).str.strip() == ca_str) &
@@ -518,8 +521,45 @@ def find_representative_production_data(vhm_name, sample_id_df, existing_aql_df)
             (existing_aql_df['MĐG'].astype(str).str.strip() == mdg_str)
         ]
         
-        # Continue with other priority levels as in original code...
-        # (I'll keep the same logic for brevity)
+        # Priority 2: MĐG grouping logic
+        if matching_records.empty:
+            try:
+                mdg_val = int(float(sample_mdg))
+                if mdg_val == 2:
+                    matching_records = existing_aql_df[
+                        (existing_aql_df['Ngày SX'].apply(lambda x: standardize_date(x).strftime('%d/%m/%Y') if standardize_date(x) else None) == date_str) &
+                        (existing_aql_df['Ca'].astype(str).str.strip() == ca_str) &
+                        (existing_aql_df['Line'].astype(str).str.strip() == line_str) &
+                        (existing_aql_df['MĐG'].astype(str).str.strip() == '1')
+                    ]
+                elif mdg_val == 4:
+                    matching_records = existing_aql_df[
+                        (existing_aql_df['Ngày SX'].apply(lambda x: standardize_date(x).strftime('%d/%m/%Y') if standardize_date(x) else None) == date_str) &
+                        (existing_aql_df['Ca'].astype(str).str.strip() == ca_str) &
+                        (existing_aql_df['Line'].astype(str).str.strip() == line_str) &
+                        (existing_aql_df['MĐG'].astype(str).str.strip() == '3')
+                    ]
+            except:
+                pass
+        
+        # Priority 3: Same date and shift
+        if matching_records.empty:
+            matching_records = existing_aql_df[
+                (existing_aql_df['Ngày SX'].apply(lambda x: standardize_date(x).strftime('%d/%m/%Y') if standardize_date(x) else None) == date_str) &
+                (existing_aql_df['Ca'].astype(str).str.strip() == ca_str)
+            ]
+        
+        # Priority 4: Same date
+        if matching_records.empty:
+            matching_records = existing_aql_df[
+                existing_aql_df['Ngày SX'].apply(lambda x: standardize_date(x).strftime('%d/%m/%Y') if standardize_date(x) else None) == date_str
+            ]
+        
+        # Priority 5: Same line
+        if matching_records.empty:
+            matching_records = existing_aql_df[
+                existing_aql_df['Line'].astype(str).str.strip() == line_str
+            ]
         
         production_data = matching_records.iloc[0] if not matching_records.empty else None
         return sample_row, production_data
@@ -591,32 +631,265 @@ def main():
     # Process data using the same logic as original Visual.py
     processor.log("🔄 Starting data processing...")
     
-    # [Include all the same data processing logic as in original Visual_SharePoint.py]
-    # For brevity, I'll include the key steps:
+    # Check required columns
+    required_columns_check = {
+        'ID AQL': ['Line', 'Defect code', 'Ngày SX', 'Giờ', 'MĐG'],
+        'AQL gói': ['Defect code', 'Defect name'],
+        'AQL Tô ly': ['Defect code', 'Defect name'],
+        'Sample ID': ['Ngày SX', 'Ca', 'Line', 'MĐG', 'VHM', '% Hao hụt OPP']
+    }
     
-    # 1. Check required columns
-    # 2. Expand MĐG values
-    # 3. Standardize data
-    # 4. Create mappings
-    # 5. Apply VHM mapping
-    # 6. Create comprehensive dataset
-    # 7. Upload to SharePoint
+    dataframes = {
+        'ID AQL': id_aql_df,
+        'AQL gói': aql_goi_df,
+        'AQL Tô ly': aql_to_ly_df,
+        'Sample ID': sample_id_df
+    }
     
-    # The exact same processing logic as before...
-    # (copying the entire processing section from Visual_SharePoint.py)
+    for sheet_name, required_cols in required_columns_check.items():
+        df = dataframes[sheet_name]
+        missing_cols = [col for col in required_cols if col not in df.columns]
+        if missing_cols:
+            processor.log(f"Warning: Missing columns in {sheet_name}: {missing_cols}")
     
-    # Final upload
-    processor.log("📤 Uploading final results...")
-    success = processor.upload_excel_to_sharepoint(
-        comprehensive_df,  # This would be the processed dataframe
-        SHAREPOINT_FILE_IDS['cf_data_output'],
-        'Processed_Data'
+    # Convert and standardize data
+    if 'Line' in id_aql_df.columns:
+        id_aql_df['Line'] = pd.to_numeric(id_aql_df['Line'], errors='coerce')
+    
+    # Expand MĐG values
+    processor.log(f"Original rows before MĐG expansion: {len(id_aql_df)}")
+    id_aql_df = expand_dataframe_for_multiple_mdg(id_aql_df)
+    processor.log(f"Rows after MĐG expansion: {len(id_aql_df)}")
+    
+    # Standardize defect codes
+    for df_name, df in [('ID AQL', id_aql_df), ('AQL gói', aql_goi_df), ('AQL Tô ly', aql_to_ly_df)]:
+        if 'Defect code' in df.columns:
+            df['Defect code'] = df['Defect code'].astype(str).str.strip()
+    
+    # Standardize dates and extract date components
+    if 'Ngày SX' in id_aql_df.columns:
+        id_aql_df['Ngày SX_std'] = id_aql_df['Ngày SX'].apply(standardize_date)
+        id_aql_df['Ngày'] = id_aql_df['Ngày SX_std'].apply(lambda x: x.day if x else None)
+        id_aql_df['Tuần'] = id_aql_df['Ngày SX_std'].apply(lambda x: x.isocalendar()[1] if x else None)
+        id_aql_df['Tháng'] = id_aql_df['Ngày SX_std'].apply(lambda x: x.month if x else None)
+    
+    # Extract hour and determine shift
+    if 'Giờ' in id_aql_df.columns:
+        id_aql_df['hour'] = id_aql_df['Giờ'].apply(parse_hour)
+        id_aql_df['Ca'] = id_aql_df['hour'].apply(determine_shift)
+    
+    # Add Target TV
+    id_aql_df['Target TV'] = id_aql_df['Line'].apply(get_target_tv)
+    
+    # Create defect name mapping
+    goi_defect_map = {}
+    to_ly_defect_map = {}
+    
+    if 'Defect code' in aql_goi_df.columns and 'Defect name' in aql_goi_df.columns:
+        goi_defect_map = dict(zip(aql_goi_df['Defect code'], aql_goi_df['Defect name']))
+    
+    if 'Defect code' in aql_to_ly_df.columns and 'Defect name' in aql_to_ly_df.columns:
+        to_ly_defect_map = dict(zip(aql_to_ly_df['Defect code'], aql_to_ly_df['Defect name']))
+    
+    def map_defect_name(row):
+        if pd.isna(row.get('Line')) or pd.isna(row.get('Defect code')):
+            return None
+        
+        try:
+            line = float(row['Line'])
+            defect_code = str(row['Defect code']).strip()
+            
+            if 1 <= line <= 6:
+                return goi_defect_map.get(defect_code, None)
+            elif 7 <= line <= 8:
+                return to_ly_defect_map.get(defect_code, None)
+            else:
+                return None
+        except (ValueError, TypeError):
+            return None
+    
+    id_aql_df['Defect name'] = id_aql_df.apply(map_defect_name, axis=1)
+    
+    # Create VHM and % Hao hụt OPP mapping
+    processor.log("Creating VHM and % Hao hụt OPP mapping...")
+    vhm_mapping = {}
+    hao_hut_mapping = {}
+    
+    for _, row in sample_id_df.iterrows():
+        keys = create_simple_mapping_key(row)
+        vhm_value = row.get('VHM', '')
+        hao_hut_value = row.get('% Hao hụt OPP', '')
+        
+        for key in keys:
+            if isinstance(key, tuple) and len(key) == 4:
+                vhm_mapping[key] = vhm_value
+                hao_hut_mapping[key] = hao_hut_value
+    
+    processor.log(f"Created {len(vhm_mapping)} mapping entries")
+    
+    # Apply VHM mapping
+    def get_vhm(row):
+        key = create_mapping_key_with_hour_logic(row, sample_id_df)
+        return vhm_mapping.get(key, '') if key else ''
+    
+    def get_hao_hut_opp(row):
+        key = create_mapping_key_with_hour_logic(row, sample_id_df)
+        return hao_hut_mapping.get(key, '') if key else ''
+    
+    id_aql_df['VHM'] = id_aql_df.apply(get_vhm, axis=1)
+    id_aql_df['% Hao hụt OPP'] = id_aql_df.apply(get_hao_hut_opp, axis=1)
+    
+    vhm_mapped_count = (id_aql_df['VHM'] != '').sum()
+    processor.log(f"Successfully mapped VHM for {vhm_mapped_count} out of {len(id_aql_df)} records")
+    
+    # Create output dataframe
+    required_output_columns = [
+        'Ngày SX', 'Ngày', 'Tuần', 'Tháng', 'Sản phẩm', 'Item', 'Giờ', 'Ca', 'Line', 'MĐG', 
+        'SL gói lỗi sau xử lý', 'Defect code', 'Defect name', 'Số lượng hold ( gói/thùng)',
+        'Target TV', 'VHM', '% Hao hụt OPP', 'QA', 'Tên Trưởng ca'
+    ]
+    
+    if 'MĐG_Original' in id_aql_df.columns:
+        required_output_columns.append('MĐG_Original')
+    
+    # Ensure all columns exist
+    for col in required_output_columns:
+        if col not in id_aql_df.columns:
+            id_aql_df[col] = ''
+    
+    available_columns = [col for col in required_output_columns if col in id_aql_df.columns]
+    existing_aql_df = id_aql_df[available_columns].copy()
+    
+    # Create comprehensive dataset
+    processor.log("Creating comprehensive dataset...")
+    
+    # Convert hold quantity to numeric
+    existing_aql_df['Số lượng hold ( gói/thùng)_numeric'] = pd.to_numeric(
+        existing_aql_df['Số lượng hold ( gói/thùng)'], errors='coerce'
     )
     
-    if success:
-        processor.log("✅ Data processing completed successfully!")
+    # Get defect records
+    defect_records = existing_aql_df[
+        existing_aql_df['Số lượng hold ( gói/thùng)_numeric'] > 0
+    ].copy().drop(columns=['Số lượng hold ( gói/thùng)_numeric'])
+    
+    processor.log(f"Found {len(defect_records)} records with defects")
+    
+    # Create comprehensive dataset
+    comprehensive_rows = []
+    
+    # Add all defect records
+    for _, defect_row in defect_records.iterrows():
+        comprehensive_rows.append(defect_row)
+    
+    # Add zero-defect records for VHMs without defects
+    defect_records_with_vhm = defect_records[
+        (defect_records['VHM'] != '') & (defect_records['VHM'].notna())
+    ]
+    
+    vhms_with_defects = set(defect_records_with_vhm['VHM'].unique())
+    all_vhms_from_sample = set(sample_id_df['VHM'].dropna().unique())
+    vhms_without_defects = all_vhms_from_sample - vhms_with_defects
+    
+    processor.log(f"Creating zero-defect records for {len(vhms_without_defects)} VHMs")
+    
+    for vhm_name in vhms_without_defects:
+        try:
+            sample_data, production_data = find_representative_production_data(
+                vhm_name, sample_id_df, existing_aql_df
+            )
+            
+            if sample_data is None:
+                continue
+            
+            # Create zero-defect record
+            zero_defect_record = {}
+            
+            sample_date = standardize_date(sample_data.get('Ngày SX', ''))
+            zero_defect_record['Ngày SX'] = sample_data.get('Ngày SX', '')
+            zero_defect_record['Ngày'] = sample_date.day if sample_date else ''
+            zero_defect_record['Tuần'] = sample_date.isocalendar()[1] if sample_date else ''
+            zero_defect_record['Tháng'] = sample_date.month if sample_date else ''
+            zero_defect_record['Ca'] = sample_data.get('Ca', '')
+            zero_defect_record['Line'] = sample_data.get('Line', '')
+            zero_defect_record['MĐG'] = sample_data.get('MĐG', '')
+            zero_defect_record['VHM'] = sample_data.get('VHM', '')
+            zero_defect_record['% Hao hụt OPP'] = sample_data.get('% Hao hụt OPP', '')
+            zero_defect_record['Số lượng hold ( gói/thùng)'] = 0
+            
+            # Production data if available
+            if production_data is not None:
+                zero_defect_record['Sản phẩm'] = production_data.get('Sản phẩm', '')
+                zero_defect_record['Item'] = production_data.get('Item', '')
+                zero_defect_record['Giờ'] = production_data.get('Giờ', '')
+                zero_defect_record['QA'] = production_data.get('QA', '')
+                zero_defect_record['Tên Trưởng ca'] = production_data.get('Tên Trưởng ca', '')
+            else:
+                zero_defect_record['Sản phẩm'] = ''
+                zero_defect_record['Item'] = ''
+                zero_defect_record['Giờ'] = ''
+                zero_defect_record['QA'] = ''
+                zero_defect_record['Tên Trưởng ca'] = ''
+            
+            # Target TV
+            try:
+                line_num = float(sample_data.get('Line', '')) if sample_data.get('Line', '') else None
+                zero_defect_record['Target TV'] = get_target_tv(line_num)
+            except:
+                zero_defect_record['Target TV'] = ''
+            
+            # Fill remaining columns
+            for col in available_columns:
+                if col not in zero_defect_record:
+                    zero_defect_record[col] = ''
+            
+            comprehensive_rows.append(pd.Series(zero_defect_record))
+            
+        except Exception as e:
+            processor.log(f"Error creating zero-defect record for VHM {vhm_name}: {e}")
+            continue
+    
+    # Create final dataframe
+    if comprehensive_rows:
+        comprehensive_df = pd.DataFrame(comprehensive_rows)
+        comprehensive_df = comprehensive_df.reindex(columns=available_columns, fill_value='')
+        
+        # Sort by date
+        if 'Ngày SX' in comprehensive_df.columns:
+            comprehensive_df['Ngày SX_for_sort'] = comprehensive_df['Ngày SX'].apply(standardize_date)
+            comprehensive_df = comprehensive_df.sort_values(by='Ngày SX_for_sort', ascending=False, na_position='last')
+            comprehensive_df = comprehensive_df.drop(columns=['Ngày SX_for_sort'])
+        
+        processor.log(f"Final comprehensive dataset: {len(comprehensive_df)} records")
+        
+        # Upload to SharePoint
+        success = processor.upload_excel_to_sharepoint(
+            comprehensive_df, 
+            SHAREPOINT_FILE_IDS['cf_data_output'],
+            'Processed_Data'
+        )
+        
+        if success:
+            processor.log("✅ Data processing completed successfully!")
+            processor.log(f"📊 Final dataset includes:")
+            processor.log(f"  - Total records: {len(comprehensive_df)}")
+            
+            # Statistics
+            comprehensive_df['temp_numeric'] = pd.to_numeric(
+                comprehensive_df['Số lượng hold ( gói/thùng)'], errors='coerce'
+            )
+            defect_count = len(comprehensive_df[comprehensive_df['temp_numeric'] > 0])
+            zero_defect_count = len(comprehensive_df[comprehensive_df['temp_numeric'] == 0])
+            
+            processor.log(f"  - Records with defects: {defect_count}")
+            processor.log(f"  - Zero-defect records: {zero_defect_count}")
+            
+        else:
+            processor.log("❌ Failed to upload data to SharePoint")
+            sys.exit(1)
+            
     else:
-        processor.log("❌ Failed to upload final results")
+        processor.log("❌ No data to process")
         sys.exit(1)
 
 if __name__ == "__main__":
