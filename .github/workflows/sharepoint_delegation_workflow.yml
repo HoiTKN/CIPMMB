@@ -1,432 +1,201 @@
-name: QA Data Processing - SharePoint Delegation Flow (Daily)
+"""
+Quick Setup Script for SharePoint Delegation Flow
+Hướng dẫn và tự động setup environment
+"""
 
-on:
-  # Chạy hàng ngày lúc 8:00 AM Vietnam time (1:00 AM UTC)
-  schedule:
-    - cron: '0 1 * * *'
-  
-  # Cho phép chạy thủ công
-  workflow_dispatch:
-    inputs:
-      debug_mode:
-        description: 'Enable debug output'
-        required: false
-        default: 'false'
-        type: boolean
-      test_mode:
-        description: 'Test mode - limited processing'
-        required: false
-        default: 'false'
-        type: boolean
+import os
+import sys
+import subprocess
 
-jobs:
-  sharepoint-delegation-processing:
-    runs-on: ubuntu-latest
+def check_environment():
+    """Check current environment setup"""
+    print("🔍 Checking current environment...")
     
-    steps:
-    - name: 📥 Checkout repository
-      uses: actions/checkout@v4
+    tenant_id = os.environ.get('TENANT_ID')
+    client_id = os.environ.get('CLIENT_ID')
     
-    - name: 🐍 Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.9'
+    print(f"TENANT_ID: {'✅ Set' if tenant_id else '❌ Missing'}")
+    print(f"CLIENT_ID: {'✅ Set' if client_id else '❌ Missing'}")
     
-    - name: 📦 Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install pandas>=1.5.0 openpyxl>=3.0.0 requests>=2.28.0 msal>=1.24.0
+    if tenant_id:
+        print(f"  Value: {tenant_id[:8]}...")
+    if client_id:
+        print(f"  Value: {client_id[:8]}...")
     
-    - name: 🔍 Verify environment and dependencies
-      run: |
-        echo "Python version: $(python --version)"
-        echo "Current directory: $(pwd)"
-        echo "Files in directory: $(ls -la)"
-        pip list | grep -E "(pandas|msal|requests|openpyxl)"
-        echo "Environment check complete"
+    return tenant_id and client_id
+
+def setup_environment():
+    """Guide user through environment setup"""
+    print("\n🔧 Environment Setup Required")
+    print("=" * 50)
     
-    - name: 🔧 Validate delegation configuration
-      env:
-        TENANT_ID: ${{ secrets.TENANT_ID }}
-        CLIENT_ID: ${{ secrets.CLIENT_ID }}
-        SHAREPOINT_ACCESS_TOKEN: ${{ secrets.SHAREPOINT_ACCESS_TOKEN }}
-        SHAREPOINT_REFRESH_TOKEN: ${{ secrets.SHAREPOINT_REFRESH_TOKEN }}
-        SHAREPOINT_SITE_URL: ${{ secrets.SHAREPOINT_SITE_URL }}
-        DEBUG_MODE: ${{ github.event.inputs.debug_mode }}
-        TEST_MODE: ${{ github.event.inputs.test_mode }}
-      run: |
-        echo "🧪 Validating delegation flow configuration..."
-        echo "Tenant ID: ${TENANT_ID:0:8}..."
-        echo "Client ID: ${CLIENT_ID:0:8}..."
-        echo "Access Token: ${SHAREPOINT_ACCESS_TOKEN:0:8}..."
-        if [ -n "$SHAREPOINT_REFRESH_TOKEN" ]; then
-          echo "Refresh Token: ${SHAREPOINT_REFRESH_TOKEN:0:8}..."
-        else
-          echo "Refresh Token: Not provided"
-        fi
-        echo "SharePoint Site: $SHAREPOINT_SITE_URL"
-        echo "Debug Mode: $DEBUG_MODE"
-        echo "Test Mode: $TEST_MODE"
-        
-        # Test basic imports
-        python -c "
-        import msal
-        import requests
-        import pandas as pd
-        import openpyxl
-        print('✅ All required imports successful')
-        
-        # Test MSAL public client setup
+    print("You need to set these environment variables:")
+    print("TENANT_ID=81060475...")
+    print("CLIENT_ID=076541aa...")
+    print()
+    
+    # Detect OS and provide appropriate commands
+    if os.name == 'nt':  # Windows
+        print("For Windows Command Prompt:")
+        print("set TENANT_ID=81060475...")
+        print("set CLIENT_ID=076541aa...")
+        print()
+        print("For Windows PowerShell:")
+        print("$env:TENANT_ID=\"81060475...\"")
+        print("$env:CLIENT_ID=\"076541aa...\"")
+    else:  # Mac/Linux
+        print("For Mac/Linux:")
+        print("export TENANT_ID=81060475...")
+        print("export CLIENT_ID=076541aa...")
+    
+    print()
+    print("📋 Get the actual values from:")
+    print("- Your existing GitHub Secrets")
+    print("- IT team")
+    print("- Previous working setup")
+    
+    input("\nPress Enter after setting environment variables...")
+    return check_environment()
+
+def check_dependencies():
+    """Check if required Python packages are installed"""
+    print("\n📦 Checking Python dependencies...")
+    
+    required_packages = ['msal', 'requests', 'pandas', 'openpyxl']
+    missing_packages = []
+    
+    for package in required_packages:
         try:
-            from config_delegation import GRAPH_API_CONFIG
-            app = msal.PublicClientApplication(
-                '$CLIENT_ID',
-                authority='https://login.microsoftonline.com/$TENANT_ID'
-            )
-            print('✅ MSAL PublicClientApplication created successfully')
-        except Exception as e:
-            print(f'❌ MSAL setup failed: {e}')
-            exit(1)
-        "
+            __import__(package)
+            print(f"✅ {package}")
+        except ImportError:
+            print(f"❌ {package} (missing)")
+            missing_packages.append(package)
     
-    - name: 🔑 Test delegation authentication
-      id: auth_test
-      env:
-        TENANT_ID: ${{ secrets.TENANT_ID }}
-        CLIENT_ID: ${{ secrets.CLIENT_ID }}
-        SHAREPOINT_ACCESS_TOKEN: ${{ secrets.SHAREPOINT_ACCESS_TOKEN }}
-        SHAREPOINT_REFRESH_TOKEN: ${{ secrets.SHAREPOINT_REFRESH_TOKEN }}
-        SHAREPOINT_SITE_URL: ${{ secrets.SHAREPOINT_SITE_URL }}
-      run: |
-        echo "🔑 Testing delegation authentication..."
+    if missing_packages:
+        print(f"\n🔧 Installing missing packages: {', '.join(missing_packages)}")
+        try:
+            subprocess.check_call([sys.executable, '-m', 'pip', 'install'] + missing_packages)
+            print("✅ Dependencies installed successfully")
+        except subprocess.CalledProcessError:
+            print("❌ Failed to install dependencies")
+            print("Please run manually: pip install msal requests pandas openpyxl")
+            return False
+    
+    return True
+
+def run_token_generation():
+    """Run the token generation script"""
+    print("\n🔑 Running token generation...")
+    print("=" * 50)
+    
+    if not os.path.exists('generate_tokens.py'):
+        print("❌ generate_tokens.py not found in current directory")
+        print("Please make sure you're in the correct directory")
+        return False
+    
+    try:
+        # Import and run token generation
+        from generate_tokens import generate_tokens, test_tokens
         
-        # Test access token validity
-        python -c "
-        import requests
-        import os
+        success = generate_tokens()
         
-        access_token = os.environ.get('SHAREPOINT_ACCESS_TOKEN')
-        
-        if not access_token:
-            print('❌ No access token found')
-            print('auth_result=no_token')
-            exit(1)
-        
-        # Test token with Graph API
-        headers = {'Authorization': f'Bearer {access_token}'}
-        
-        # Test basic user info
-        response = requests.get('https://graph.microsoft.com/v1.0/me', headers=headers)
-        
-        if response.status_code == 200:
-            user_info = response.json()
-            print(f'✅ Authentication successful for user: {user_info.get(\"displayName\", \"Unknown\")}')
+        if success:
+            print("\n🧪 Testing generated tokens...")
+            test_success = test_tokens()
             
-            # Test SharePoint site access
-            site_url = 'https://graph.microsoft.com/v1.0/sites/masangroup.sharepoint.com:/sites/MCH.MMB.QA'
-            site_response = requests.get(site_url, headers=headers)
-            
-            if site_response.status_code == 200:
-                site_data = site_response.json()
-                print(f'✅ SharePoint site access successful: {site_data.get(\"displayName\", \"Unknown\")}')
-                print('auth_result=success')
+            if test_success:
+                print("\n🎉 TOKEN GENERATION SUCCESSFUL!")
+                return True
             else:
-                print(f'❌ SharePoint site access failed: {site_response.status_code}')
-                print('auth_result=site_access_failed')
-        elif response.status_code == 401:
-            print('❌ Access token expired or invalid')
-            print('auth_result=token_expired')
+                print("\n⚠️ Tokens generated but test failed")
+                print("Check SharePoint permissions and try again")
+                return False
         else:
-            print(f'❌ Authentication test failed: {response.status_code}')
-            print('auth_result=auth_failed')
-        " > auth_output.txt 2>&1
-        
-        cat auth_output.txt
-        
-        if grep -q "auth_result=success" auth_output.txt; then
-          echo "authentication_status=success" >> $GITHUB_OUTPUT
-        elif grep -q "auth_result=token_expired" auth_output.txt; then
-          echo "authentication_status=token_expired" >> $GITHUB_OUTPUT
-        else
-          echo "authentication_status=failed" >> $GITHUB_OUTPUT
-        fi
+            print("\n❌ Token generation failed")
+            return False
+            
+    except Exception as e:
+        print(f"❌ Error running token generation: {str(e)}")
+        return False
+
+def show_github_instructions():
+    """Show instructions for adding tokens to GitHub"""
+    print("\n📋 GITHUB SECRETS SETUP")
+    print("=" * 50)
+    print()
+    print("1. Go to your GitHub repository")
+    print("2. Settings > Secrets and variables > Actions")
+    print("3. Click 'New repository secret'")
+    print("4. Add these secrets (values from generate_tokens.py output):")
+    print("   - SHAREPOINT_ACCESS_TOKEN")
+    print("   - SHAREPOINT_REFRESH_TOKEN")
+    print()
+    print("5. Test the workflow:")
+    print("   - Go to Actions tab")
+    print("   - Select 'QA Data Processing - SharePoint Delegation Flow'")
+    print("   - Click 'Run workflow'")
+    print()
+    print("📁 Generated files:")
+    if os.path.exists('sharepoint_tokens.json'):
+        print("✅ sharepoint_tokens.json (keep as backup)")
+    else:
+        print("❌ sharepoint_tokens.json (not found)")
+
+def main():
+    """Main setup function"""
+    print("🚀 SharePoint Delegation Flow - Quick Setup")
+    print("=" * 60)
+    print()
+    print("This script will help you setup delegation flow for QA data processing")
+    print("No CLIENT_SECRET required!")
+    print()
     
-    - name: 🔄 Token refresh attempt
-      id: token_refresh
-      if: steps.auth_test.outputs.authentication_status == 'token_expired'
-      env:
-        TENANT_ID: ${{ secrets.TENANT_ID }}
-        CLIENT_ID: ${{ secrets.CLIENT_ID }}
-        SHAREPOINT_REFRESH_TOKEN: ${{ secrets.SHAREPOINT_REFRESH_TOKEN }}
-      run: |
-        echo "🔄 Attempting to refresh expired token..."
-        
-        if [ -z "$SHAREPOINT_REFRESH_TOKEN" ]; then
-          echo "❌ No refresh token available"
-          echo "💡 Please regenerate tokens using generate_tokens.py"
-          echo "refresh_status=no_refresh_token" >> $GITHUB_OUTPUT
-          exit 0
-        fi
-        
-        python -c "
-        import msal
-        import os
-        
-        # Try to refresh token using MSAL cache (if available)
-        app = msal.PublicClientApplication(
-            os.environ.get('CLIENT_ID'),
-            authority=f'https://login.microsoftonline.com/{os.environ.get(\"TENANT_ID\")}'
-        )
-        
-        # Note: In GitHub Actions, we typically don't have access to MSAL cache
-        # This is a limitation of delegation flow in automated environments
-        print('⚠️ Token refresh in GitHub Actions is limited')
-        print('💡 Consider regenerating tokens or using application flow')
-        print('refresh_status=limited')
-        " > refresh_output.txt 2>&1
-        
-        cat refresh_output.txt
-        echo "refresh_status=attempted" >> $GITHUB_OUTPUT
+    # Step 1: Check environment
+    if not check_environment():
+        if not setup_environment():
+            print("❌ Environment setup failed. Please set environment variables and try again.")
+            return
     
-    - name: 🏭 Run QA Data Processing
-      id: qa_processing
-      if: steps.auth_test.outputs.authentication_status == 'success'
-      env:
-        TENANT_ID: ${{ secrets.TENANT_ID }}
-        CLIENT_ID: ${{ secrets.CLIENT_ID }}
-        SHAREPOINT_ACCESS_TOKEN: ${{ secrets.SHAREPOINT_ACCESS_TOKEN }}
-        SHAREPOINT_REFRESH_TOKEN: ${{ secrets.SHAREPOINT_REFRESH_TOKEN }}
-        SHAREPOINT_SITE_URL: ${{ secrets.SHAREPOINT_SITE_URL }}
-        DEBUG_MODE: ${{ github.event.inputs.debug_mode }}
-        TEST_MODE: ${{ github.event.inputs.test_mode }}
-      run: |
-        echo "🏭 Starting QA Data Processing with delegation flow..."
-        echo "Processing files from SharePoint:"
-        echo "  - Sample ID.xlsx (VHM and % Hao hụt OPP data)"
-        echo "  - Data SX.xlsx (ID AQL, AQL gói, AQL Tô ly data)"
-        echo "  - Output: CF data.xlsx"
-        
-        # Run the main processing script
-        python Visual_SharePoint_Delegation.py > processing_output.txt 2>&1
-        
-        # Display output
-        cat processing_output.txt
-        
-        # Check if processing was successful
-        if grep -q "Data processing completed successfully" processing_output.txt; then
-          echo "processing_status=success" >> $GITHUB_OUTPUT
-          echo "✅ QA Data Processing completed successfully!"
-        else
-          echo "processing_status=failed" >> $GITHUB_OUTPUT
-          echo "❌ QA Data Processing failed"
-          exit 1
-        fi
+    # Step 2: Check dependencies
+    if not check_dependencies():
+        print("❌ Dependency check failed. Please install required packages and try again.")
+        return
     
-    - name: 📊 Generate processing summary
-      if: always()
-      env:
-        AUTH_STATUS: ${{ steps.auth_test.outputs.authentication_status }}
-        PROCESSING_STATUS: ${{ steps.qa_processing.outputs.processing_status }}
-        REFRESH_STATUS: ${{ steps.token_refresh.outputs.refresh_status }}
-      run: |
-        echo "📊 Creating processing summary..."
-        
-        # Create summary files
-        mkdir -p output
-        
-        # Create processing summary
-        cat > output/delegation_summary.json << EOF
-        {
-          "timestamp": "$(date -Iseconds)",
-          "workflow_run": "${{ github.run_number }}",
-          "repository": "${{ github.repository }}",
-          "authentication_method": "delegation_flow",
-          "authentication_status": "$AUTH_STATUS",
-          "token_refresh_status": "$REFRESH_STATUS",
-          "processing_status": "$PROCESSING_STATUS",
-          "files_processed": [
-            "Sample ID.xlsx",
-            "Data SX.xlsx"
-          ],
-          "output_file": "CF data.xlsx",
-          "schedule": "Daily at 8:00 AM Vietnam time",
-          "notes": "Delegation flow - no CLIENT_SECRET required"
-        }
-        EOF
-        
-        echo "✅ Delegation processing summary created"
+    # Step 3: Generate tokens
+    print("\n🎯 Ready to generate SharePoint access tokens!")
+    print("This will:")
+    print("1. Open your browser")
+    print("2. Ask you to sign in with Masan account")
+    print("3. Generate access and refresh tokens")
+    print("4. Show you exactly what to add to GitHub Secrets")
+    print()
     
-    - name: 📁 Upload processing logs and summary
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: qa-delegation-processing-${{ github.run_number }}
-        path: |
-          output/
-          *.txt
-          *.json
-          *.log
-        retention-days: 30
+    proceed = input("Continue with token generation? (y/n): ").lower().strip()
+    if proceed != 'y':
+        print("Setup cancelled by user")
+        return
     
-    - name: 📋 Create workflow summary
-      if: always()
-      env:
-        AUTH_STATUS: ${{ steps.auth_test.outputs.authentication_status }}
-        PROCESSING_STATUS: ${{ steps.qa_processing.outputs.processing_status }}
-        REFRESH_STATUS: ${{ steps.token_refresh.outputs.refresh_status }}
-      run: |
-        echo "## 🏭 QA Data Processing - SharePoint Delegation Flow" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**Run Date**: $(date)" >> $GITHUB_STEP_SUMMARY
-        echo "**Repository**: ${{ github.repository }}" >> $GITHUB_STEP_SUMMARY
-        echo "**Workflow**: ${{ github.workflow }}" >> $GITHUB_STEP_SUMMARY
-        echo "**Run Number**: ${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
-        echo "**Authentication**: Delegation Flow (No CLIENT_SECRET)" >> $GITHUB_STEP_SUMMARY
-        echo "**Test Mode**: ${{ github.event.inputs.test_mode }}" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
+    if run_token_generation():
+        show_github_instructions()
         
-        # Authentication status
-        echo "### 🔑 Authentication Status:" >> $GITHUB_STEP_SUMMARY
-        if [ "$AUTH_STATUS" = "success" ]; then
-          echo "- ✅ **Delegation Authentication**: SUCCESS" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **SharePoint Access**: Available" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **Token Status**: Valid" >> $GITHUB_STEP_SUMMARY
-        elif [ "$AUTH_STATUS" = "token_expired" ]; then
-          echo "- ⚠️ **Delegation Authentication**: TOKEN EXPIRED" >> $GITHUB_STEP_SUMMARY
-          echo "- ❌ **SharePoint Access**: Not available" >> $GITHUB_STEP_SUMMARY
-          echo "- 🔄 **Token Refresh**: $REFRESH_STATUS" >> $GITHUB_STEP_SUMMARY
-        else
-          echo "- ❌ **Delegation Authentication**: FAILED" >> $GITHUB_STEP_SUMMARY
-          echo "- ❌ **SharePoint Access**: Not available" >> $GITHUB_STEP_SUMMARY
-        fi
-        echo "" >> $GITHUB_STEP_SUMMARY
+        print("\n🎉 SETUP COMPLETE!")
+        print("=" * 50)
+        print("✅ Environment configured")
+        print("✅ Dependencies installed")
+        print("✅ Tokens generated")
+        print("✅ GitHub instructions provided")
+        print()
+        print("📋 Next steps:")
+        print("1. Add tokens to GitHub Secrets")
+        print("2. Run GitHub Actions workflow")
+        print("3. Monitor workflow execution")
+        print()
+        print("💡 Keep sharepoint_tokens.json file as backup!")
         
-        # Processing status
-        echo "### 📊 Data Processing Status:" >> $GITHUB_STEP_SUMMARY
-        if [ "$PROCESSING_STATUS" = "success" ]; then
-          echo "- ✅ **Data Download**: Sample ID.xlsx and Data SX.xlsx" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **Data Processing**: VHM mapping and defect analysis" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **Data Upload**: CF data.xlsx updated in SharePoint" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **Comprehensive Dataset**: Created with zero-defect records" >> $GITHUB_STEP_SUMMARY
-        elif [ "$AUTH_STATUS" = "success" ]; then
-          echo "- ❌ **Data Processing**: FAILED" >> $GITHUB_STEP_SUMMARY
-          echo "- ❌ **Error**: Check processing logs for details" >> $GITHUB_STEP_SUMMARY
-        else
-          echo "- ⏭️ **Data Processing**: SKIPPED (Authentication failed)" >> $GITHUB_STEP_SUMMARY
-        fi
-        echo "" >> $GITHUB_STEP_SUMMARY
-        
-        # Token management
-        echo "### 🔐 Token Management:" >> $GITHUB_STEP_SUMMARY
-        echo "- **Flow Type**: Delegation (No CLIENT_SECRET required)" >> $GITHUB_STEP_SUMMARY
-        echo "- **Access Token**: Provided via GitHub Secrets" >> $GITHUB_STEP_SUMMARY
-        if [ -n "$REFRESH_STATUS" ]; then
-          echo "- **Refresh Token**: Available (status: $REFRESH_STATUS)" >> $GITHUB_STEP_SUMMARY
-        else
-          echo "- **Refresh Token**: Not used this run" >> $GITHUB_STEP_SUMMARY
-        fi
-        echo "" >> $GITHUB_STEP_SUMMARY
-        
-        # Files processed
-        echo "### 📁 SharePoint Files:" >> $GITHUB_STEP_SUMMARY
-        echo "- **Input**: Sample ID.xlsx (VHM and % Hao hụt OPP mapping)" >> $GITHUB_STEP_SUMMARY
-        echo "- **Input**: Data SX.xlsx (ID AQL, AQL gói, AQL Tô ly sheets)" >> $GITHUB_STEP_SUMMARY
-        echo "- **Output**: CF data.xlsx (Processed comprehensive dataset)" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        
-        # Schedule info
-        echo "### 📅 Automation Schedule:" >> $GITHUB_STEP_SUMMARY
-        echo "- **Daily Schedule**: 8:00 AM Vietnam Time (1:00 AM UTC)" >> $GITHUB_STEP_SUMMARY
-        echo "- **Manual Trigger**: Available via workflow dispatch" >> $GITHUB_STEP_SUMMARY
-        echo "- **Token Lifetime**: Depends on token expiry (typically 1 hour)" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        
-        # Troubleshooting
-        if [ "$AUTH_STATUS" = "token_expired" ]; then
-          echo "### 🔧 Token Expired - Action Required:" >> $GITHUB_STEP_SUMMARY
-          echo "1. **Run generate_tokens.py locally** to get new tokens" >> $GITHUB_STEP_SUMMARY
-          echo "2. **Update GitHub Secrets** with new SHAREPOINT_ACCESS_TOKEN" >> $GITHUB_STEP_SUMMARY
-          echo "3. **Optional**: Update SHAREPOINT_REFRESH_TOKEN for longer lifetime" >> $GITHUB_STEP_SUMMARY
-          echo "4. **Re-run workflow** after token update" >> $GITHUB_STEP_SUMMARY
-        elif [ "$AUTH_STATUS" != "success" ]; then
-          echo "### 🔧 Troubleshooting:" >> $GITHUB_STEP_SUMMARY
-          echo "1. **Check GitHub Secrets**: SHAREPOINT_ACCESS_TOKEN, TENANT_ID, CLIENT_ID" >> $GITHUB_STEP_SUMMARY
-          echo "2. **Verify Permissions**: Ensure delegated permissions for SharePoint" >> $GITHUB_STEP_SUMMARY
-          echo "3. **Generate New Tokens**: Run generate_tokens.py locally" >> $GITHUB_STEP_SUMMARY
-        elif [ "$PROCESSING_STATUS" != "success" ]; then
-          echo "### 🔧 Troubleshooting:" >> $GITHUB_STEP_SUMMARY
-          echo "1. **Check File Structure**: Verify Excel files have expected sheets" >> $GITHUB_STEP_SUMMARY
-          echo "2. **Review Processing Logs**: Download artifacts for detailed error information" >> $GITHUB_STEP_SUMMARY
-          echo "3. **Data Validation**: Ensure required columns exist in source files" >> $GITHUB_STEP_SUMMARY
-        else
-          echo "### 🎉 Success!" >> $GITHUB_STEP_SUMMARY
-          echo "QA data processing completed successfully using delegation flow. No CLIENT_SECRET required!" >> $GITHUB_STEP_SUMMARY
-        fi
-        
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "### 🔗 Download Results:" >> $GITHUB_STEP_SUMMARY
-        echo "Check the **Artifacts** section below to download processing logs and summary." >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        
-        # Overall status
-        if [ "$AUTH_STATUS" = "success" ] && [ "$PROCESSING_STATUS" = "success" ]; then
-          echo "---" >> $GITHUB_STEP_SUMMARY
-          echo "**🎯 Status: QA DATA PROCESSING COMPLETED (DELEGATION FLOW)** 🎯" >> $GITHUB_STEP_SUMMARY
-        elif [ "$AUTH_STATUS" = "token_expired" ]; then
-          echo "---" >> $GITHUB_STEP_SUMMARY
-          echo "**⏰ Status: TOKEN EXPIRED - REGENERATE TOKENS AND RETRY** ⏰" >> $GITHUB_STEP_SUMMARY
-        else
-          echo "---" >> $GITHUB_STEP_SUMMARY
-          echo "**⚠️ Status: PROCESSING INCOMPLETE - CHECK LOGS FOR DETAILS** ⚠️" >> $GITHUB_STEP_SUMMARY
-        fi
-    
-    - name: 🎉 Final status report
-      if: always()
-      env:
-        AUTH_STATUS: ${{ steps.auth_test.outputs.authentication_status }}
-        PROCESSING_STATUS: ${{ steps.qa_processing.outputs.processing_status }}
-        REFRESH_STATUS: ${{ steps.token_refresh.outputs.refresh_status }}
-      run: |
-        echo ""
-        echo "=================================="
-        echo "🏭 QA DATA PROCESSING - DELEGATION FLOW"
-        echo "=================================="
-        echo ""
-        echo "📊 FINAL STATUS REPORT:"
-        echo "  🔑 Authentication: $AUTH_STATUS"
-        echo "  🔄 Token Refresh: $REFRESH_STATUS"
-        echo "  📈 Data Processing: $PROCESSING_STATUS"
-        echo "  🔐 Flow Type: Delegation (No CLIENT_SECRET)"
-        echo ""
-        
-        if [ "$AUTH_STATUS" = "success" ] && [ "$PROCESSING_STATUS" = "success" ]; then
-          echo "✅ SUCCESS: QA data processing completed with delegation flow!"
-          echo "📁 SharePoint files updated:"
-          echo "  - CF data.xlsx contains latest processed data"
-          echo "  - No CLIENT_SECRET required - using delegated permissions"
-          echo "  - User-based authentication with access tokens"
-        elif [ "$AUTH_STATUS" = "token_expired" ]; then
-          echo "⏰ TOKEN EXPIRED: Access token needs refresh"
-          echo "🔧 Action required:"
-          echo "  1. Run generate_tokens.py locally"
-          echo "  2. Update SHAREPOINT_ACCESS_TOKEN in GitHub Secrets"
-          echo "  3. Re-run this workflow"
-        elif [ "$AUTH_STATUS" = "success" ]; then
-          echo "⚠️ PARTIAL SUCCESS: Authentication OK, but processing failed"
-          echo "📋 Check processing logs for error details"
-        else
-          echo "❌ FAILED: Delegation authentication unsuccessful"
-          echo "🔧 Check tokens and regenerate if needed"
-        fi
-        
-        echo ""
-        echo "💡 DELEGATION FLOW BENEFITS:"
-        echo "  ✅ No CLIENT_SECRET required"
-        echo "  ✅ User-based permissions"
-        echo "  ✅ Simplified setup"
-        echo "  ⚠️ Tokens need periodic refresh"
-        echo ""
-        echo "📅 Next scheduled run: Tomorrow at 8:00 AM Vietnam time"
-        echo "🔄 Manual trigger available via workflow dispatch"
-        echo ""
-        echo "=================================="
+    else:
+        print("\n❌ SETUP FAILED")
+        print("Please check error messages above and try again")
+
+if __name__ == "__main__":
+    main()
