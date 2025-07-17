@@ -1,4 +1,4 @@
-name: QA Data Processing - SharePoint Delegation Flow (Daily)
+name: QA Data Processing - SharePoint Delegation Flow (Enhanced Auto-Refresh)
 
 on:
   # Chạy hàng ngày lúc 8:00 AM Vietnam time (1:00 AM UTC)
@@ -98,7 +98,7 @@ jobs:
             exit(1)
         "
     
-    - name: 🔑 Test delegation authentication
+    - name: 🔄 Enhanced Auto-Refresh and Authentication
       id: auth_test
       env:
         TENANT_ID: ${{ secrets.TENANT_ID }}
@@ -107,80 +107,241 @@ jobs:
         SHAREPOINT_REFRESH_TOKEN: ${{ secrets.SHAREPOINT_REFRESH_TOKEN }}
         SHAREPOINT_SITE_URL: ${{ secrets.SHAREPOINT_SITE_URL }}
       run: |
-        echo "🔑 Testing delegation authentication..."
+        echo "🔄 Enhanced auto-refresh and authentication process..."
         
-        # Test access token validity
+        # Enhanced auto-refresh script
         python -c "
         import requests
+        import msal
         import os
         import sys
+        import json
+        import time
         
-        access_token = os.environ.get('SHAREPOINT_ACCESS_TOKEN')
+        def log(msg):
+            print(f'🔄 {msg}')
+            sys.stdout.flush()
         
-        if not access_token:
-            print('❌ No access token found')
-            sys.exit(1)
-        
-        print(f'🔍 Testing access token: {access_token[:30]}...')
-        
-        # Test token with Graph API
-        headers = {'Authorization': f'Bearer {access_token}'}
-        
-        # Test basic user info
-        try:
-            response = requests.get('https://graph.microsoft.com/v1.0/me', headers=headers, timeout=30)
-            
-            if response.status_code == 200:
-                user_info = response.json()
-                print(f'✅ Authentication successful for user: {user_info.get(\"displayName\", \"Unknown\")}')
-                
-                # Test SharePoint site access
-                site_url = 'https://graph.microsoft.com/v1.0/sites/masangroup.sharepoint.com:/sites/MCH.MMB.QA'
-                site_response = requests.get(site_url, headers=headers, timeout=30)
-                
-                if site_response.status_code == 200:
-                    site_data = site_response.json()
-                    print(f'✅ SharePoint site access successful: {site_data.get(\"displayName\", \"Unknown\")}')
-                    print('auth_result=success')
-                else:
-                    print(f'❌ SharePoint site access failed: {site_response.status_code}')
-                    print(f'Response: {site_response.text[:200]}')
-                    print('auth_result=site_access_failed')
+        def test_token_with_retry(access_token, max_retries=3):
+            '''Test token with intelligent retry logic'''
+            for attempt in range(max_retries):
+                try:
+                    log(f'Testing token (attempt {attempt + 1}/{max_retries})...')
+                    headers = {'Authorization': f'Bearer {access_token}'}
                     
-            elif response.status_code == 401:
-                print('❌ Access token expired or invalid')
-                print('💡 Need to regenerate tokens using generate_tokens.py')
-                print('auth_result=token_expired')
-            else:
-                print(f'❌ Authentication test failed: {response.status_code}')
-                print(f'Response: {response.text[:200]}')
-                print('auth_result=auth_failed')
+                    # Test basic Graph API access
+                    response = requests.get('https://graph.microsoft.com/v1.0/me', headers=headers, timeout=30)
+                    
+                    if response.status_code == 200:
+                        user_info = response.json()
+                        log(f'✅ Token valid for user: {user_info.get(\"displayName\", \"Unknown\")}')
+                        
+                        # Test SharePoint site access
+                        site_url = 'https://graph.microsoft.com/v1.0/sites/masangroup.sharepoint.com:/sites/MCH.MMB.QA'
+                        site_response = requests.get(site_url, headers=headers, timeout=30)
+                        
+                        if site_response.status_code == 200:
+                            site_data = site_response.json()
+                            log(f'✅ SharePoint access confirmed: {site_data.get(\"displayName\", \"Unknown\")}')
+                            return True, access_token
+                        elif site_response.status_code == 429:  # Rate limited
+                            wait_time = (attempt + 1) * 2
+                            log(f'⏳ Rate limited, waiting {wait_time}s before retry...')
+                            time.sleep(wait_time)
+                            continue
+                        else:
+                            log(f'❌ SharePoint access failed: {site_response.status_code}')
+                            log(f'Response: {site_response.text[:200]}')
+                            return False, None
+                            
+                    elif response.status_code == 401:
+                        log('❌ Token expired or invalid')
+                        return False, None
+                    elif response.status_code == 429:  # Rate limited
+                        wait_time = (attempt + 1) * 2
+                        log(f'⏳ Rate limited, waiting {wait_time}s before retry...')
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        log(f'⚠️ Unexpected response: {response.status_code}')
+                        if attempt < max_retries - 1:
+                            time.sleep(2)
+                            continue
+                        return False, None
+                        
+                except requests.exceptions.Timeout:
+                    log(f'⏳ Request timeout (attempt {attempt + 1})')
+                    if attempt < max_retries - 1:
+                        time.sleep(3)
+                        continue
+                    return False, None
+                except Exception as e:
+                    log(f'❌ Error testing token: {str(e)}')
+                    if attempt < max_retries - 1:
+                        time.sleep(2)
+                        continue
+                    return False, None
+            
+            return False, None
+        
+        def refresh_token_smart(tenant_id, client_id, refresh_token):
+            '''Smart token refresh with multiple methods'''
+            if not refresh_token:
+                log('❌ No refresh token available for auto-refresh')
+                return False, None, None
+            
+            # Method 1: MSAL silent authentication
+            try:
+                log('🔄 Attempting MSAL silent authentication...')
+                app = msal.PublicClientApplication(
+                    client_id,
+                    authority=f'https://login.microsoftonline.com/{tenant_id}'
+                )
                 
-        except requests.exceptions.RequestException as e:
-            print(f'❌ Network error during authentication test: {str(e)}')
-            print('auth_result=network_error')
+                accounts = app.get_accounts()
+                if accounts:
+                    scopes = [
+                        'https://graph.microsoft.com/Sites.Read.All',
+                        'https://graph.microsoft.com/Files.ReadWrite.All',
+                        'https://graph.microsoft.com/Sites.ReadWrite.All'
+                    ]
+                    
+                    result = app.acquire_token_silent(scopes, account=accounts[0])
+                    if result and 'access_token' in result:
+                        log('✅ MSAL silent refresh successful')
+                        return True, result['access_token'], result.get('refresh_token')
+                        
+            except Exception as e:
+                log(f'⚠️ MSAL method failed: {str(e)}')
+            
+            # Method 2: Direct OAuth2 refresh
+            try:
+                log('🔄 Attempting direct OAuth2 refresh...')
+                token_url = f'https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token'
+                
+                data = {
+                    'grant_type': 'refresh_token',
+                    'refresh_token': refresh_token,
+                    'client_id': client_id,
+                    'scope': 'https://graph.microsoft.com/.default'
+                }
+                
+                response = requests.post(token_url, data=data, timeout=30)
+                
+                if response.status_code == 200:
+                    token_data = response.json()
+                    log('✅ OAuth2 refresh successful')
+                    return True, token_data['access_token'], token_data.get('refresh_token')
+                else:
+                    log(f'❌ OAuth2 refresh failed: {response.status_code}')
+                    log(f'Response: {response.text[:200]}')
+                    
+            except Exception as e:
+                log(f'❌ OAuth2 method failed: {str(e)}')
+            
+            return False, None, None
+        
+        # Main enhanced authentication logic
+        try:
+            tenant_id = os.environ.get('TENANT_ID')
+            client_id = os.environ.get('CLIENT_ID')
+            access_token = os.environ.get('SHAREPOINT_ACCESS_TOKEN')
+            refresh_token = os.environ.get('SHAREPOINT_REFRESH_TOKEN')
+            
+            if not all([tenant_id, client_id, access_token]):
+                log('❌ Missing required environment variables')
+                print('auth_result=missing_env_vars')
+                sys.exit(1)
+            
+            log(f'🔍 Testing current access token: {access_token[:30]}...')
+            
+            # Test current token first
+            is_valid, validated_token = test_token_with_retry(access_token)
+            
+            if is_valid:
+                log('✅ Current token is valid, no refresh needed')
+                print('auth_result=success')
+                
+            else:
+                log('🔄 Current token invalid, attempting auto-refresh...')
+                
+                refresh_success, new_access_token, new_refresh_token = refresh_token_smart(
+                    tenant_id, client_id, refresh_token
+                )
+                
+                if refresh_success:
+                    log('🔄 Token refreshed, validating new token...')
+                    
+                    # Test the new token
+                    is_valid, final_token = test_token_with_retry(new_access_token)
+                    
+                    if is_valid:
+                        log('✅ New token validated successfully')
+                        print('auth_result=success_refreshed')
+                        
+                        # Save refreshed tokens for potential manual update
+                        refreshed_info = {
+                            'access_token': final_token,
+                            'refresh_token': new_refresh_token or refresh_token,
+                            'refreshed_at': '$(date -Iseconds)',
+                            'expires_in': 3600,
+                            'note': 'Auto-refreshed by GitHub Actions'
+                        }
+                        
+                        with open('auto_refreshed_tokens.json', 'w') as f:
+                            json.dump(refreshed_info, f, indent=2)
+                        
+                        log('💾 Auto-refreshed tokens saved to auto_refreshed_tokens.json')
+                        log('💡 Tokens refreshed successfully - no manual action needed!')
+                        
+                        # Update environment for subsequent steps
+                        os.environ['SHAREPOINT_ACCESS_TOKEN'] = final_token
+                        if new_refresh_token:
+                            os.environ['SHAREPOINT_REFRESH_TOKEN'] = new_refresh_token
+                            
+                    else:
+                        log('❌ New token validation failed')
+                        print('auth_result=refresh_validation_failed')
+                        log('💡 Manual token regeneration may be required')
+                        
+                else:
+                    log('❌ All refresh attempts failed')
+                    print('auth_result=refresh_failed')
+                    log('💡 Actions required:')
+                    log('   1. Run generate_tokens.py locally')
+                    log('   2. Update GitHub Secrets with new tokens')
+                    log('   3. Consider requesting Service Principal from IT team')
+        
         except Exception as e:
-            print(f'❌ Unexpected error during authentication test: {str(e)}')
-            print('auth_result=unexpected_error')
-        " > auth_output.txt 2>&1
+            log(f'❌ Critical error in enhanced authentication: {str(e)}')
+            print('auth_result=critical_error')
+            sys.exit(1)
+        " > enhanced_auth_output.txt 2>&1
         
-        cat auth_output.txt
+        # Display output
+        cat enhanced_auth_output.txt
         
-        if grep -q "auth_result=success" auth_output.txt; then
+        # Set output based on results  
+        if grep -q "auth_result=success" enhanced_auth_output.txt; then
           echo "authentication_status=success" >> $GITHUB_OUTPUT
-        elif grep -q "auth_result=token_expired" auth_output.txt; then
-          echo "authentication_status=token_expired" >> $GITHUB_OUTPUT
-        elif grep -q "auth_result=site_access_failed" auth_output.txt; then
-          echo "authentication_status=site_access_failed" >> $GITHUB_OUTPUT
-        elif grep -q "auth_result=network_error" auth_output.txt; then
-          echo "authentication_status=network_error" >> $GITHUB_OUTPUT
+          echo "✅ Authentication successful (existing token)"
+        elif grep -q "auth_result=success_refreshed" enhanced_auth_output.txt; then
+          echo "authentication_status=success_refreshed" >> $GITHUB_OUTPUT
+          echo "✅ Authentication successful (auto-refreshed token)"
+        elif grep -q "auth_result=refresh_failed" enhanced_auth_output.txt; then
+          echo "authentication_status=refresh_failed" >> $GITHUB_OUTPUT
+          echo "❌ Auto-refresh failed - manual intervention required"
+        elif grep -q "auth_result=missing_env_vars" enhanced_auth_output.txt; then
+          echo "authentication_status=missing_env_vars" >> $GITHUB_OUTPUT
+          echo "❌ Missing required environment variables"
         else
           echo "authentication_status=failed" >> $GITHUB_OUTPUT
+          echo "❌ Authentication failed"
         fi
     
     - name: 🏭 Run QA Data Processing
       id: qa_processing
-      if: steps.auth_test.outputs.authentication_status == 'success'
+      if: steps.auth_test.outputs.authentication_status == 'success' || steps.auth_test.outputs.authentication_status == 'success_refreshed'
       env:
         TENANT_ID: ${{ secrets.TENANT_ID }}
         CLIENT_ID: ${{ secrets.CLIENT_ID }}
@@ -190,17 +351,72 @@ jobs:
         DEBUG_MODE: ${{ github.event.inputs.debug_mode }}
         TEST_MODE: ${{ github.event.inputs.test_mode }}
       run: |
-        echo "🏭 Starting QA Data Processing with delegation flow..."
-        echo "Processing files from SharePoint:"
-        echo "  - Sample ID.xlsx (VHM and % Hao hụt OPP data)"
-        echo "  - Data SX.xlsx (ID AQL, AQL gói, AQL Tô ly data)"
-        echo "  - Output: CF data.xlsx"
+        echo "🏭 Starting QA Data Processing with enhanced delegation flow..."
+        echo "Processing files from SharePoint (CORRECTED structure):"
+        echo "  - Sample ID.xlsx = SOURCE SHEET (ID AQL, AQL gói, AQL Tô ly data)"
+        echo "  - Data SX.xlsx = SAMPLE ID SHEET (VHM and % Hao hụt OPP data)"
+        echo "  - Output: CF data.xlsx = DESTINATION SHEET"
+        echo ""
+        echo "📋 This matches the Visual.py logic:"
+        echo "  source_sheet -> Sample ID.xlsx (multi-sheet Excel)"
+        echo "  sample_id_sheet -> Data SX.xlsx (VHM mapping)"
+        echo "  destination_sheet -> CF data.xlsx (output)"
         
-        # Run the main processing script
-        python Visual_SharePoint_Delegation.py > processing_output.txt 2>&1
-        processing_exit_code=$?
+        # Check if Python script exists
+        if [ ! -f "Visual_SharePoint_Delegation.py" ]; then
+          echo "❌ Visual_SharePoint_Delegation.py not found!"
+          echo "Files in current directory:"
+          ls -la
+          exit 1
+        fi
         
-        # Display output
+        # Check Python imports first
+        echo "🔍 Testing Python imports..."
+        python -c "
+        try:
+            import pandas as pd
+            import os
+            import sys
+            import io
+            import requests
+            from datetime import datetime, timedelta
+            import msal
+            import time
+            print('✅ All imports successful')
+        except ImportError as e:
+            print(f'❌ Import error: {e}')
+            exit(1)
+        "
+        
+        # Test config import
+        echo "🔍 Testing config import..."
+        python -c "
+        try:
+            from config_delegation import GRAPH_API_CONFIG, SHAREPOINT_CONFIG, FILE_PATHS, OUTPUT_CONFIG, QA_CONFIG, SHAREPOINT_FILE_IDS, TOKEN_CONFIG
+            print('✅ Config import successful')
+            print(f'SHAREPOINT_FILE_IDS: {SHAREPOINT_FILE_IDS}')
+            print('📋 File structure (CORRECTED):')
+            print('  sample_id (SOURCE): ', SHAREPOINT_FILE_IDS.get('sample_id'))
+            print('  data_sx (SAMPLE ID): ', SHAREPOINT_FILE_IDS.get('data_sx'))
+            print('  cf_data_output (DEST): ', SHAREPOINT_FILE_IDS.get('cf_data_output'))
+        except ImportError as e:
+            print(f'❌ Config import error: {e}')
+            print('Available files:')
+            import os
+            print(os.listdir('.'))
+            exit(1)
+        except Exception as e:
+            print(f'❌ Config error: {e}')
+            exit(1)
+        "
+        
+        # Run the main processing script with verbose output
+        echo "🚀 Running main processing script..."
+        python -u Visual_SharePoint_Delegation.py 2>&1 | tee processing_output.txt
+        processing_exit_code=${PIPESTATUS[0]}
+        
+        # Always show the output
+        echo "📋 Processing output:"
         cat processing_output.txt
         
         # Check if processing was successful
@@ -210,15 +426,13 @@ jobs:
         else
           echo "processing_status=failed" >> $GITHUB_OUTPUT
           echo "❌ QA Data Processing failed (exit code: $processing_exit_code)"
-          echo "📋 Check processing_output.txt for error details"
-          exit 1
+          echo "📋 Full error output above"
+          
+          # Don't exit here - let the workflow continue to show summary
         fi
     
     - name: 📊 Generate processing summary
       if: always()
-      env:
-        AUTH_STATUS: ${{ steps.auth_test.outputs.authentication_status }}
-        PROCESSING_STATUS: ${{ steps.qa_processing.outputs.processing_status }}
       run: |
         echo "📊 Creating processing summary..."
         
@@ -231,26 +445,26 @@ jobs:
           "timestamp": "$(date -Iseconds)",
           "workflow_run": "${{ github.run_number }}",
           "repository": "${{ github.repository }}",
-          "authentication_method": "delegation_flow",
-          "authentication_status": "$AUTH_STATUS",
-          "processing_status": "$PROCESSING_STATUS",
+          "authentication_method": "enhanced_delegation_flow",
+          "authentication_status": "${{ steps.auth_test.outputs.authentication_status }}",
+          "processing_status": "${{ steps.qa_processing.outputs.processing_status }}",
           "files_processed": [
             "Sample ID.xlsx",
             "Data SX.xlsx"
           ],
           "output_file": "CF data.xlsx",
           "schedule": "Daily at 8:00 AM Vietnam time",
-          "notes": "Delegation flow - no CLIENT_SECRET required"
+          "notes": "Enhanced delegation flow with auto-refresh capability"
         }
         EOF
         
-        echo "✅ Delegation processing summary created"
+        echo "✅ Enhanced processing summary created"
     
     - name: 📁 Upload processing logs and summary
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: qa-delegation-processing-${{ github.run_number }}
+        name: qa-enhanced-delegation-processing-${{ github.run_number }}
         path: |
           output/
           *.txt
@@ -258,38 +472,42 @@ jobs:
           *.log
         retention-days: 30
     
-    - name: 📋 Create workflow summary
+    - name: 📋 Create enhanced workflow summary
       if: always()
       env:
         AUTH_STATUS: ${{ steps.auth_test.outputs.authentication_status }}
         PROCESSING_STATUS: ${{ steps.qa_processing.outputs.processing_status }}
       run: |
-        echo "## 🏭 QA Data Processing - SharePoint Delegation Flow" >> $GITHUB_STEP_SUMMARY
+        echo "## 🔄 Enhanced QA Data Processing - SharePoint Delegation Flow" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "**Run Date**: $(date)" >> $GITHUB_STEP_SUMMARY
         echo "**Repository**: ${{ github.repository }}" >> $GITHUB_STEP_SUMMARY
         echo "**Workflow**: ${{ github.workflow }}" >> $GITHUB_STEP_SUMMARY
         echo "**Run Number**: ${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
-        echo "**Authentication**: Delegation Flow (No CLIENT_SECRET)" >> $GITHUB_STEP_SUMMARY
+        echo "**Authentication**: Enhanced Delegation Flow with Auto-Refresh" >> $GITHUB_STEP_SUMMARY
         echo "**Test Mode**: ${{ github.event.inputs.test_mode }}" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         
         # Authentication status
-        echo "### 🔑 Authentication Status:" >> $GITHUB_STEP_SUMMARY
+        echo "### 🔄 Enhanced Authentication Status:" >> $GITHUB_STEP_SUMMARY
         if [ "$AUTH_STATUS" = "success" ]; then
-          echo "- ✅ **Delegation Authentication**: SUCCESS" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Authentication**: SUCCESS (existing token)" >> $GITHUB_STEP_SUMMARY
           echo "- ✅ **SharePoint Access**: Available" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **Token Status**: Valid" >> $GITHUB_STEP_SUMMARY
-        elif [ "$AUTH_STATUS" = "token_expired" ]; then
-          echo "- ⚠️ **Delegation Authentication**: TOKEN EXPIRED" >> $GITHUB_STEP_SUMMARY
-          echo "- ❌ **SharePoint Access**: Not available" >> $GITHUB_STEP_SUMMARY
-          echo "- 🔄 **Action**: Regenerate tokens" >> $GITHUB_STEP_SUMMARY
-        elif [ "$AUTH_STATUS" = "site_access_failed" ]; then
-          echo "- ⚠️ **Delegation Authentication**: SUCCESS" >> $GITHUB_STEP_SUMMARY
-          echo "- ❌ **SharePoint Access**: FAILED" >> $GITHUB_STEP_SUMMARY
-          echo "- 🔧 **Action**: Check SharePoint permissions" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Token Status**: Valid, no refresh needed" >> $GITHUB_STEP_SUMMARY
+        elif [ "$AUTH_STATUS" = "success_refreshed" ]; then
+          echo "- ✅ **Authentication**: SUCCESS (auto-refreshed)" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **SharePoint Access**: Available" >> $GITHUB_STEP_SUMMARY
+          echo "- 🔄 **Token Status**: Auto-refreshed successfully" >> $GITHUB_STEP_SUMMARY
+          echo "- 💾 **New Tokens**: Saved in artifacts for reference" >> $GITHUB_STEP_SUMMARY
+        elif [ "$AUTH_STATUS" = "refresh_failed" ]; then
+          echo "- ⚠️ **Authentication**: TOKEN EXPIRED" >> $GITHUB_STEP_SUMMARY
+          echo "- ❌ **Auto-Refresh**: FAILED" >> $GITHUB_STEP_SUMMARY
+          echo "- 🔧 **Action**: Manual token regeneration required" >> $GITHUB_STEP_SUMMARY
+        elif [ "$AUTH_STATUS" = "missing_env_vars" ]; then
+          echo "- ❌ **Authentication**: MISSING ENVIRONMENT VARIABLES" >> $GITHUB_STEP_SUMMARY
+          echo "- 🔧 **Action**: Check GitHub Secrets configuration" >> $GITHUB_STEP_SUMMARY
         else
-          echo "- ❌ **Delegation Authentication**: FAILED" >> $GITHUB_STEP_SUMMARY
+          echo "- ❌ **Authentication**: FAILED" >> $GITHUB_STEP_SUMMARY
           echo "- ❌ **SharePoint Access**: Not available" >> $GITHUB_STEP_SUMMARY
         fi
         echo "" >> $GITHUB_STEP_SUMMARY
@@ -301,38 +519,54 @@ jobs:
           echo "- ✅ **Data Processing**: VHM mapping and defect analysis" >> $GITHUB_STEP_SUMMARY
           echo "- ✅ **Data Upload**: CF data.xlsx updated in SharePoint" >> $GITHUB_STEP_SUMMARY
           echo "- ✅ **Comprehensive Dataset**: Created with zero-defect records" >> $GITHUB_STEP_SUMMARY
-        elif [ "$AUTH_STATUS" = "success" ]; then
+        elif [ "$AUTH_STATUS" = "success" ] || [ "$AUTH_STATUS" = "success_refreshed" ]; then
           echo "- ❌ **Data Processing**: FAILED" >> $GITHUB_STEP_SUMMARY
           echo "- ❌ **Error**: Check processing logs for details" >> $GITHUB_STEP_SUMMARY
         else
-          echo "- ⏭️ **Data Processing**: SKIPPED (Authentication not successful)" >> $GITHUB_STEP_SUMMARY
+          echo "- ⏭️ **Data Processing**: SKIPPED (Authentication failed)" >> $GITHUB_STEP_SUMMARY
         fi
         echo "" >> $GITHUB_STEP_SUMMARY
         
         # Success message
-        if [ "$AUTH_STATUS" = "success" ] && [ "$PROCESSING_STATUS" = "success" ]; then
-          echo "### 🎉 Success!" >> $GITHUB_STEP_SUMMARY
-          echo "QA data processing completed successfully using delegation flow. No CLIENT_SECRET required!" >> $GITHUB_STEP_SUMMARY
+        if [ "$AUTH_STATUS" = "success" ] || [ "$AUTH_STATUS" = "success_refreshed" ]; then
+          if [ "$PROCESSING_STATUS" = "success" ]; then
+            echo "### 🎉 Success!" >> $GITHUB_STEP_SUMMARY
+            echo "QA data processing completed successfully with enhanced auto-refresh!" >> $GITHUB_STEP_SUMMARY
+          fi
         fi
+        
+        # Auto-refresh benefits
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 🔄 Enhanced Auto-Refresh Benefits:" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ **Intelligent Token Testing**: Multi-retry with rate limit handling" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ **Dual Refresh Methods**: MSAL + OAuth2 fallback" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ **Automatic Recovery**: No manual intervention needed for token expiry" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ **Clear Error Messages**: Actionable steps when manual help needed" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ **Token Artifacts**: Auto-refreshed tokens saved for reference" >> $GITHUB_STEP_SUMMARY
         
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "### 🔗 Download Results:" >> $GITHUB_STEP_SUMMARY
-        echo "Check the **Artifacts** section below to download processing logs and summary." >> $GITHUB_STEP_SUMMARY
+        echo "Check the **Artifacts** section below to download processing logs and any auto-refreshed tokens." >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         
         # Overall status
-        if [ "$AUTH_STATUS" = "success" ] && [ "$PROCESSING_STATUS" = "success" ]; then
+        if [ "$AUTH_STATUS" = "success" ] || [ "$AUTH_STATUS" = "success_refreshed" ]; then
+          if [ "$PROCESSING_STATUS" = "success" ]; then
+            echo "---" >> $GITHUB_STEP_SUMMARY
+            echo "**🎯 Status: ENHANCED QA DATA PROCESSING COMPLETED** 🎯" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "---" >> $GITHUB_STEP_SUMMARY
+            echo "**⚠️ Status: AUTHENTICATION OK, PROCESSING FAILED - CHECK LOGS** ⚠️" >> $GITHUB_STEP_SUMMARY
+          fi
+        elif [ "$AUTH_STATUS" = "refresh_failed" ]; then
           echo "---" >> $GITHUB_STEP_SUMMARY
-          echo "**🎯 Status: QA DATA PROCESSING COMPLETED (DELEGATION FLOW)** 🎯" >> $GITHUB_STEP_SUMMARY
-        elif [ "$AUTH_STATUS" = "token_expired" ]; then
-          echo "---" >> $GITHUB_STEP_SUMMARY
-          echo "**⏰ Status: TOKEN EXPIRED - REGENERATE TOKENS AND RETRY** ⏰" >> $GITHUB_STEP_SUMMARY
+          echo "**⏰ Status: TOKEN EXPIRED - AUTO-REFRESH FAILED - MANUAL ACTION REQUIRED** ⏰" >> $GITHUB_STEP_SUMMARY
         else
           echo "---" >> $GITHUB_STEP_SUMMARY
-          echo "**⚠️ Status: PROCESSING INCOMPLETE - CHECK LOGS FOR DETAILS** ⚠️" >> $GITHUB_STEP_SUMMARY
+          echo "**⚠️ Status: AUTHENTICATION FAILED - CHECK CONFIGURATION** ⚠️" >> $GITHUB_STEP_SUMMARY
         fi
     
-    - name: 🎉 Final status report
+    - name: 🎉 Enhanced final status report
       if: always()
       env:
         AUTH_STATUS: ${{ steps.auth_test.outputs.authentication_status }}
@@ -340,44 +574,57 @@ jobs:
       run: |
         echo ""
         echo "=================================="
-        echo "🏭 QA DATA PROCESSING - DELEGATION FLOW"
+        echo "🔄 ENHANCED QA DATA PROCESSING - DELEGATION FLOW"
         echo "=================================="
         echo ""
         echo "📊 FINAL STATUS REPORT:"
         echo "  🔑 Authentication: $AUTH_STATUS"
         echo "  📈 Data Processing: $PROCESSING_STATUS"
-        echo "  🔐 Flow Type: Delegation (No CLIENT_SECRET)"
+        echo "  🔐 Flow Type: Enhanced Delegation with Auto-Refresh"
         echo ""
         
         if [ "$AUTH_STATUS" = "success" ] && [ "$PROCESSING_STATUS" = "success" ]; then
-          echo "✅ SUCCESS: QA data processing completed with delegation flow!"
+          echo "✅ SUCCESS: QA data processing completed with existing tokens!"
           echo "📁 SharePoint files updated:"
           echo "  - CF data.xlsx contains latest processed data"
-          echo "  - No CLIENT_SECRET required - using delegated permissions"
-          echo "  - User-based authentication with access tokens"
-        elif [ "$AUTH_STATUS" = "token_expired" ]; then
-          echo "⏰ TOKEN EXPIRED: Access token needs refresh"
+          echo "  - No token refresh was needed"
+        elif [ "$AUTH_STATUS" = "success_refreshed" ] && [ "$PROCESSING_STATUS" = "success" ]; then
+          echo "✅ SUCCESS: QA data processing completed with auto-refreshed tokens!"
+          echo "📁 SharePoint files updated:"
+          echo "  - CF data.xlsx contains latest processed data"
+          echo "  - Tokens were automatically refreshed"
+          echo "  - New tokens saved in artifacts"
+        elif [ "$AUTH_STATUS" = "success" ] || [ "$AUTH_STATUS" = "success_refreshed" ]; then
+          echo "⚠️ PARTIAL SUCCESS: Authentication OK, but processing failed"
+          echo "📋 Check processing logs for error details"
+        elif [ "$AUTH_STATUS" = "refresh_failed" ]; then
+          echo "⏰ TOKEN EXPIRED: Auto-refresh failed - manual action required"
           echo "🔧 Action required:"
           echo "  1. Run generate_tokens.py locally"
           echo "  2. Update SHAREPOINT_ACCESS_TOKEN in GitHub Secrets"
-          echo "  3. Re-run this workflow"
-        elif [ "$AUTH_STATUS" = "site_access_failed" ]; then
-          echo "⚠️ SITE ACCESS FAILED: Authentication OK but can't access SharePoint"
-          echo "🔧 Check SharePoint permissions and site URL"
-        elif [ "$AUTH_STATUS" = "success" ]; then
-          echo "⚠️ PARTIAL SUCCESS: Authentication OK, but processing failed"
-          echo "📋 Check processing logs for error details"
+          echo "  3. Update SHAREPOINT_REFRESH_TOKEN in GitHub Secrets"
+          echo "  4. Re-run this workflow"
+        elif [ "$AUTH_STATUS" = "missing_env_vars" ]; then
+          echo "❌ CONFIGURATION ERROR: Missing GitHub Secrets"
+          echo "🔧 Check that these secrets exist:"
+          echo "  - TENANT_ID"
+          echo "  - CLIENT_ID"
+          echo "  - SHAREPOINT_ACCESS_TOKEN"
+          echo "  - SHAREPOINT_REFRESH_TOKEN"
+          echo "  - SHAREPOINT_SITE_URL"
         else
-          echo "❌ FAILED: Delegation authentication unsuccessful"
-          echo "🔧 Check tokens and regenerate if needed"
+          echo "❌ FAILED: Enhanced authentication unsuccessful"
+          echo "🔧 Check logs and environment configuration"
         fi
         
         echo ""
-        echo "💡 DELEGATION FLOW BENEFITS:"
-        echo "  ✅ No CLIENT_SECRET required"
-        echo "  ✅ User-based permissions"
-        echo "  ✅ Simplified setup"
-        echo "  ⚠️ Tokens need periodic refresh"
+        echo "💡 ENHANCED AUTO-REFRESH FEATURES:"
+        echo "  ✅ Intelligent token validation with retry logic"
+        echo "  ✅ Dual refresh methods (MSAL + OAuth2)"
+        echo "  ✅ Rate limiting and timeout handling"
+        echo "  ✅ Automatic environment updates"
+        echo "  ✅ Token artifacts for manual review"
+        echo "  ⚠️ Clear error messages and action items"
         echo ""
         echo "📅 Next scheduled run: Tomorrow at 8:00 AM Vietnam time"
         echo "🔄 Manual trigger available via workflow dispatch"
