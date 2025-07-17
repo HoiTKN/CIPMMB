@@ -6,7 +6,13 @@ from datetime import datetime
 import pandas as pd
 from io import BytesIO
 import openpyxl
-from config import SHAREPOINT_FILE_IDS
+
+# Define SharePoint file IDs directly
+SHAREPOINT_FILE_IDS = {
+    'sample_id': '8220CAEA-0CD9-585B-D483-DE0A82A98564',
+    'data_sx': '6CB4A738-1EDD-4BC4-9996-43A815D3F5CF', 
+    'cf_data_output': 'E1B65B6F-6A53-52E0-1BB3-3BCA75A32F63'
+}
 
 class SharePointDelegationProcessor:
     def __init__(self):
@@ -41,12 +47,14 @@ class SharePointDelegationProcessor:
             else:
                 print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ⚠️ Access token expired, attempting refresh...")
         
-        # Method 2: Try to get new token using device code flow
-        if self.authenticate_device_code():
+        # Method 2: Try to get token using client credentials (if secrets available)
+        if self.authenticate_client_credentials():
             return True
             
-        # Method 3: Try to get token using client credentials (if secrets available)
-        if self.authenticate_client_credentials():
+        # Method 3: Fallback - use existing token anyway and let retry mechanism handle it
+        if existing_token and existing_token.strip():
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ⚠️ Using existing token with retry mechanism")
+            self.access_token = existing_token.strip()
             return True
             
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ❌ All authentication methods failed")
@@ -65,28 +73,16 @@ class SharePointDelegationProcessor:
             response = requests.get(
                 'https://graph.microsoft.com/v1.0/me',
                 headers=headers,
-                timeout=30
+                timeout=10
             )
             
-            return response.status_code == 200
-        except:
-            return False
-
-    def authenticate_device_code(self):
-        """Authenticate using device code flow (user-friendly for automation)"""
-        try:
-            tenant_id = os.getenv('TENANT_ID')
-            client_id = os.getenv('CLIENT_ID')
+            is_valid = response.status_code == 200
+            if not is_valid:
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ⚠️ Token test failed with status: {response.status_code}")
             
-            if not tenant_id or not client_id:
-                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ⚠️ Missing TENANT_ID or CLIENT_ID for device code flow")
-                return False
-                
-            # This method requires manual intervention, so skip for automation
-            return False
-            
+            return is_valid
         except Exception as e:
-            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ❌ Device code authentication failed: {str(e)}")
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ⚠️ Token test failed with error: {str(e)}")
             return False
 
     def authenticate_client_credentials(self):
@@ -127,17 +123,16 @@ class SharePointDelegationProcessor:
 
     def make_authenticated_request(self, method, url, **kwargs):
         """Make authenticated request with auto-retry on auth failure"""
+        last_error = None
+        
         for attempt in range(self.max_retries):
             try:
-                # Check if token needs refresh
-                if time.time() >= self.token_expires_at - 300:  # Refresh 5 minutes before expiry
-                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🔄 Token expiring soon, refreshing...")
-                    if not self.authenticate():
-                        raise Exception("Failed to refresh token")
-                
                 headers = kwargs.get('headers', {})
                 headers['Authorization'] = f'Bearer {self.access_token}'
+                headers['Accept'] = 'application/json'
                 kwargs['headers'] = headers
+                
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🔄 Making request (attempt {attempt + 1}/{self.max_retries}): {method} {url[:100]}...")
                 
                 response = requests.request(method, url, timeout=60, **kwargs)
                 
@@ -147,34 +142,95 @@ class SharePointDelegationProcessor:
                     
                     if attempt < self.max_retries - 1:
                         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🔄 Re-authenticating...")
-                        if self.authenticate():
+                        
+                        # Try to get fresh token
+                        if self.authenticate_client_credentials():
+                            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ✅ Re-authentication successful, retrying...")
                             time.sleep(self.retry_delay)
                             continue
                         else:
-                            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ❌ Re-authentication failed")
+                            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ⚠️ Re-authentication failed, using existing token")
+                            time.sleep(self.retry_delay)
+                            continue
                     else:
-                        raise Exception("Authentication failed after all retries")
+                        raise Exception(f"Authentication failed after {self.max_retries} attempts. Status: {response.status_code}")
                 
                 # If successful or other error, return response
-                return response
+                if response.status_code < 400:
+                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ✅ Request successful: {response.status_code}")
+                    return response
+                else:
+                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ⚠️ Request failed with status: {response.status_code}")
+                    last_error = f"HTTP {response.status_code}: {response.text[:200]}"
+                    
+                    if attempt < self.max_retries - 1:
+                        time.sleep(self.retry_delay)
+                        continue
+                    else:
+                        raise Exception(last_error)
                 
             except requests.exceptions.RequestException as e:
-                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ⚠️ Request failed, attempt {attempt + 1}/{self.max_retries}: {str(e)}")
+                last_error = str(e)
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ⚠️ Request exception, attempt {attempt + 1}/{self.max_retries}: {str(e)}")
                 if attempt < self.max_retries - 1:
                     time.sleep(self.retry_delay)
                     continue
                 else:
-                    raise
+                    raise Exception(f"Request failed after {self.max_retries} attempts: {last_error}")
         
-        raise Exception("Max retries exceeded")
+        raise Exception(f"Max retries exceeded. Last error: {last_error}")
+
+    def get_drive_id(self):
+        """Get SharePoint drive ID with simplified approach"""
+        if not hasattr(self, '_drive_id'):
+            try:
+                # Try to get site and drive info
+                site_url = os.getenv('SHAREPOINT_SITE_URL', 'https://masancorp.sharepoint.com/sites/QA')
+                
+                # Extract hostname and site path
+                url_parts = site_url.replace('https://', '').split('/')
+                hostname = url_parts[0]
+                site_path = '/'.join(url_parts[1:]) if len(url_parts) > 1 else 'sites/QA'
+                
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🔍 Getting drive ID for: {hostname}:/{site_path}")
+                
+                # Get site ID
+                site_api_url = f"https://graph.microsoft.com/v1.0/sites/{hostname}:/{site_path}"
+                response = self.make_authenticated_request('GET', site_api_url)
+                response.raise_for_status()
+                
+                site_data = response.json()
+                site_id = site_data['id']
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ✅ Got site ID: {site_id}")
+                
+                # Get default drive
+                drives_url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drives"
+                response = self.make_authenticated_request('GET', drives_url)
+                response.raise_for_status()
+                
+                drives_data = response.json()
+                if drives_data.get('value'):
+                    self._drive_id = drives_data['value'][0]['id']
+                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ✅ Got drive ID: {self._drive_id}")
+                else:
+                    raise Exception("No drives found")
+                
+            except Exception as e:
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ❌ Failed to get drive ID: {str(e)}")
+                # Use a fallback approach - try common drive IDs or use a default
+                self._drive_id = os.getenv('SHAREPOINT_DRIVE_ID', 'b!default')
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ⚠️ Using fallback drive ID: {self._drive_id}")
+        
+        return self._drive_id
 
     def download_file(self, file_id, file_name):
         """Download file from SharePoint with auto-retry"""
         try:
             print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 📥 Downloading {file_name}...")
             
-            # Get file download URL
-            url = f"https://graph.microsoft.com/v1.0/drives/{self.get_drive_id()}/items/{file_id}/content"
+            # Get file download URL  
+            drive_id = self.get_drive_id()
+            url = f"https://graph.microsoft.com/v1.0/drives/{drive_id}/items/{file_id}/content"
             
             response = self.make_authenticated_request('GET', url)
             response.raise_for_status()
@@ -192,7 +248,8 @@ class SharePointDelegationProcessor:
         try:
             print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 📤 Uploading {file_name}...")
             
-            url = f"https://graph.microsoft.com/v1.0/drives/{self.get_drive_id()}/items/{file_id}/content"
+            drive_id = self.get_drive_id()
+            url = f"https://graph.microsoft.com/v1.0/drives/{drive_id}/items/{file_id}/content"
             
             headers = {
                 'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
@@ -208,40 +265,6 @@ class SharePointDelegationProcessor:
             error_msg = f"Failed to upload {file_name}: {str(e)}"
             print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ❌ {error_msg}")
             raise Exception(error_msg)
-
-    def get_drive_id(self):
-        """Get SharePoint drive ID with caching"""
-        if not hasattr(self, '_drive_id'):
-            try:
-                site_url = os.getenv('SHAREPOINT_SITE_URL', 'https://masancorp.sharepoint.com/sites/QA')
-                
-                # Extract site info from URL
-                url_parts = site_url.replace('https://', '').split('/')
-                hostname = url_parts[0]
-                site_path = '/'.join(url_parts[1:]) if len(url_parts) > 1 else ''
-                
-                # Get site ID
-                site_api_url = f"https://graph.microsoft.com/v1.0/sites/{hostname}:/{site_path}"
-                response = self.make_authenticated_request('GET', site_api_url)
-                response.raise_for_status()
-                
-                site_data = response.json()
-                site_id = site_data['id']
-                
-                # Get default drive
-                drives_url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drives"
-                response = self.make_authenticated_request('GET', drives_url)
-                response.raise_for_status()
-                
-                drives_data = response.json()
-                self._drive_id = drives_data['value'][0]['id']
-                
-            except Exception as e:
-                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ❌ Failed to get drive ID: {str(e)}")
-                # Fallback to a default drive ID if available
-                self._drive_id = os.getenv('SHAREPOINT_DRIVE_ID', 'default')
-        
-        return self._drive_id
 
     def process_files(self):
         """Main processing logic with enhanced error handling"""
@@ -259,7 +282,7 @@ class SharePointDelegationProcessor:
                 "Data SX.xlsx"
             )
             
-            # Process files (your existing logic here)
+            # Process files (implement your existing logic here)
             processed_content = self.process_data(sample_id_content, data_sx_content)
             
             # Upload result
@@ -277,23 +300,36 @@ class SharePointDelegationProcessor:
             raise
 
     def process_data(self, sample_id_content, data_sx_content):
-        """Your existing data processing logic"""
-        # Implement your data processing logic here
-        # This is a placeholder - replace with your actual processing code
-        
+        """Data processing logic - placeholder for your implementation"""
         try:
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🔄 Processing data...")
+            
             # Load Excel files
             sample_id_wb = openpyxl.load_workbook(BytesIO(sample_id_content))
             data_sx_wb = openpyxl.load_workbook(BytesIO(data_sx_content))
             
-            # Your processing logic here...
-            # ...
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ✅ Loaded Excel files")
+            print(f"Sample ID sheets: {sample_id_wb.sheetnames}")
+            print(f"Data SX sheets: {data_sx_wb.sheetnames}")
             
-            # Save processed data
+            # TODO: Implement your actual data processing logic here
+            # For now, create a simple output file
+            output_wb = openpyxl.Workbook()
+            output_ws = output_wb.active
+            output_ws.title = "CF Data"
+            
+            # Add some sample data
+            output_ws['A1'] = "Processed Date"
+            output_ws['B1'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            output_ws['A2'] = "Status"
+            output_ws['B2'] = "Processing Completed"
+            
+            # Save to buffer
             output_buffer = BytesIO()
-            # Save your processed workbook to output_buffer
-            # processed_wb.save(output_buffer)
+            output_wb.save(output_buffer)
+            output_buffer.seek(0)
             
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ✅ Data processing completed")
             return output_buffer.getvalue()
             
         except Exception as e:
@@ -309,10 +345,18 @@ def main():
         
         # Environment check
         print("🔧 Environment Check:")
-        required_vars = ['TENANT_ID', 'CLIENT_ID', 'SHAREPOINT_ACCESS_TOKEN']
+        required_vars = ['TENANT_ID', 'CLIENT_ID']
+        optional_vars = ['CLIENT_SECRET', 'SHAREPOINT_ACCESS_TOKEN', 'SHAREPOINT_SITE_URL']
+        
         for var in required_vars:
             status = "✅" if os.getenv(var) else "❌"
             print(f"{status} {var}: {'Found' if os.getenv(var) else 'Missing'}")
+        
+        for var in optional_vars:
+            status = "✅" if os.getenv(var) else "⚠️"
+            print(f"{status} {var}: {'Found' if os.getenv(var) else 'Optional'}")
+        
+        print(f"📋 SharePoint File IDs: {SHAREPOINT_FILE_IDS}")
         
         print("🚀 Initializing processor...")
         processor = SharePointDelegationProcessor()
