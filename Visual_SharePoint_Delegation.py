@@ -668,7 +668,8 @@ def expand_dataframe_for_multiple_mdg(df):
             for mdg_val in mdg_values:
                 new_row = row.copy()
                 new_row['MĐG'] = mdg_val
-                new_row['MĐG_Original'] = row['MДG']
+                # ✅ SỬA LỖI: Sửa lỗi typo từ 'MДG' (ký tự Cyrillic) thành 'MĐG' (ký tự tiếng Việt)
+                new_row['MĐG_Original'] = row['MĐG'] 
                 expanded_rows.append(new_row)
 
     return pd.DataFrame(expanded_rows)
@@ -873,8 +874,7 @@ def main():
         if 'Ngày SX' in id_aql_df.columns:
             id_aql_df['Ngày SX_std'] = id_aql_df['Ngày SX'].apply(standardize_date)
             
-            # ✅ SỬA LỖI: Sử dụng accessor .dt để tính toán nhanh hơn và tự động xử lý NaT
-            # This is the fix for the "NaTType does not support isocalendar" error
+            # Sử dụng accessor .dt để tính toán nhanh hơn và tự động xử lý NaT
             id_aql_df['Ngày'] = id_aql_df['Ngày SX_std'].dt.day
             id_aql_df['Tuần'] = id_aql_df['Ngày SX_std'].dt.isocalendar().week
             id_aql_df['Tháng'] = id_aql_df['Ngày SX_std'].dt.month
