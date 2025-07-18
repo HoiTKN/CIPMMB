@@ -100,7 +100,7 @@ jobs:
 
     - name: Upload artifacts
       if: always()
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4 # ✅ ĐÃ CẬP NHẬT TỪ v3 LÊN v4
       with:
         name: qa-processing-results-${{ github.run_number }}
         path: |
