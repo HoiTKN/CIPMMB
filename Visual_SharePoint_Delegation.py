@@ -460,7 +460,6 @@ class SharePointDelegationProcessor:
 
         return False
 
-# Import all the processing functions from the original Visual.py
 # ============================================================================
 # IMPORT ALL PROCESSING FUNCTIONS FROM Visual.py
 # ============================================================================
@@ -669,7 +668,7 @@ def expand_dataframe_for_multiple_mdg(df):
             for mdg_val in mdg_values:
                 new_row = row.copy()
                 new_row['MĐG'] = mdg_val
-                new_row['MĐG_Original'] = row['MĐG']
+                new_row['MĐG_Original'] = row['MДG']
                 expanded_rows.append(new_row)
 
     return pd.DataFrame(expanded_rows)
@@ -873,9 +872,12 @@ def main():
         # Standardize dates and extract date components
         if 'Ngày SX' in id_aql_df.columns:
             id_aql_df['Ngày SX_std'] = id_aql_df['Ngày SX'].apply(standardize_date)
-            id_aql_df['Ngày'] = id_aql_df['Ngày SX_std'].apply(lambda x: x.day if x else None)
-            id_aql_df['Tuần'] = id_aql_df['Ngày SX_std'].apply(lambda x: x.isocalendar()[1] if x else None)
-            id_aql_df['Tháng'] = id_aql_df['Ngày SX_std'].apply(lambda x: x.month if x else None)
+            
+            # ✅ SỬA LỖI: Sử dụng accessor .dt để tính toán nhanh hơn và tự động xử lý NaT
+            # This is the fix for the "NaTType does not support isocalendar" error
+            id_aql_df['Ngày'] = id_aql_df['Ngày SX_std'].dt.day
+            id_aql_df['Tuần'] = id_aql_df['Ngày SX_std'].dt.isocalendar().week
+            id_aql_df['Tháng'] = id_aql_df['Ngày SX_std'].dt.month
         
         # Extract hour and determine shift
         if 'Giờ' in id_aql_df.columns:
