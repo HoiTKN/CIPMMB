@@ -1,4 +1,4 @@
-
+"""
 SharePoint QA Data Processing - Delegation Flow Version
 Xử lý dữ liệu QA từ SharePoint sử dụng delegation flow (không cần CLIENT_SECRET)
 Phiên bản delegation của Visual_SharePoint.py
