@@ -16,12 +16,22 @@ SHAREPOINT_FILE_IDS = {
 
 class MSALSharePointProcessor:
     def __init__(self):
-        """Initialize MSAL SharePoint processor"""
-        # App configuration
+        """Initialize MSAL SharePoint processor with enhanced debugging"""
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🔍 Starting detailed environment check...")
+        
+        # App configuration with detailed logging
         self.client_id = os.getenv('CLIENT_ID', '076541aa-c734-405e-8518-ed52b67f8cbd')
         self.tenant_id = os.getenv('TENANT_ID', '81060475-7e7f-4ede-8d8d-bf61f53ca528')
         self.client_secret = os.getenv('CLIENT_SECRET')
         self.authority = f"https://login.microsoftonline.com/{self.tenant_id}"
+        
+        # Debug environment variables
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🔍 CLIENT_ID: {'✅ Found' if self.client_id else '❌ Missing'}")
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🔍 TENANT_ID: {'✅ Found' if self.tenant_id else '❌ Missing'}")
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🔍 CLIENT_SECRET: {'✅ Found (' + str(len(self.client_secret)) + ' chars)' if self.client_secret else '❌ MISSING'}")
+        
+        if self.client_secret:
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🔍 CLIENT_SECRET preview: {self.client_secret[:10]}...{self.client_secret[-10:]}")
         
         # SharePoint specific scopes
         self.scopes = [
@@ -47,15 +57,19 @@ class MSALSharePointProcessor:
                 print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ⚠️ Failed to load cache: {e}")
         
         # Initialize MSAL app - choose type based on available credentials
-        if self.client_secret:
+        if self.client_secret and len(self.client_secret.strip()) > 0:
             # Confidential client app (with secret)
-            self.app = msal.ConfidentialClientApplication(
-                client_id=self.client_id,
-                client_credential=self.client_secret,
-                authority=self.authority,
-                token_cache=self.cache
-            )
-            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🔑 Using ConfidentialClientApplication with CLIENT_SECRET")
+            try:
+                self.app = msal.ConfidentialClientApplication(
+                    client_id=self.client_id,
+                    client_credential=self.client_secret,
+                    authority=self.authority,
+                    token_cache=self.cache
+                )
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🔑 Using ConfidentialClientApplication with CLIENT_SECRET")
+            except Exception as e:
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ❌ Failed to create ConfidentialClientApplication: {e}")
+                raise
         else:
             # Public client app (without secret)
             self.app = msal.PublicClientApplication(
@@ -75,7 +89,7 @@ class MSALSharePointProcessor:
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ✅ MSAL Processor initialized successfully")
 
     def authenticate(self):
-        """Authenticate using MSAL with prioritized strategies"""
+        """Authenticate using MSAL with prioritized strategies and detailed logging"""
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🔐 Authenticating with MSAL...")
         
         # Strategy 1: Client Credentials Flow (highest priority when available)
@@ -84,16 +98,29 @@ class MSALSharePointProcessor:
             try:
                 result = self.app.acquire_token_for_client(scopes=["https://graph.microsoft.com/.default"])
                 
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🔍 Client Credentials result keys: {list(result.keys()) if result else 'None'}")
+                
                 if result and "access_token" in result:
                     self.access_token = result["access_token"]
                     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ✅ Client Credentials authentication successful")
+                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🔍 Token preview: {self.access_token[:20]}...{self.access_token[-20:]}")
                     self.save_cache()
                     return True
                 else:
-                    error_msg = result.get("error_description", "Unknown error")
-                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ⚠️ Client Credentials failed: {error_msg}")
+                    error_msg = result.get("error_description", "Unknown error") if result else "No result returned"
+                    error_code = result.get("error", "Unknown") if result else "No result"
+                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ⚠️ Client Credentials failed: {error_code} - {error_msg}")
+                    if result:
+                        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🔍 Full result: {result}")
             except Exception as e:
                 print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ⚠️ Client Credentials error: {str(e)}")
+                import traceback
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🔍 Traceback: {traceback.format_exc()}")
+        else:
+            if not self.client_secret:
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ⚠️ CLIENT_SECRET not available, skipping Client Credentials")
+            else:
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ⚠️ ConfidentialClientApplication doesn't have acquire_token_for_client method")
         
         # Strategy 2: Silent authentication (from cache)
         accounts = self.app.get_accounts()
@@ -117,6 +144,8 @@ class MSALSharePointProcessor:
             print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🤖 CI environment - checking stored token...")
             stored_token = os.getenv('SHAREPOINT_ACCESS_TOKEN')
             if stored_token:
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🔍 Stored token length: {len(stored_token)} chars")
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🔍 Stored token preview: {stored_token[:20]}...{stored_token[-20:]}")
                 self.access_token = stored_token
                 # Test if token works
                 if self.test_token():
@@ -170,8 +199,12 @@ class MSALSharePointProcessor:
             headers = {'Authorization': f'Bearer {self.access_token}'}
             response = requests.get('https://graph.microsoft.com/v1.0/me', 
                                   headers=headers, timeout=10)
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🔍 Token test response: {response.status_code}")
+            if response.status_code != 200:
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🔍 Token test error: {response.text[:200]}")
             return response.status_code == 200
-        except:
+        except Exception as e:
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🔍 Token test exception: {str(e)}")
             return False
 
     def save_cache(self):
@@ -350,29 +383,30 @@ class MSALSharePointProcessor:
             raise
 
 def main():
-    """Main execution function"""
+    """Main execution function with enhanced debugging"""
     try:
         print("=" * 60)
-        print("🏭 MSAL SHAREPOINT QA DATA PROCESSING")
+        print("🏭 MSAL SHAREPOINT QA DATA PROCESSING - DEBUG MODE")
         print("=" * 60)
         
-        # Environment check
-        print("🔧 Environment Check:")
-        required_vars = ['CLIENT_ID', 'TENANT_ID']
-        auth_vars = ['CLIENT_SECRET', 'SHAREPOINT_ACCESS_TOKEN']
-        optional_vars = ['SHAREPOINT_SITE_URL']
+        # Enhanced Environment check
+        print("🔧 Enhanced Environment Check:")
+        all_env_vars = dict(os.environ)
+        secret_vars = ['CLIENT_ID', 'TENANT_ID', 'CLIENT_SECRET', 'SHAREPOINT_ACCESS_TOKEN', 'SHAREPOINT_SITE_URL']
         
-        for var in required_vars:
-            status = "✅" if os.getenv(var) else "❌"
-            print(f"{status} {var}: {'Found' if os.getenv(var) else 'Missing'}")
+        print(f"🔍 Total environment variables: {len(all_env_vars)}")
         
-        for var in auth_vars:
-            status = "✅" if os.getenv(var) else "⚠️"
-            print(f"{status} {var}: {'Found' if os.getenv(var) else 'Not found'}")
+        for var in secret_vars:
+            value = os.getenv(var)
+            if value:
+                print(f"✅ {var}: Found ({len(value)} chars) - Preview: {value[:10]}...{value[-10:]}")
+            else:
+                print(f"❌ {var}: NOT FOUND")
         
-        for var in optional_vars:
-            status = "✅" if os.getenv(var) else "📋"
-            print(f"{status} {var}: {'Found' if os.getenv(var) else 'Using default'}")
+        # Check for partial matches (case sensitivity issues)
+        for env_var in all_env_vars.keys():
+            if 'CLIENT' in env_var.upper() or 'SECRET' in env_var.upper():
+                print(f"🔍 Related env var found: {env_var}")
         
         print(f"📋 SharePoint File IDs: {SHAREPOINT_FILE_IDS}")
         
@@ -386,6 +420,10 @@ def main():
             print("⚠️ Using stored token (may expire)")
         else:
             print("❌ No authentication method available")
+            print("🔍 Available env vars containing 'SECRET':")
+            for key in all_env_vars.keys():
+                if 'SECRET' in key.upper():
+                    print(f"   - {key}")
             return 1
         
         print("🚀 Initializing processor...")
