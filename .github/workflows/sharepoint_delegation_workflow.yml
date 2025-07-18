@@ -2,7 +2,7 @@ name: QA Data Processing with Auto Token Refresh
 
 on:
   schedule:
-    # Run daily at 7:00 AM Vietnam time (00:00 UTC)
+    # Chạy hàng ngày lúc 7:00 sáng giờ Việt Nam (00:00 UTC)
     - cron: '0 0 * * *'
   workflow_dispatch:
     inputs:
@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      actions: write
+      actions: write # Cần quyền này để script Python cập nhật secrets
       
     steps:
     - name: Checkout code
@@ -46,14 +46,8 @@ jobs:
       run: |
         echo "📦 Installing Python dependencies..."
         python -m pip install --upgrade pip
-        
-        # Install required packages
-        pip install pandas openpyxl requests msal
-        
-        # Install PyNaCl for GitHub Secrets encryption (if auto-update is needed)
-        pip install pynacl
-        
-        # Show installed packages
+        pip install pandas openpyxl requests msal pynacl
+        echo "✅ Dependencies installed. Listing packages:"
         pip list
         
     - name: Debug environment (optional)
@@ -67,78 +61,15 @@ jobs:
         echo "Has REFRESH_TOKEN: $([[ -n "$SHAREPOINT_REFRESH_TOKEN" ]] && echo 'Yes' || echo 'No')"
         echo "Has GITHUB_TOKEN: $([[ -n "$GITHUB_TOKEN" ]] && echo 'Yes' || echo 'No')"
 
-    - name: Test token validity
-      id: test_token
-      run: |
-        echo "🔍 Testing token validity..."
-        python -c "
-import requests
-import os
-import sys
-
-access_token = os.environ.get('SHAREPOINT_ACCESS_TOKEN')
-if not access_token:
-    print('❌ No access token found')
-    sys.exit(1)
-
-headers = {
-    'Authorization': f'Bearer {access_token}',
-    'Content-Type': 'application/json'
-}
-
-try:
-    response = requests.get('https://graph.microsoft.com/v1.0/me', headers=headers, timeout=30)
-    if response.status_code == 200:
-        user_info = response.json()
-        print(f'✅ Token is valid. User: {user_info.get(\"displayName\", \"Unknown\")}')
-        sys.exit(0)
-    else:
-        print(f'❌ Token is invalid or expired. Status code: {response.status_code}')
-        sys.exit(1)
-except Exception as e:
-    print(f'❌ Error testing token: {str(e)}')
-    sys.exit(1)
-        "
-      continue-on-error: true
-
     - name: Run QA Data Processing
+      id: process_data
       run: |
         echo "🏭 Starting QA Data Processing with enhanced delegation flow..."
-        echo "Processing files from SharePoint (CORRECTED structure):"
-        echo " - Sample ID.xlsx = SOURCE SHEET (ID AQL, AQL gói, AQL Tô ly data)"
-        echo " - Data SX.xlsx = SAMPLE ID SHEET (VHM and % Hao hụt OPP data)"
-        echo " - Output: CF data.xlsx = DESTINATION SHEET"
-        echo "📋 This matches the Visual.py logic:"
-        echo " source_sheet -> Sample ID.xlsx (multi-sheet Excel)"
-        echo " sample_id_sheet -> Data SX.xlsx (VHM mapping)"
-        echo " destination_sheet -> CF data.xlsx (output)"
-        
-        # Test imports
-        echo "🔍 Testing Python imports..."
-        python -c "import pandas, os, sys, io, requests, datetime, msal, time, json, base64, traceback; print('✅ All imports successful')"
-        
-        # Test config import
-        echo "🔍 Testing config import..."
-        python -c "
-from config_delegation import GRAPH_API_CONFIG, SHAREPOINT_CONFIG, FILE_PATHS, OUTPUT_CONFIG, QA_CONFIG, SHAREPOINT_FILE_IDS, TOKEN_CONFIG
-print('✅ Config import successful')
-print(f'SHAREPOINT_FILE_IDS: {SHAREPOINT_FILE_IDS}')
-print('📋 File structure (CORRECTED):')
-print(f' sample_id (SOURCE): {SHAREPOINT_FILE_IDS[\"sample_id\"]}')
-print(f' data_sx (SAMPLE ID): {SHAREPOINT_FILE_IDS[\"data_sx\"]}')
-print(f' cf_data_output (DEST): {SHAREPOINT_FILE_IDS[\"cf_data_output\"]}')
-        "
-        
-        # Run main script
-        echo "🚀 Running main processing script..."
+        # Run main script và lưu output vào file để kiểm tra
         python Visual_SharePoint_Delegation.py 2>&1 | tee processing_output.txt
-        
-        # Check exit code
-        if [ ${PIPESTATUS[0]} -eq 0 ]; then
-          echo "✅ QA Data Processing completed successfully!"
-        else
+        # Kiểm tra exit code của script Python
+        if [ ${PIPESTATUS[0]} -ne 0 ]; then
           echo "❌ QA Data Processing failed (exit code: ${PIPESTATUS[0]})"
-          echo "📋 Full error output above"
           exit 1
         fi
 
@@ -147,23 +78,22 @@ print(f' cf_data_output (DEST): {SHAREPOINT_FILE_IDS[\"cf_data_output\"]}')
       run: |
         echo "📊 Creating processing summary..."
         if [ -f processing_output.txt ]; then
-          # Extract key metrics from output
-          TOTAL_RECORDS=$(grep -oP "Total records: \K\d+" processing_output.txt || echo "0")
-          DEFECT_RECORDS=$(grep -oP "Records with defects: \K\d+" processing_output.txt || echo "0")
-          ZERO_DEFECT_RECORDS=$(grep -oP "Zero-defect records: \K\d+" processing_output.txt || echo "0")
+          TOTAL_RECORDS=$(grep -oP "Total records: \K\d+" processing_output.txt || echo "N/A")
+          DEFECT_RECORDS=$(grep -oP "Records with defects: \K\d+" processing_output.txt || echo "N/A")
+          ZERO_DEFECT_RECORDS=$(grep -oP "Zero-defect records: \K\d+" processing_output.txt || echo "N/A")
           
-          # Create summary
           echo "## 📊 Processing Summary" > processing_summary.md
           echo "" >> processing_summary.md
+          echo "- **Status**: ${{ job.status }}" >> processing_summary.md
           echo "- **Total Records Processed**: $TOTAL_RECORDS" >> processing_summary.md
           echo "- **Records with Defects**: $DEFECT_RECORDS" >> processing_summary.md
           echo "- **Zero-Defect Records**: $ZERO_DEFECT_RECORDS" >> processing_summary.md
           echo "" >> processing_summary.md
           echo "### 📅 Processing Time" >> processing_summary.md
-          echo "- **Date**: $(date +'%Y-%m-%d')" >> processing_summary.md
-          echo "- **Time**: $(date +'%H:%M:%S %Z')" >> processing_summary.md
+          echo "- **Date**: $(date -u +'%Y-%m-%d')" >> processing_summary.md
+          echo "- **Time**: $(date -u +'%H:%M:%S %Z')" >> processing_summary.md
           
-          echo "✅ Enhanced processing summary created"
+          echo "✅ Processing summary created"
         else
           echo "⚠️ No processing output found"
         fi
@@ -176,14 +106,7 @@ print(f' cf_data_output (DEST): {SHAREPOINT_FILE_IDS[\"cf_data_output\"]}')
         path: |
           processing_output.txt
           processing_summary.md
-          *.log
-
-    - name: Send notification on failure
-      if: failure()
-      run: |
-        echo "❌ QA Data Processing failed!"
-        echo "Please check the workflow logs for details."
-        # You can add email notification or Slack webhook here if needed
+        if-no-files-found: ignore
 
     - name: Send notification on success
       if: success()
@@ -192,12 +115,11 @@ print(f' cf_data_output (DEST): {SHAREPOINT_FILE_IDS[\"cf_data_output\"]}')
         if [ -f processing_summary.md ]; then
           cat processing_summary.md
         fi
-        # You can add email notification or Slack webhook here if needed
+        # Bạn có thể tích hợp gửi email/Slack tại đây
 
-    - name: Cleanup
-      if: always()
+    - name: Send notification on failure
+      if: failure()
       run: |
-        echo "🧹 Cleaning up temporary files..."
-        rm -f processing_output.txt
-        rm -f *.log
-        echo "✅ Cleanup completed"
+        echo "❌ QA Data Processing failed!"
+        echo "Please check the workflow logs and artifacts for details."
+        # Bạn có thể tích hợp gửi email/Slack tại đây
