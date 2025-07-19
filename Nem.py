@@ -326,7 +326,10 @@ class SharePointSamplingProcessor:
         return None
 
     def upload_excel_file(self, sheets_data):
-        """Upload updated Excel file back to SharePoint"""
+        """Upload updated Excel file back to SharePoint with retry logic for locked files"""
+        max_retries = 5
+        retry_delay = 30  # seconds
+        
         try:
             self.log(f"📤 Uploading updated sampling plan to SharePoint...")
 
@@ -340,7 +343,7 @@ class SharePointSamplingProcessor:
             excel_content = excel_buffer.getvalue()
             self.log(f"Created Excel file with {len(excel_content)} bytes")
 
-            # Upload to SharePoint
+            # Upload to SharePoint with retry logic
             upload_url = f"{self.base_url}/sites/{self.get_site_id()}/drive/items/{SAMPLING_FILE_ID}/content"
 
             headers = {
@@ -348,32 +351,182 @@ class SharePointSamplingProcessor:
                 'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
             }
 
-            response = requests.put(upload_url, headers=headers, data=excel_content, timeout=60)
+            for attempt in range(max_retries):
+                try:
+                    self.log(f"Upload attempt {attempt + 1}/{max_retries}")
+                    
+                    response = requests.put(upload_url, headers=headers, data=excel_content, timeout=60)
 
-            if response.status_code in [200, 201]:
-                self.log(f"✅ Successfully uploaded updated sampling plan to SharePoint")
-                return True
-            else:
-                self.log(f"❌ Error uploading to SharePoint: {response.status_code}")
-                self.log(f"Response: {response.text[:500]}")
-                return False
+                    if response.status_code in [200, 201]:
+                        self.log(f"✅ Successfully uploaded updated sampling plan to SharePoint")
+                        return True
+                    elif response.status_code == 423:
+                        # File is locked
+                        self.log(f"⚠️ File is locked (attempt {attempt + 1}/{max_retries})")
+                        if attempt < max_retries - 1:
+                            self.log(f"⏳ Waiting {retry_delay} seconds before retry...")
+                            time.sleep(retry_delay)
+                            continue
+                        else:
+                            self.log(f"❌ File remains locked after {max_retries} attempts")
+                            # Try to save to a backup location or with different name
+                            return self.upload_backup_file(excel_content)
+                    elif response.status_code == 401:
+                        # Token expired, try refresh
+                        self.log("🔄 Token expired during upload, refreshing...")
+                        if self.refresh_access_token():
+                            self.update_github_secrets()
+                            headers['Authorization'] = f'Bearer {self.access_token}'
+                            continue
+                        else:
+                            self.log("❌ Token refresh failed during upload")
+                            return False
+                    else:
+                        self.log(f"❌ Error uploading to SharePoint: {response.status_code}")
+                        self.log(f"Response: {response.text[:500]}")
+                        if attempt < max_retries - 1:
+                            self.log(f"⏳ Retrying in {retry_delay} seconds...")
+                            time.sleep(retry_delay)
+                            continue
+                        else:
+                            return False
+
+                except requests.exceptions.RequestException as e:
+                    self.log(f"❌ Network error during upload: {str(e)}")
+                    if attempt < max_retries - 1:
+                        self.log(f"⏳ Retrying in {retry_delay} seconds...")
+                        time.sleep(retry_delay)
+                        continue
+                    else:
+                        return False
+
+            return False
 
         except Exception as e:
             self.log(f"❌ Error uploading to SharePoint: {str(e)}")
             return False
 
+    def upload_backup_file(self, excel_content):
+        """Upload to a backup file when original is locked"""
+        try:
+            # Generate backup filename with timestamp
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            backup_filename = f"Sampling_plan_NÃM_RAU_backup_{timestamp}.xlsx"
+            
+            self.log(f"🔄 Uploading to backup file: {backup_filename}")
+            
+            # Upload to the same folder but with different name
+            # First get the parent folder
+            file_info_url = f"{self.base_url}/sites/{self.get_site_id()}/drive/items/{SAMPLING_FILE_ID}"
+            response = requests.get(file_info_url, headers=self.get_headers(), timeout=30)
+            
+            if response.status_code == 200:
+                file_info = response.json()
+                parent_id = file_info.get('parentReference', {}).get('id')
+                
+                if parent_id:
+                    # Upload to parent folder with new name
+                    upload_url = f"{self.base_url}/sites/{self.get_site_id()}/drive/items/{parent_id}:/{backup_filename}:/content"
+                    
+                    headers = {
+                        'Authorization': f'Bearer {self.access_token}',
+                        'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                    }
+                    
+                    response = requests.put(upload_url, headers=headers, data=excel_content, timeout=60)
+                    
+                    if response.status_code in [200, 201]:
+                        self.log(f"✅ Successfully uploaded backup file: {backup_filename}")
+                        self.log(f"⚠️ Original file was locked, please check and rename backup file manually")
+                        return True
+                    else:
+                        self.log(f"❌ Failed to upload backup file: {response.status_code}")
+                        return False
+                else:
+                    self.log(f"❌ Could not get parent folder information")
+                    return False
+            else:
+                self.log(f"❌ Could not get file information for backup: {response.status_code}")
+                return False
+                
+        except Exception as e:
+            self.log(f"❌ Error uploading backup file: {str(e)}")
+            return False
+
 # Helper function to parse dates in different formats
 def parse_date(date_str):
-    """Try to parse date with multiple formats"""
-    if not date_str:
+    """Try to parse date with multiple formats and handle Excel date formats"""
+    if not date_str or str(date_str).strip() in ['nan', 'None', '', 'NaT']:
         return None
-        
-    date_formats = ['%d/%m/%Y', '%Y-%m-%d', '%B %d, %Y', '%m/%d/%Y']
+    
+    # If it's already a datetime object, return it
+    if isinstance(date_str, datetime):
+        return date_str
+    
+    # If it's a pandas timestamp, convert it
+    if hasattr(date_str, 'to_pydatetime'):
+        try:
+            return date_str.to_pydatetime()
+        except:
+            pass
+    
+    # Convert to string and clean
+    date_str = str(date_str).strip()
+    
+    # Handle Excel serial dates (numbers like 45123.0)
+    try:
+        # If it's a number that could be an Excel date
+        if date_str.replace('.', '').isdigit():
+            excel_date = float(date_str)
+            # Excel date serial numbers are typically > 1 and < 50000 for reasonable dates
+            if 1 < excel_date < 50000:
+                # Excel epoch is 1900-01-01 (with some quirks)
+                from datetime import datetime, timedelta
+                excel_epoch = datetime(1900, 1, 1)
+                # Excel incorrectly treats 1900 as a leap year, so subtract 2 days
+                return excel_epoch + timedelta(days=excel_date - 2)
+    except (ValueError, TypeError):
+        pass
+    
+    # Try various date formats
+    date_formats = [
+        '%d/%m/%Y',      # 01/12/2024
+        '%m/%d/%Y',      # 12/01/2024
+        '%Y-%m-%d',      # 2024-12-01
+        '%d-%m-%Y',      # 01-12-2024
+        '%B %d, %Y',     # December 1, 2024
+        '%d %B %Y',      # 1 December 2024
+        '%d/%m/%y',      # 01/12/24
+        '%m/%d/%y',      # 12/01/24
+        '%d-%m-%y',      # 01-12-24
+        '%d.%m.%Y',      # 01.12.2024
+        '%d.%m.%y',      # 01.12.24
+        '%Y/%m/%d',      # 2024/12/01
+        '%d-%b-%Y',      # 01-Dec-2024
+        '%d-%b-%y',      # 01-Dec-24
+        '%d %b %Y',      # 1 Dec 2024
+        '%d %b %y',      # 1 Dec 24
+    ]
+    
     for fmt in date_formats:
         try:
-            return datetime.strptime(str(date_str), fmt)
+            parsed_date = datetime.strptime(date_str, fmt)
+            # Sanity check - date should be between 1900 and 2100
+            if 1900 <= parsed_date.year <= 2100:
+                return parsed_date
         except (ValueError, TypeError):
             continue
+    
+    # Try pandas to_datetime as last resort
+    try:
+        import pandas as pd
+        parsed_date = pd.to_datetime(date_str, dayfirst=True, errors='coerce')
+        if not pd.isna(parsed_date):
+            return parsed_date.to_pydatetime()
+    except:
+        pass
+    
+    print(f"Warning: Could not parse date: '{date_str}'")
     return None
 
 # Function to update sampling schedule and find due samples
@@ -382,33 +535,54 @@ def update_sampling_schedule(df, check_type="Hóa lý"):
     
     if df.empty:
         print(f"Không tìm thấy dữ liệu trong bảng {check_type}.")
-        return [], []
+        return [], [], df
     
     # Create a copy to avoid modifying original dataframe
     updated_df = df.copy()
     
-    # Expected columns mapping (flexible column matching)
+    # Debug: Print first few rows to understand data structure
+    print(f"Data shape: {df.shape}")
+    print(f"Available columns: {list(df.columns)}")
+    print(f"First few rows data types:")
+    for col in df.columns:
+        print(f"  {col}: {df[col].dtype}")
+    
+    # Expected columns mapping (flexible column matching) - IMPROVED
     col_mapping = {}
     for col in df.columns:
-        col_lower = str(col).lower()
-        if 'khu vực' in col_lower or 'khu_vuc' in col_lower:
+        col_lower = str(col).lower().strip()
+        col_original = str(col).strip()
+        
+        # More flexible matching
+        if any(keyword in col_lower for keyword in ['khu vực', 'khu_vuc', 'area', 'zone']):
             col_mapping['khu_vuc'] = col
-        elif 'sản phẩm' in col_lower or 'san_pham' in col_lower or 'product' in col_lower:
+        elif any(keyword in col_lower for keyword in ['sản phẩm', 'san_pham', 'product', 'sản xuất']):
             col_mapping['san_pham'] = col
-        elif 'line' in col_lower or 'xưởng' in col_lower:
+        elif any(keyword in col_lower for keyword in ['line', 'xưởng', 'workshop', 'dây chuyền']):
             col_mapping['line'] = col
-        elif 'chỉ tiêu' in col_lower or 'chi_tieu' in col_lower or 'parameter' in col_lower:
+        elif any(keyword in col_lower for keyword in ['chỉ tiêu', 'chi_tieu', 'parameter', 'tiêu chí']):
             col_mapping['chi_tieu'] = col
-        elif 'tần suất' in col_lower or 'tan_suat' in col_lower or 'frequency' in col_lower:
+        elif any(keyword in col_lower for keyword in ['tần suất', 'tan_suat', 'frequency', 'chu kỳ']):
             col_mapping['tan_suat'] = col
-        elif 'ngày kiểm tra' in col_lower or 'last check' in col_lower or 'ngay_kiem_tra' in col_lower:
+        elif any(keyword in col_lower for keyword in ['ngày kiểm tra', 'last check', 'ngay_kiem_tra', 'kiểm tra gần nhất']):
             col_mapping['ngay_kiem_tra'] = col
-        elif 'sample id' in col_lower or 'sample_id' in col_lower:
+        elif any(keyword in col_lower for keyword in ['sample id', 'sample_id', 'mã mẫu']):
             col_mapping['sample_id'] = col
-        elif 'kế hoạch' in col_lower or 'next' in col_lower or 'ke_hoach' in col_lower:
+        elif any(keyword in col_lower for keyword in ['kế hoạch', 'next', 'ke_hoach', 'tiếp theo']):
             col_mapping['ke_hoach'] = col
     
     print(f"Detected columns: {col_mapping}")
+    
+    # Show sample data for debugging
+    if not df.empty:
+        print(f"Sample data from first 3 rows:")
+        for idx in range(min(3, len(df))):
+            row = df.iloc[idx]
+            print(f"  Row {idx}:")
+            for col_key, col_name in col_mapping.items():
+                if col_name in df.columns:
+                    value = row[col_name]
+                    print(f"    {col_key} ({col_name}): '{value}' (type: {type(value)})")
     
     today = datetime.today()
     due_samples = []
@@ -421,34 +595,67 @@ def update_sampling_schedule(df, check_type="Hóa lý"):
             updated_df[next_plan_col] = ''
             col_mapping['ke_hoach'] = next_plan_col
     
-    # Process each row
+    # Process each row with better error handling
     for idx, row in updated_df.iterrows():
         try:
             # Extract data from row using flexible column mapping
-            khu_vuc = row.get(col_mapping.get('khu_vuc', ''), '')
-            san_pham = row.get(col_mapping.get('san_pham', ''), '')
-            line = row.get(col_mapping.get('line', ''), '')
-            chi_tieu = row.get(col_mapping.get('chi_tieu', ''), '')
-            tan_suat_str = str(row.get(col_mapping.get('tan_suat', ''), ''))
-            ngay_kiem_tra = row.get(col_mapping.get('ngay_kiem_tra', ''), '')
-            sample_id = row.get(col_mapping.get('sample_id', ''), '')
+            khu_vuc = str(row.get(col_mapping.get('khu_vuc', ''), '')).strip()
+            san_pham = str(row.get(col_mapping.get('san_pham', ''), '')).strip()
+            line = str(row.get(col_mapping.get('line', ''), '')).strip()
+            chi_tieu = str(row.get(col_mapping.get('chi_tieu', ''), '')).strip()
+            tan_suat_str = str(row.get(col_mapping.get('tan_suat', ''), '')).strip()
+            ngay_kiem_tra = str(row.get(col_mapping.get('ngay_kiem_tra', ''), '')).strip()
+            sample_id = str(row.get(col_mapping.get('sample_id', ''), '')).strip()
             
-            # Skip if missing critical data
-            if not khu_vuc or not san_pham or not ngay_kiem_tra or not tan_suat_str:
+            # Debug first few rows
+            if idx < 3:
+                print(f"Row {idx} extracted data:")
+                print(f"  khu_vuc: '{khu_vuc}'")
+                print(f"  san_pham: '{san_pham}'")
+                print(f"  line: '{line}'")
+                print(f"  chi_tieu: '{chi_tieu}'")
+                print(f"  tan_suat_str: '{tan_suat_str}'")
+                print(f"  ngay_kiem_tra: '{ngay_kiem_tra}'")
+                print(f"  sample_id: '{sample_id}'")
+            
+            # Skip if missing critical data - MORE RELAXED VALIDATION
+            if (not khu_vuc or khu_vuc in ['nan', 'None', '']) and \
+               (not line or line in ['nan', 'None', '']) and \
+               (not chi_tieu or chi_tieu in ['nan', 'None', '']):
+                if idx < 5:  # Debug first 5 rows
+                    print(f"Skipping row {idx}: Missing critical data")
+                continue
+            
+            # More relaxed validation - at least one of the key fields should be present
+            if not tan_suat_str or tan_suat_str in ['nan', 'None', '']:
+                if idx < 5:
+                    print(f"Skipping row {idx}: Missing frequency data")
+                continue
+                
+            if not ngay_kiem_tra or ngay_kiem_tra in ['nan', 'None', '']:
+                if idx < 5:
+                    print(f"Skipping row {idx}: Missing date data")
                 continue
                 
             # Parse frequency
             tan_suat = 0
             try:
-                tan_suat = int(float(tan_suat_str))
+                if tan_suat_str and tan_suat_str not in ['nan', 'None', '']:
+                    tan_suat = int(float(tan_suat_str))
+                    if tan_suat <= 0:
+                        if idx < 5:
+                            print(f"Skipping row {idx}: Invalid frequency: {tan_suat}")
+                        continue
             except (ValueError, TypeError):
-                print(f"Lỗi: Tần suất không hợp lệ ở hàng {idx}: '{tan_suat_str}'")
+                if idx < 5:
+                    print(f"Skipping row {idx}: Cannot parse frequency: '{tan_suat_str}'")
                 continue
                 
             # Parse last inspection date
             ngay_kiem_tra_date = parse_date(ngay_kiem_tra)
             if not ngay_kiem_tra_date:
-                print(f"Lỗi: Định dạng ngày không hợp lệ ở hàng {idx}: '{ngay_kiem_tra}'")
+                if idx < 5:
+                    print(f"Skipping row {idx}: Cannot parse date: '{ngay_kiem_tra}'")
                 continue
                 
             # Calculate next sampling date
@@ -463,15 +670,15 @@ def update_sampling_schedule(df, check_type="Hóa lý"):
             days_until_next = (next_sampling_date.date() - today.date()).days
             status = "Đến hạn" if days_until_next <= 0 else "Chưa đến hạn"
             
-            # Create sample record
+            # Create sample record - use defaults for missing values
             sample_record = {
-                'khu_vuc': khu_vuc,
-                'san_pham': san_pham,
-                'line': line,
-                'chi_tieu': chi_tieu,
+                'khu_vuc': khu_vuc or 'N/A',
+                'san_pham': san_pham or 'N/A',
+                'line': line or 'N/A',
+                'chi_tieu': chi_tieu or 'N/A',
                 'tan_suat': tan_suat_str,
                 'ngay_kiem_tra': ngay_kiem_tra,
-                'sample_id': sample_id,
+                'sample_id': sample_id or 'N/A',
                 'ke_hoach': next_sampling_str,
                 'loai_kiem_tra': check_type,
                 'row_index': idx,
@@ -487,6 +694,8 @@ def update_sampling_schedule(df, check_type="Hóa lý"):
             
         except Exception as e:
             print(f"Lỗi xử lý hàng {idx}: {str(e)}")
+            if idx < 5:  # Print full error for first few rows
+                print(f"Full error: {traceback.format_exc()}")
             continue
     
     print(f"Đã cập nhật {len(all_samples)} mẫu kiểm tra {check_type}.")
@@ -760,22 +969,46 @@ def run_update():
             summary_df = create_summary_report(all_collected_samples)
             updated_sheets['Báo cáo tổng hợp'] = summary_df
         
-        # Upload updated file back to SharePoint
-        success = processor.upload_excel_file(updated_sheets)
-        if not success:
-            print("❌ Failed to upload updated file to SharePoint")
-            return False
+        # Try to upload updated file back to SharePoint
+        upload_success = processor.upload_excel_file(updated_sheets)
         
-        # Send email notification for due samples
+        # Send email notification for due samples regardless of upload success
+        email_success = True
         if all_due_samples:
-            send_email_notification(all_due_samples)
+            email_success = send_email_notification(all_due_samples)
         
-        print(f"\n✅ Hoàn thành cập nhật:")
+        # Print results
+        print(f"\n📊 Kết quả xử lý:")
         print(f"  - Tổng số mẫu được theo dõi: {len(all_collected_samples)}")
         print(f"  - Mẫu đến hạn cần lấy: {len(all_due_samples)}")
-        print(f"  - Sheets đã cập nhật: {len(updated_sheets)}")
+        print(f"  - Sheets đã xử lý: {len(updated_sheets)}")
+        print(f"  - Upload thành công: {'✅' if upload_success else '❌'}")
+        print(f"  - Email thông báo: {'✅' if email_success else '❌'}")
         
-        return True
+        # Create local backup if upload failed
+        if not upload_success:
+            try:
+                backup_filename = f"Sampling_plan_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+                with pd.ExcelWriter(backup_filename, engine='openpyxl') as writer:
+                    for sheet_name, df in updated_sheets.items():
+                        df.to_excel(writer, sheet_name=sheet_name, index=False)
+                print(f"💾 Created local backup: {backup_filename}")
+            except Exception as e:
+                print(f"❌ Failed to create local backup: {str(e)}")
+        
+        # Determine overall success
+        # Consider it successful if we processed data and sent email
+        # Upload failure is not critical if email notification works
+        if len(all_collected_samples) > 0 or len(all_due_samples) > 0:
+            if upload_success:
+                print("✅ Hoàn thành cập nhật thành công!")
+            else:
+                print("⚠️ Hoàn thành xử lý với cảnh báo - File không thể upload do bị lock")
+                print("💡 Vui lòng kiểm tra file trên SharePoint và đóng nếu đang mở")
+            return True
+        else:
+            print("❌ Không có dữ liệu để xử lý")
+            return False
         
     except Exception as e:
         print(f"Lỗi: {str(e)}")
