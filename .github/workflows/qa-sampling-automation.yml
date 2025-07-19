@@ -1,14 +1,35 @@
-name: QA Sampling Automation
+name: QA Sampling Automation SharePoint
 
 on:
   schedule:
     # Run at 7am Vietnam time (UTC+7) which is midnight UTC
     - cron: '0 0 * * *'
   workflow_dispatch:  # Allows manual triggering of the workflow
+    inputs:
+      debug_mode:
+        description: 'Enable debug mode'
+        required: false
+        default: 'false'
+
+env:
+  # SharePoint Configuration
+  TENANT_ID: '81060475-7e7f-4ede-8d8d-bf61f53ca528'
+  CLIENT_ID: '076541aa-c734-405e-8518-ed52b67f8cbd'
+  SHAREPOINT_ACCESS_TOKEN: ${{ secrets.SHAREPOINT_ACCESS_TOKEN }}
+  SHAREPOINT_REFRESH_TOKEN: ${{ secrets.SHAREPOINT_REFRESH_TOKEN }}
+  
+  # Email Configuration
+  EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+  
+  # GitHub Configuration
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
 jobs:
   run-sampling-automation:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write # Required for updating GitHub secrets with refreshed tokens
     
     steps:
       - name: Checkout repository
@@ -18,22 +39,201 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
+
+      - name: Cache pip packages
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-sampling-${{ hashFiles('**/requirements*.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-sampling-
+            ${{ runner.os }}-pip-
           
       - name: Install dependencies
         run: |
+          echo "📦 Installing Python dependencies for QA Sampling automation..."
           python -m pip install --upgrade pip
-          pip install gspread google-auth google-auth-oauthlib google-auth-httplib2 pandas matplotlib
           
-      - name: Create token file
-        run: echo '${{ secrets.GOOGLE_TOKEN_JSON }}' > token.json
+          # Core dependencies
+          pip install pandas matplotlib requests
+          
+          # SharePoint dependencies  
+          pip install msal pynacl
+          
+          # Excel processing
+          pip install openpyxl xlsxwriter
+          
+          echo "✅ All dependencies installed. Package list:"
+          pip list
+
+      - name: Environment validation
+        run: |
+          echo "🔧 Validating environment variables..."
+          
+          # SharePoint validation
+          echo "SharePoint Configuration:"
+          echo "TENANT_ID: ${TENANT_ID:0:8}..."
+          echo "CLIENT_ID: ${CLIENT_ID:0:8}..."
+          echo "Has SHAREPOINT_ACCESS_TOKEN: $([[ -n "$SHAREPOINT_ACCESS_TOKEN" ]] && echo 'Yes' || echo 'No')"
+          echo "Has SHAREPOINT_REFRESH_TOKEN: $([[ -n "$SHAREPOINT_REFRESH_TOKEN" ]] && echo 'Yes' || echo 'No')"
+          
+          # Email validation
+          echo "Email Configuration:"
+          echo "Has EMAIL_PASSWORD: $([[ -n "$EMAIL_PASSWORD" ]] && echo 'Yes' || echo 'No')"
+          
+          # GitHub validation
+          echo "GitHub Configuration:"
+          echo "Has GITHUB_TOKEN: $([[ -n "$GITHUB_TOKEN" ]] && echo 'Yes' || echo 'No')"
+          
+          # Check for missing critical variables
+          MISSING_VARS=""
+          
+          if [[ -z "$SHAREPOINT_ACCESS_TOKEN" && -z "$SHAREPOINT_REFRESH_TOKEN" ]]; then
+            MISSING_VARS="${MISSING_VARS} SharePoint_tokens"
+          fi
+          
+          if [[ -z "$EMAIL_PASSWORD" ]]; then
+            MISSING_VARS="${MISSING_VARS} EMAIL_PASSWORD"
+          fi
+          
+          if [[ -n "$MISSING_VARS" ]]; then
+            echo "❌ Missing critical environment variables:$MISSING_VARS"
+            echo "💡 Please ensure all required secrets are configured in GitHub repository settings."
+            exit 1
+          fi
+          
+          echo "✅ Environment validation completed successfully"
+
+      - name: Debug environment (optional)
+        if: github.event.inputs.debug_mode == 'true'
+        run: |
+          echo "🔍 Debug mode enabled - Extended environment check"
+          echo "Current working directory: $(pwd)"
+          echo "Available files:"
+          ls -la
+          echo ""
+          echo "Python version: $(python --version)"
+          echo "Pip version: $(pip --version)"
+          echo ""
+          echo "Environment variables (truncated for security):"
+          env | grep -E '^(TENANT_ID|CLIENT_ID|GITHUB_)' | head -10
         
       - name: Run QA sampling automation script
+        id: sampling_automation
         env:
           CI: true
-          GOOGLE_TOKEN_JSON: ${{ secrets.GOOGLE_TOKEN_JSON }}
-          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
-        run: python Nem.py
-        
-      # Removing the upload-artifact action that's causing issues
-      # If you need to capture logs, consider using a different approach
-      # such as printing them to the console output
+        run: |
+          echo "🚀 Starting QA Sampling Automation with SharePoint integration..."
+          echo "📊 Processing flow:"
+          echo "  1. Connect to SharePoint"
+          echo "  2. Download Sampling plan NÃM RAU.xlsx"
+          echo "  3. Process sampling schedules"
+          echo "  4. Update next sampling dates"
+          echo "  5. Create summary report"
+          echo "  6. Upload updated file to SharePoint"
+          echo "  7. Send email notifications for due samples"
+          echo ""
+          
+          # Run the sampling automation script
+          python Nem.py 2>&1 | tee sampling_output.txt
+          
+          # Check exit code
+          if [ ${PIPESTATUS[0]} -ne 0 ]; then
+            echo "❌ QA Sampling automation failed (exit code: ${PIPESTATUS[0]})"
+            exit 1
+          fi
+          
+          echo "✅ QA Sampling automation completed successfully"
+
+      - name: Create sampling summary
+        if: always()
+        run: |
+          echo "📊 Creating sampling summary..."
+          
+          if [ -f sampling_output.txt ]; then
+            # Extract key metrics from output
+            TOTAL_SAMPLES=$(grep -oP "Tổng số mẫu được theo dõi: \K\d+" sampling_output.txt | tail -1 || echo "N/A")
+            DUE_SAMPLES=$(grep -oP "Mẫu đến hạn cần lấy: \K\d+" sampling_output.txt | tail -1 || echo "N/A")
+            UPDATED_SHEETS=$(grep -oP "Sheets đã cập nhật: \K\d+" sampling_output.txt | tail -1 || echo "N/A")
+            
+            # Create summary report
+            echo "## 📊 QA Sampling Automation Summary" > sampling_summary.md
+            echo "" >> sampling_summary.md
+            echo "- **Status**: ${{ job.status }}" >> sampling_summary.md
+            echo "- **Total Samples Tracked**: $TOTAL_SAMPLES" >> sampling_summary.md
+            echo "- **Due Samples**: $DUE_SAMPLES" >> sampling_summary.md
+            echo "- **Updated Sheets**: $UPDATED_SHEETS" >> sampling_summary.md
+            echo "" >> sampling_summary.md
+            echo "### 📅 Processing Time" >> sampling_summary.md
+            echo "- **Date**: $(date -u +'%Y-%m-%d')" >> sampling_summary.md
+            echo "- **Time**: $(date -u +'%H:%M:%S %Z')" >> sampling_summary.md
+            echo "- **Vietnam Time**: $(TZ='Asia/Ho_Chi_Minh' date +'%Y-%m-%d %H:%M:%S %Z')" >> sampling_summary.md
+            echo "" >> sampling_summary.md
+            echo "### 🔄 Data Source" >> sampling_summary.md
+            echo "- **Platform**: SharePoint" >> sampling_summary.md
+            echo "- **File**: Sampling plan NÃM RAU.xlsx" >> sampling_summary.md
+            echo "- **Site**: MCH.MMB.QA" >> sampling_summary.md
+            
+            echo "✅ Sampling summary created"
+          else
+            echo "⚠️ No sampling output found"
+            echo "## ❌ Sampling Automation Failed" > sampling_summary.md
+            echo "No output file was generated during the sampling process." >> sampling_summary.md
+          fi
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-sampling-results-${{ github.run_number }}
+          path: |
+            sampling_output.txt
+            sampling_summary.md
+            *.png
+            *.xlsx
+          if-no-files-found: ignore
+
+      - name: Sampling success notification
+        if: success()
+        run: |
+          echo "✅ QA Sampling Automation completed successfully!"
+          echo ""
+          echo "🎯 Results:"
+          if [ -f sampling_summary.md ]; then
+            cat sampling_summary.md
+          fi
+          echo ""
+          echo "📍 Data location:"
+          echo "  - SharePoint: Sampling plan NÃM RAU.xlsx"
+          echo "  - Site: MCH.MMB.QA"
+          echo ""
+          echo "📧 Email notifications sent to:"
+          echo "  - ktcnnemmb@msc.masangroup.com"
+          echo ""
+          echo "🔄 Next scheduled run: Tomorrow at 7:00 AM Vietnam time"
+
+      - name: Sampling failure notification
+        if: failure()
+        run: |
+          echo "❌ QA Sampling Automation failed!"
+          echo ""
+          echo "🔍 Common troubleshooting steps:"
+          echo "1. Check if all required secrets are configured:"
+          echo "   - SHAREPOINT_ACCESS_TOKEN"
+          echo "   - SHAREPOINT_REFRESH_TOKEN" 
+          echo "   - EMAIL_PASSWORD"
+          echo "   - GITHUB_TOKEN"
+          echo ""
+          echo "2. Verify SharePoint permissions for Sampling plan file"
+          echo "3. Check email SMTP configuration"
+          echo "4. Ensure file structure matches expected format"
+          echo ""
+          echo "📋 Please review the workflow logs and artifacts for detailed error information."
+
+      - name: Cleanup temporary files
+        if: always()
+        run: |
+          echo "🧹 Cleaning up temporary files..."
+          rm -f *.tmp
+          rm -f temp_*.png
+          echo "✅ Cleanup completed"
