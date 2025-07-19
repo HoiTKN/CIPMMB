@@ -456,6 +456,8 @@ class SharePointSamplingProcessor:
 # Helper function to parse dates in different formats
 def parse_date(date_str):
     """Try to parse date with multiple formats and handle Excel date formats"""
+    from datetime import datetime, timedelta  # Import at the top to avoid UnboundLocalError
+    
     if not date_str or str(date_str).strip() in ['nan', 'None', '', 'NaT']:
         return None
     
@@ -481,7 +483,6 @@ def parse_date(date_str):
             # Excel date serial numbers are typically > 1 and < 50000 for reasonable dates
             if 1 < excel_date < 50000:
                 # Excel epoch is 1900-01-01 (with some quirks)
-                from datetime import datetime, timedelta
                 excel_epoch = datetime(1900, 1, 1)
                 # Excel incorrectly treats 1900 as a leap year, so subtract 2 days
                 return excel_epoch + timedelta(days=excel_date - 2)
@@ -506,6 +507,7 @@ def parse_date(date_str):
         '%d-%b-%y',      # 01-Dec-24
         '%d %b %Y',      # 1 Dec 2024
         '%d %b %y',      # 1 Dec 24
+        '%Y-%m-%d %H:%M:%S',  # 2025-05-01 00:00:00
     ]
     
     for fmt in date_formats:
