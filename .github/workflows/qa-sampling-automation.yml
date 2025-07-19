@@ -134,16 +134,25 @@ jobs:
           echo "  7. Send email notifications for due samples"
           echo ""
           
-          # Run the sampling automation script
+          # Run the sampling automation script and capture exit code
           python Nem.py 2>&1 | tee sampling_output.txt
+          EXIT_CODE=${PIPESTATUS[0]}
           
-          # Check exit code
-          if [ ${PIPESTATUS[0]} -ne 0 ]; then
-            echo "❌ QA Sampling automation failed (exit code: ${PIPESTATUS[0]})"
+          # Check if processing was successful (even if upload failed)
+          if grep -q "Hoàn thành cập nhật thành công!" sampling_output.txt; then
+            echo "✅ QA Sampling automation completed successfully"
+            echo "upload_success=true" >> $GITHUB_OUTPUT
+          elif grep -q "Hoàn thành xử lý với cảnh báo" sampling_output.txt; then
+            echo "⚠️ QA Sampling automation completed with warnings (file locked)"
+            echo "upload_success=false" >> $GITHUB_OUTPUT
+          elif [ $EXIT_CODE -eq 0 ]; then
+            echo "✅ QA Sampling automation completed"
+            echo "upload_success=true" >> $GITHUB_OUTPUT
+          else
+            echo "❌ QA Sampling automation failed (exit code: $EXIT_CODE)"
+            echo "upload_success=false" >> $GITHUB_OUTPUT
             exit 1
           fi
-          
-          echo "✅ QA Sampling automation completed successfully"
 
       - name: Create sampling summary
         if: always()
@@ -154,7 +163,19 @@ jobs:
             # Extract key metrics from output
             TOTAL_SAMPLES=$(grep -oP "Tổng số mẫu được theo dõi: \K\d+" sampling_output.txt | tail -1 || echo "N/A")
             DUE_SAMPLES=$(grep -oP "Mẫu đến hạn cần lấy: \K\d+" sampling_output.txt | tail -1 || echo "N/A")
-            UPDATED_SHEETS=$(grep -oP "Sheets đã cập nhật: \K\d+" sampling_output.txt | tail -1 || echo "N/A")
+            UPDATED_SHEETS=$(grep -oP "Sheets đã xử lý: \K\d+" sampling_output.txt | tail -1 || echo "N/A")
+            
+            # Check upload status
+            UPLOAD_STATUS="Unknown"
+            if grep -q "Successfully uploaded updated sampling plan" sampling_output.txt; then
+              UPLOAD_STATUS="✅ Success"
+            elif grep -q "Successfully uploaded backup file" sampling_output.txt; then
+              UPLOAD_STATUS="⚠️ Backup uploaded (original locked)"
+            elif grep -q "File remains locked" sampling_output.txt || grep -q "resourceLocked" sampling_output.txt; then
+              UPLOAD_STATUS="❌ Failed (file locked)"
+            elif grep -q "Failed to upload" sampling_output.txt; then
+              UPLOAD_STATUS="❌ Failed"
+            fi
             
             # Create summary report
             echo "## 📊 QA Sampling Automation Summary" > sampling_summary.md
@@ -163,6 +184,7 @@ jobs:
             echo "- **Total Samples Tracked**: $TOTAL_SAMPLES" >> sampling_summary.md
             echo "- **Due Samples**: $DUE_SAMPLES" >> sampling_summary.md
             echo "- **Updated Sheets**: $UPDATED_SHEETS" >> sampling_summary.md
+            echo "- **Upload Status**: $UPLOAD_STATUS" >> sampling_summary.md
             echo "" >> sampling_summary.md
             echo "### 📅 Processing Time" >> sampling_summary.md
             echo "- **Date**: $(date -u +'%Y-%m-%d')" >> sampling_summary.md
@@ -173,6 +195,15 @@ jobs:
             echo "- **Platform**: SharePoint" >> sampling_summary.md
             echo "- **File**: Sampling plan NÃM RAU.xlsx" >> sampling_summary.md
             echo "- **Site**: MCH.MMB.QA" >> sampling_summary.md
+            
+            # Add troubleshooting info if upload failed
+            if [[ "$UPLOAD_STATUS" == *"Failed"* ]] || [[ "$UPLOAD_STATUS" == *"locked"* ]]; then
+              echo "" >> sampling_summary.md
+              echo "### ⚠️ Upload Issue" >> sampling_summary.md
+              echo "The file could not be updated due to SharePoint lock." >> sampling_summary.md
+              echo "This typically happens when someone has the file open." >> sampling_summary.md
+              echo "**Action**: Close the file in SharePoint and re-run the workflow." >> sampling_summary.md
+            fi
             
             echo "✅ Sampling summary created"
           else
@@ -196,7 +227,7 @@ jobs:
       - name: Sampling success notification
         if: success()
         run: |
-          echo "✅ QA Sampling Automation completed successfully!"
+          echo "✅ QA Sampling Automation completed!"
           echo ""
           echo "🎯 Results:"
           if [ -f sampling_summary.md ]; then
@@ -206,6 +237,19 @@ jobs:
           echo "📍 Data location:"
           echo "  - SharePoint: Sampling plan NÃM RAU.xlsx"
           echo "  - Site: MCH.MMB.QA"
+          echo ""
+          
+          # Check upload status
+          if [ "${{ steps.sampling_automation.outputs.upload_success }}" = "false" ]; then
+            echo "⚠️ Note: File upload failed due to SharePoint lock"
+            echo "💡 Action required:"
+            echo "  1. Check if someone has the file open in SharePoint"
+            echo "  2. Close the file and run the workflow again"
+            echo "  3. Or manually apply the updates from backup file"
+          else
+            echo "✅ File successfully updated in SharePoint"
+          fi
+          
           echo ""
           echo "📧 Email notifications sent to:"
           echo "  - ktcnnemmb@msc.masangroup.com"
@@ -224,11 +268,22 @@ jobs:
           echo "   - EMAIL_PASSWORD"
           echo "   - GITHUB_TOKEN"
           echo ""
-          echo "2. Verify SharePoint permissions for Sampling plan file"
-          echo "3. Check email SMTP configuration"
-          echo "4. Ensure file structure matches expected format"
+          echo "2. SharePoint file access issues:"
+          echo "   - Verify SharePoint permissions for Sampling plan file"
+          echo "   - Check if file is locked/open by another user"
+          echo "   - Ensure file ID '0D5DEB9D-23AE-5C76-0C64-9FAB248215DE' is correct"
+          echo ""
+          echo "3. Data processing issues:"
+          echo "   - Check file structure matches expected format"
+          echo "   - Verify column names in Excel sheets"
+          echo "   - Ensure date formats are readable"
+          echo ""
+          echo "4. Email configuration:"
+          echo "   - Check email SMTP configuration"
+          echo "   - Verify EMAIL_PASSWORD secret"
           echo ""
           echo "📋 Please review the workflow logs and artifacts for detailed error information."
+          echo "💡 If file is locked, try running the workflow again after closing the file."
 
       - name: Cleanup temporary files
         if: always()
