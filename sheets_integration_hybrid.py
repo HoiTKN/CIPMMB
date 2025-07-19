@@ -5,9 +5,13 @@ import gspread
 import os
 import sys
 import json
+import requests
+import msal
+import io
+import base64
+import traceback
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-# Only needed for local fallback save
 
 # Define the scopes for Google Sheets
 SCOPES = [
@@ -15,8 +19,358 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive"
 ]
 
+# SharePoint Configuration
+SHAREPOINT_CONFIG = {
+    'tenant_id': '81060475-7e7f-4ede-8d8d-bf61f53ca528',
+    'client_id': '076541aa-c734-405e-8518-ed52b67f8cbd',
+    'authority': 'https://login.microsoftonline.com/81060475-7e7f-4ede-8d8d-bf61f53ca528',
+    'scopes': ['https://graph.microsoft.com/Sites.ReadWrite.All'],
+    'site_name': 'MCH.MMB.QA',
+    'base_url': 'masangroup.sharepoint.com'
+}
+
+# SharePoint File IDs (extracted from URLs)
+SHAREPOINT_FILE_IDS = {
+    'sample_id': '8220CAEA-0CD9-585B-D483-DE0A82A98564',  # Sample ID.xlsx
+    'data_knkh_output': '3E86CA4D-3F41-5C10-666B-5A51F8D9C911'  # Data KNKH.xlsx output
+}
+
+class GitHubSecretsUpdater:
+    """Helper class to update GitHub Secrets using GitHub API"""
+    def __init__(self, repo_owner, repo_name, github_token):
+        self.repo_owner = repo_owner
+        self.repo_name = repo_name
+        self.github_token = github_token
+        self.api_base = "https://api.github.com"
+    
+    def get_public_key(self):
+        """Get repository public key for encrypting secrets"""
+        url = f"{self.api_base}/repos/{self.repo_owner}/{self.repo_name}/actions/secrets/public-key"
+        headers = {
+            "Authorization": f"token {self.github_token}",
+            "Accept": "application/vnd.github.v3+json"
+        }
+        
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            raise Exception(f"Failed to get public key: {response.status_code}")
+    
+    def encrypt_secret(self, public_key, secret_value):
+        """Encrypt secret using repository public key"""
+        from nacl import encoding, public
+        
+        public_key_obj = public.PublicKey(public_key.encode("utf-8"), encoding.Base64Encoder())
+        sealed_box = public.SealedBox(public_key_obj)
+        encrypted = sealed_box.encrypt(secret_value.encode("utf-8"))
+        
+        return base64.b64encode(encrypted).decode("utf-8")
+    
+    def update_secret(self, secret_name, secret_value):
+        """Update a GitHub secret"""
+        try:
+            # Get public key
+            key_data = self.get_public_key()
+            
+            # Encrypt secret
+            encrypted_value = self.encrypt_secret(key_data["key"], secret_value)
+            
+            # Update secret
+            url = f"{self.api_base}/repos/{self.repo_owner}/{self.repo_name}/actions/secrets/{secret_name}"
+            headers = {
+                "Authorization": f"token {self.github_token}",
+                "Accept": "application/vnd.github.v3+json"
+            }
+            data = {
+                "encrypted_value": encrypted_value,
+                "key_id": key_data["key_id"]
+            }
+            
+            response = requests.put(url, headers=headers, json=data)
+            if response.status_code in [201, 204]:
+                print(f"✅ Successfully updated {secret_name}")
+                return True
+            else:
+                print(f"❌ Failed to update {secret_name}: {response.status_code}")
+                return False
+                
+        except Exception as e:
+            print(f"❌ Error updating secret: {str(e)}")
+            return False
+
+class SharePointProcessor:
+    """SharePoint integration class for authentication and data processing"""
+    
+    def __init__(self):
+        self.access_token = None
+        self.refresh_token = None
+        self.base_url = "https://graph.microsoft.com/v1.0"
+        self.site_id = None
+        self.msal_app = None
+        
+        # Initialize MSAL app
+        self.msal_app = msal.PublicClientApplication(
+            SHAREPOINT_CONFIG['client_id'],
+            authority=SHAREPOINT_CONFIG['authority']
+        )
+        
+        # Authenticate on initialization
+        if not self.authenticate():
+            raise Exception("SharePoint authentication failed during initialization")
+
+    def log(self, message):
+        """Log with timestamp"""
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        print(f"[{timestamp}] {message}")
+        sys.stdout.flush()
+
+    def authenticate(self):
+        """Authenticate using delegation flow with pre-generated tokens"""
+        try:
+            self.log("🔐 Authenticating with SharePoint...")
+
+            # Get tokens from environment variables
+            access_token = os.environ.get('SHAREPOINT_ACCESS_TOKEN')
+            refresh_token = os.environ.get('SHAREPOINT_REFRESH_TOKEN')
+
+            if not access_token and not refresh_token:
+                self.log("❌ No SharePoint tokens found in environment variables")
+                self.log("💡 Please run generate_tokens.py locally and add tokens to GitHub Secrets")
+                return False
+
+            self.access_token = access_token
+            self.refresh_token = refresh_token
+            
+            if access_token:
+                self.log(f"✅ Found access token: {access_token[:30]}...")
+                
+                # Test token validity
+                if self.test_token_validity():
+                    self.log("✅ SharePoint access token is valid")
+                    return True
+                else:
+                    self.log("⚠️ SharePoint access token expired, attempting refresh...")
+                    
+            # Try to refresh token
+            if refresh_token:
+                if self.refresh_access_token():
+                    self.log("✅ SharePoint token refreshed successfully")
+                    self.update_github_secrets()
+                    return True
+                else:
+                    self.log("❌ SharePoint token refresh failed")
+                    return False
+            else:
+                self.log("❌ No SharePoint refresh token available")
+                return False
+
+        except Exception as e:
+            self.log(f"❌ SharePoint authentication error: {str(e)}")
+            return False
+
+    def test_token_validity(self):
+        """Test if current access token is valid"""
+        try:
+            headers = self.get_headers()
+            response = requests.get(f"{self.base_url}/me", headers=headers, timeout=30)
+
+            if response.status_code == 200:
+                user_info = response.json()
+                self.log(f"✅ Authenticated to SharePoint as: {user_info.get('displayName', 'Unknown')}")
+                return True
+            elif response.status_code == 401:
+                return False
+            else:
+                self.log(f"Warning: Unexpected response code: {response.status_code}")
+                return False
+
+        except Exception as e:
+            self.log(f"Error testing SharePoint token validity: {str(e)}")
+            return False
+
+    def refresh_access_token(self):
+        """Refresh access token using refresh token with MSAL"""
+        try:
+            if not self.refresh_token:
+                self.log("❌ No refresh token available")
+                return False
+
+            self.log("🔄 Attempting to refresh SharePoint token using MSAL...")
+
+            # Use MSAL to refresh token
+            result = self.msal_app.acquire_token_by_refresh_token(
+                self.refresh_token,
+                scopes=SHAREPOINT_CONFIG['scopes']
+            )
+
+            if result and "access_token" in result:
+                self.access_token = result['access_token']
+                if 'refresh_token' in result:
+                    self.refresh_token = result['refresh_token']
+                    self.log("✅ Got new refresh token")
+                
+                self.log("✅ SharePoint token refreshed successfully")
+                return True
+            else:
+                error = result.get('error_description', 'Unknown error') if result else 'No result'
+                self.log(f"❌ SharePoint token refresh failed: {error}")
+                return False
+
+        except Exception as e:
+            self.log(f"❌ Error refreshing SharePoint token: {str(e)}")
+            return False
+
+    def update_github_secrets(self):
+        """Update GitHub Secrets with new tokens"""
+        try:
+            github_token = os.environ.get('GITHUB_TOKEN')
+            if not github_token:
+                self.log("⚠️ No GITHUB_TOKEN found, cannot update secrets")
+                return False
+            
+            repo = os.environ.get('GITHUB_REPOSITORY', '')
+            if '/' not in repo:
+                self.log("⚠️ Invalid GITHUB_REPOSITORY format")
+                return False
+            
+            repo_owner, repo_name = repo.split('/')
+            updater = GitHubSecretsUpdater(repo_owner, repo_name, github_token)
+            
+            # Update access token
+            if self.access_token:
+                updater.update_secret('SHAREPOINT_ACCESS_TOKEN', self.access_token)
+            
+            # Update refresh token
+            if self.refresh_token:
+                updater.update_secret('SHAREPOINT_REFRESH_TOKEN', self.refresh_token)
+            
+            return True
+            
+        except Exception as e:
+            self.log(f"⚠️ Error updating GitHub Secrets: {str(e)}")
+            return False
+
+    def get_headers(self):
+        """Get headers for API requests"""
+        return {
+            'Authorization': f'Bearer {self.access_token}',
+            'Content-Type': 'application/json'
+        }
+
+    def get_site_id(self):
+        """Get SharePoint site ID"""
+        try:
+            if self.site_id:
+                return self.site_id
+
+            url = f"{self.base_url}/sites/{SHAREPOINT_CONFIG['base_url']}:/sites/{SHAREPOINT_CONFIG['site_name']}"
+            response = requests.get(url, headers=self.get_headers(), timeout=30)
+
+            if response.status_code == 200:
+                site_data = response.json()
+                self.site_id = site_data['id']
+                self.log(f"✅ Found SharePoint site ID: {self.site_id}")
+                return self.site_id
+            else:
+                self.log(f"❌ Error getting SharePoint site ID: {response.status_code}")
+                return None
+
+        except Exception as e:
+            self.log(f"❌ Error getting SharePoint site ID: {str(e)}")
+            return None
+
+    def download_excel_file_by_id(self, file_id, description=""):
+        """Download Excel file from SharePoint by file ID"""
+        try:
+            self.log(f"📥 Downloading {description} from SharePoint...")
+
+            # Get file download URL using file ID
+            url = f"{self.base_url}/sites/{self.get_site_id()}/drive/items/{file_id}"
+            response = requests.get(url, headers=self.get_headers(), timeout=30)
+
+            if response.status_code == 200:
+                file_info = response.json()
+                download_url = file_info.get('@microsoft.graph.downloadUrl')
+
+                if download_url:
+                    # Download file content
+                    self.log(f"✅ Got download URL, downloading content...")
+                    file_response = requests.get(download_url, timeout=60)
+
+                    if file_response.status_code == 200:
+                        # Read Excel from memory
+                        excel_data = io.BytesIO(file_response.content)
+                        self.log(f"✅ Downloaded {len(file_response.content)} bytes")
+                        
+                        try:
+                            excel_file = pd.ExcelFile(excel_data)
+                            sheets_data = {}
+                            
+                            self.log(f"Excel sheets found: {excel_file.sheet_names}")
+                            
+                            for sheet_name in excel_file.sheet_names:
+                                excel_data.seek(0)
+                                df = pd.read_excel(excel_data, sheet_name=sheet_name)
+                                sheets_data[sheet_name] = df
+                                self.log(f"✅ Sheet '{sheet_name}': {len(df)} rows, {len(df.columns)} columns")
+                            
+                            self.log(f"✅ Successfully downloaded {description}")
+                            return sheets_data
+                            
+                        except Exception as e:
+                            self.log(f"❌ Error reading Excel file: {str(e)}")
+                            return None
+                    else:
+                        self.log(f"❌ Error downloading file content: {file_response.status_code}")
+                else:
+                    self.log(f"❌ No download URL found for {description}")
+            else:
+                self.log(f"❌ Error getting file info: {response.status_code}")
+
+        except Exception as e:
+            self.log(f"❌ Error downloading {description}: {str(e)}")
+
+        return None
+
+    def upload_excel_to_sharepoint(self, df, file_id, sheet_name="Sheet1"):
+        """Upload processed data to SharePoint Excel file"""
+        try:
+            self.log(f"📤 Uploading data to SharePoint...")
+
+            # Create Excel file in memory
+            excel_buffer = io.BytesIO()
+            with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+                df.to_excel(writer, sheet_name=sheet_name, index=False)
+
+            excel_buffer.seek(0)
+            excel_content = excel_buffer.getvalue()
+            self.log(f"Created Excel file with {len(excel_content)} bytes")
+
+            # Upload to SharePoint
+            upload_url = f"{self.base_url}/sites/{self.get_site_id()}/drive/items/{file_id}/content"
+
+            headers = {
+                'Authorization': f'Bearer {self.access_token}',
+                'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            }
+
+            response = requests.put(upload_url, headers=headers, data=excel_content, timeout=60)
+
+            if response.status_code in [200, 201]:
+                self.log(f"✅ Successfully uploaded {len(df)} rows to SharePoint")
+                return True
+            else:
+                self.log(f"❌ Error uploading to SharePoint: {response.status_code}")
+                self.log(f"Response: {response.text[:500]}")
+                return False
+
+        except Exception as e:
+            self.log(f"❌ Error uploading to SharePoint: {str(e)}")
+            return False
+
 def authenticate_google():
-    """Authentication using OAuth token - exactly matching your other scripts"""
+    """Authentication using OAuth token for Google Sheets"""
     try:
         print("Starting OAuth authentication process for Google Sheets...")
         creds = None
@@ -46,14 +400,11 @@ def authenticate_google():
         return gspread.authorize(creds)
 
     except Exception as e:
-        print(f"Authentication error: {str(e)}")
+        print(f"Google Sheets authentication error: {str(e)}")
         sys.exit(1)
 
 def extract_short_product_name(full_name):
-    """
-    Extract a shorter version of the product name that includes only brand name (Omachi/Kokomi)
-    and the flavor, excluding packaging information.
-    """
+    """Extract a shorter version of the product name"""
     if pd.isna(full_name) or full_name == '':
         return ''
 
@@ -85,10 +436,7 @@ def extract_short_product_name(full_name):
     return short_name
 
 def clean_concatenated_dates(date_str):
-    """
-    Clean concatenated dates like '11/04/202511/04/202511/04/2025'
-    Returns the first valid date found
-    """
+    """Clean concatenated dates like '11/04/202511/04/202511/04/2025'"""
     if not isinstance(date_str, str):
         return date_str
 
@@ -150,24 +498,7 @@ def extract_correct_date(text):
     return None
 
 def extract_production_info(text):
-    """
-    Extract production information from text with improved line and machine logic.
-    Returns (time, line, machine) tuple.
-    
-    FIXED: Now handles spaces around colons in time patterns like "23 :12"
-    
-    Handles patterns like:
-    - "21:17 22I" -> time="21:17", line="2", machine="2"
-    - "23 :12 23I" -> time="23:12", line="2", machine="3" (NEW FIX)
-    - "Nơi SX: I-MBP (8I06)" -> line="8", machine=None
-    - "Nơi SX: I-MBP (13:19 23)" -> time="13:19", line="2", machine="3"
-    - "Nơi SX: I-MBP (14:27 21 I )" -> time="14:27", line="2", machine="1"
-    - "Nơi SX: I-MBP (22:51 24 I )" -> time="22:51", line="2", machine="4"
-    
-    NEW IMPROVEMENT: Now handles 2-digit codes after time where:
-    - First digit = line number (1-8)
-    - Second digit = machine number (0-9)
-    """
+    """Extract production information from text with improved line and machine logic"""
     if not isinstance(text, str):
         return None, None, None
 
@@ -424,11 +755,7 @@ def determine_shift(time_obj):
         return 3
 
 def create_leader_mapping(aql_data):
-    """
-    Creates a mapping from leader codes to leader names based on the actual data in the AQL sheet
-    by examining what Tên Trưởng ca values appear next to each QA in the same rows
-    IMPORTANT: Uses "Tên Trưởng ca" column (with names) not "Trưởng ca" column (with codes)
-    """
+    """Creates a mapping from leader codes to leader names"""
     # Find the leader NAME column specifically (Tên Trưởng ca) - prioritize this over codes
     leader_name_column = None
     leader_code_column = None
@@ -482,32 +809,22 @@ def create_leader_mapping(aql_data):
         # Store the mapping (keep original values since we're now using the name column)
         leader_mapping[str(leader_val)] = str(leader_val)
     
-    # If we're using the name column, we don't need complex mapping
-    # If we're using the code column, we might need to create mappings from codes to names
-    if leader_name_column:
-        print(f"\n✓ Using actual names from {leader_name_column}, no mapping needed")
-    else:
-        print(f"\n⚠ Using codes from {leader_code_column}, might need mapping logic")
-    
     print(f"Final leader mapping: {leader_mapping}")
     return leader_mapping
 
 def find_qa_and_leader(row, aql_data, leader_mapping=None):
-    """
-    Improved function to match QA and leader from the AQL data sheet
-    with better debugging, data type handling, and night shift date adjustment
-    """
+    """Improved function to match QA and leader from the AQL data sheet"""
     if pd.isna(row['Ngày SX_std']) or row['Item_clean'] == '' or row['Giờ_time'] is None:
         return None, None, "Missing required data"
 
-    # Check for QA column - handle different possible names including renamed ones
+    # Check for QA column
     qa_column = None
     for col in aql_data.columns:
         if col == 'QA' or col.startswith('QA'):
             qa_column = col
             break
 
-    # Check for leader column - prioritize "Tên Trưởng ca" (names) over "Trưởng ca" (codes)
+    # Check for leader column
     leader_name_column = None
     leader_code_column = None
     
@@ -532,24 +849,17 @@ def find_qa_and_leader(row, aql_data, leader_mapping=None):
     if not leader_column:
         return None, None, f"Leader column not found in AQL data. Available columns: {list(aql_data.columns)}"
     
-    # Debug info about which columns we're using
-    debug_parts = []
-    if leader_name_column:
-        debug_parts.append(f"Using QA column: {qa_column}, Leader NAME column: {leader_column}")
-    else:
-        debug_parts.append(f"Using QA column: {qa_column}, Leader CODE column: {leader_column}")
-
     # Convert Line_extracted to proper integer for comparison
     complaint_line = row['Line_extracted']
     if pd.isna(complaint_line):
         return None, None, "Missing line information"
     
     try:
-        complaint_line = int(float(complaint_line))  # Handle cases where it might be stored as float
+        complaint_line = int(float(complaint_line))
     except (ValueError, TypeError):
         return None, None, f"Invalid line value: {complaint_line}"
 
-    # **NEW: Handle night shift date adjustment**
+    # Handle night shift date adjustment
     complaint_hour = row['Giờ_time'].hour
     complaint_minute = row['Giờ_time'].minute
     search_date = row['Ngày SX_std']
@@ -572,7 +882,7 @@ def find_qa_and_leader(row, aql_data, leader_mapping=None):
     else:
         debug_parts.append(f"Looking for: Date={search_date.strftime('%d/%m/%Y')}, Item={row['Item_clean']}, Line={complaint_line}")
 
-    # 1. Filter AQL data for the same date and item first (using potentially adjusted date)
+    # 1. Filter AQL data for the same date and item first
     date_item_matches = aql_data[
         (aql_data['Ngày SX_std'] == search_date) & 
         (aql_data['Item_clean'] == row['Item_clean'])
@@ -591,7 +901,7 @@ def find_qa_and_leader(row, aql_data, leader_mapping=None):
         
         return None, None, " | ".join(debug_parts)
 
-    # 2. Now filter by line - both should be numeric now
+    # 2. Now filter by line
     matching_rows = date_item_matches[date_item_matches['Line'] == complaint_line]
     
     debug_parts.append(f"Date+Item+Line matches: {len(matching_rows)}")
@@ -719,90 +1029,105 @@ def find_qa_and_leader(row, aql_data, leader_mapping=None):
     return None, None, " | ".join(debug_parts)
 
 def main():
-    print("Starting Google Sheets integration with Google Sheets output...")
+    print("="*80)
+    print("🔄 HYBRID GOOGLE SHEETS + SHAREPOINT INTEGRATION")
+    print("="*80)
+
+    # Initialize SharePoint processor
+    print("\n🔗 Initializing SharePoint connection...")
+    try:
+        sp_processor = SharePointProcessor()
+        print("✅ SharePoint connection established")
+    except Exception as e:
+        print(f"❌ SharePoint initialization failed: {str(e)}")
+        sys.exit(1)
 
     # Authenticate and connect to Google Sheets
-    gc = authenticate_google()
-
-    # Open the source spreadsheets - INPUT sources remain the same
-    knkh_sheet = gc.open_by_url('https://docs.google.com/spreadsheets/d/1Z5mtkH-Yb4jg-2N_Fqr3i44Ta_YTFYHBoxw1YhB4RrQ/edit')
-    aql_sheet = gc.open_by_url('https://docs.google.com/spreadsheets/d/1MxvsyZTMMO0L5Cf1FzuXoKD634OClCCefeLjv9B49XU/edit')
-    
-    # Open the OUTPUT destination spreadsheet - NEW integrated data sheet
-    output_sheet = gc.open_by_url('https://docs.google.com/spreadsheets/d/1amiTEXhcjXVrjyAr8DV4hnjEvIc7iACUWJLDVXOOuWQ/edit')
-
-    # Get the worksheet data
-    knkh_worksheet = knkh_sheet.worksheet('MMB')  # Using 'MMB' worksheet as specified
-    
-    # Handle KNKH data
+    print("\n🔗 Connecting to Google Sheets...")
     try:
-        knkh_data = knkh_worksheet.get_all_records()
-        knkh_df = pd.DataFrame(knkh_data)
+        gc = authenticate_google()
+        print("✅ Google Sheets connection established")
     except Exception as e:
-        print(f"Error with KNKH get_all_records(), trying alternative method: {e}")
-        # Use get_all_values() as fallback
-        knkh_values = knkh_worksheet.get_all_values()
-        if len(knkh_values) > 1:
-            headers = knkh_values[0]
-            data = knkh_values[1:]
-            knkh_df = pd.DataFrame(data, columns=headers)
-        else:
-            print("No data found in MMB worksheet")
+        print(f"❌ Google Sheets initialization failed: {str(e)}")
+        sys.exit(1)
+
+    # ========================================================================
+    # DATA SOURCES:
+    # 1. AQL Data - FROM SHAREPOINT (Sample ID.xlsx)
+    # 2. KNKH Data - FROM GOOGLE SHEETS (existing)
+    # 3. Output - TO SHAREPOINT (Data KNKH.xlsx)
+    # ========================================================================
+
+    print("\n📥 Loading data from multiple sources...")
+
+    # 1. Get AQL data from SharePoint
+    print("📋 Loading AQL data from SharePoint...")
+    try:
+        aql_sheets_data = sp_processor.download_excel_file_by_id(
+            SHAREPOINT_FILE_IDS['sample_id'], 
+            "Sample ID.xlsx (AQL Data)"
+        )
+
+        if not aql_sheets_data:
+            print("❌ Failed to download AQL data from SharePoint")
             sys.exit(1)
 
-    aql_worksheet = aql_sheet.worksheet('ID AQL')
-    
-    # Handle AQL data with duplicate header protection
-    try:
-        aql_data = aql_worksheet.get_all_records()
-        aql_df = pd.DataFrame(aql_data)
-    except Exception as e:
-        print(f"Error with AQL get_all_records() (likely duplicate headers): {e}")
-        print("Using alternative method to handle duplicate headers...")
-        
-        # Use get_all_values() and handle duplicate headers
-        aql_values = aql_worksheet.get_all_values()
-        if len(aql_values) > 1:
-            headers = aql_values[0]
-            data = aql_values[1:]
-            
-            # Handle duplicate headers by adding suffixes
-            seen_headers = {}
-            unique_headers = []
-            for header in headers:
-                if header in seen_headers:
-                    seen_headers[header] += 1
-                    unique_headers.append(f"{header}_{seen_headers[header]}")
-                else:
-                    seen_headers[header] = 0
-                    unique_headers.append(header)
-            
-            aql_df = pd.DataFrame(data, columns=unique_headers)
-            print(f"Created AQL DataFrame with headers: {unique_headers}")
-        else:
-            print("No data found in AQL worksheet")
+        # Extract ID AQL sheet (this contains the production data)
+        aql_df = aql_sheets_data.get('ID AQL', pd.DataFrame())
+        if aql_df.empty:
+            print("❌ ID AQL sheet not found or empty")
             sys.exit(1)
 
-    print(f"Retrieved {len(knkh_df)} KNKH records and {len(aql_df)} AQL records")
-    print(f"KNKH columns: {list(knkh_df.columns)}")
-    print(f"AQL columns: {list(aql_df.columns)}")
+        print(f"✅ AQL data loaded: {len(aql_df)} records")
+        print(f"AQL columns: {list(aql_df.columns)}")
+
+    except Exception as e:
+        print(f"❌ Error loading AQL data from SharePoint: {str(e)}")
+        sys.exit(1)
+
+    # 2. Get KNKH data from Google Sheets (unchanged)
+    print("📋 Loading KNKH data from Google Sheets...")
+    try:
+        knkh_sheet = gc.open_by_url('https://docs.google.com/spreadsheets/d/1Z5mtkH-Yb4jg-2N_Fqr3i44Ta_YTFYHBoxw1YhB4RrQ/edit')
+        knkh_worksheet = knkh_sheet.worksheet('MMB')
+
+        try:
+            knkh_data = knkh_worksheet.get_all_records()
+            knkh_df = pd.DataFrame(knkh_data)
+        except Exception as e:
+            print(f"Error with KNKH get_all_records(), trying alternative method: {e}")
+            # Use get_all_values() as fallback
+            knkh_values = knkh_worksheet.get_all_values()
+            if len(knkh_values) > 1:
+                headers = knkh_values[0]
+                data = knkh_values[1:]
+                knkh_df = pd.DataFrame(data, columns=headers)
+            else:
+                print("No data found in MMB worksheet")
+                sys.exit(1)
+
+        print(f"✅ KNKH data loaded: {len(knkh_df)} records")
+        print(f"KNKH columns: {list(knkh_df.columns)}")
+
+    except Exception as e:
+        print(f"❌ Error loading KNKH data from Google Sheets: {str(e)}")
+        sys.exit(1)
+
+    # ========================================================================
+    # DATA PROCESSING (same as original logic)
+    # ========================================================================
+
+    print("\n🔄 Processing data...")
 
     # Clean concatenated dates for both reception date and production date
-    print("\nProcessing dates...")
+    print("📅 Processing dates...")
     knkh_df['Ngày tiếp nhận'] = knkh_df['Ngày tiếp nhận'].apply(clean_concatenated_dates)
     knkh_df['Ngày SX'] = knkh_df['Ngày SX'].apply(clean_concatenated_dates)
-    
-    # Debug: Show some examples of date cleaning
-    print("\nSample date cleaning results:")
-    sample_tickets = knkh_df[knkh_df['Mã ticket'].isin(['13898', '13899'])][['Mã ticket', 'Ngày tiếp nhận', 'Ngày SX']]
-    if not sample_tickets.empty:
-        for idx, row in sample_tickets.iterrows():
-            print(f"Ticket {row['Mã ticket']}: Ngày tiếp nhận='{row['Ngày tiếp nhận']}', Ngày SX='{row['Ngày SX']}'")
     
     # Extract correct Ngày SX from Nội dung phản hồi and replace the Ngày SX column
     knkh_df['Ngày SX_extracted'] = knkh_df['Nội dung phản hồi'].apply(extract_correct_date)
 
-    # Replace the original Ngày SX with the extracted one when available, keeping the exact format
+    # Replace the original Ngày SX with the extracted one when available
     knkh_df['Ngày SX'] = knkh_df.apply(
         lambda row: row['Ngày SX_extracted'] if row['Ngày SX_extracted'] is not None else row['Ngày SX'], 
         axis=1
@@ -821,51 +1146,18 @@ def main():
 
     print(f"After date filtering: {len(knkh_df)} KNKH records and {len(aql_df)} AQL records")
 
-    # Extract time, line, and machine information using improved function
+    # Extract time, line, and machine information
+    print("🔧 Extracting production information...")
     knkh_df[['Giờ_extracted', 'Line_extracted', 'Máy_extracted']] = knkh_df['Nội dung phản hồi'].apply(
         lambda x: pd.Series(extract_production_info(x))
     )
 
-    # Test the extraction for specific patterns mentioned by user
-    test_texts = [
-        "Nơi SX: I-MBP (13:19 23)",
-        "Nơi SX: I-MBP (14:27 21 I )",
-        "Nơi SX: I-MBP (22:51 24 I )",
-        "21:17 22I",
-        "Nơi SX: I-MBP (23 :12 23I)"  # NEW TEST CASE from user
-    ]
-    
-    print("\nTesting improved extraction function (including the fix for spaces around colon):")
-    for test_text in test_texts:
-        test_time, test_line, test_machine = extract_production_info(test_text)
-        print(f"'{test_text}' -> Time={test_time}, Line={test_line}, Machine={test_machine}")
-
     # Convert to appropriate data types
     knkh_df['Line_extracted'] = pd.to_numeric(knkh_df['Line_extracted'], errors='coerce')
     knkh_df['Máy_extracted'] = pd.to_numeric(knkh_df['Máy_extracted'], errors='coerce')
-    
-    # Debug: Show some extraction results
-    print("\nSample production info extractions:")
-    for idx in knkh_df.head(5).index:
-        row = knkh_df.loc[idx]
-        print(f"Ticket {row['Mã ticket']}: '{row['Giờ_extracted']}' -> Line: {row['Line_extracted']}, Machine: {row['Máy_extracted']}")
-    print()
 
     # Standardize the receipt date
     knkh_df['Ngày tiếp nhận_std'] = knkh_df['Ngày tiếp nhận'].apply(standardize_date)
-    
-    # Debug: Show date processing for tickets 13898 and 13899
-    print("\nDebug - Date processing for tickets 13898 and 13899:")
-    debug_tickets = knkh_df[knkh_df['Mã ticket'].isin(['13898', '13899'])][['Mã ticket', 'Ngày tiếp nhận', 'Ngày tiếp nhận_std', 'Ngày SX', 'Ngày SX_std']]
-    if not debug_tickets.empty:
-        for idx, row in debug_tickets.iterrows():
-            print(f"\nTicket {row['Mã ticket']}:")
-            print(f"  Original Ngày tiếp nhận: '{row['Ngày tiếp nhận']}'")
-            print(f"  Standardized Ngày tiếp nhận: {row['Ngày tiếp nhận_std']}")
-            print(f"  Original Ngày SX: '{row['Ngày SX']}'")
-            print(f"  Standardized Ngày SX: {row['Ngày SX_std']}")
-    else:
-        print("  Tickets 13898 and 13899 not found in data")
 
     # Clean item codes
     knkh_df['Item_clean'] = knkh_df['Item'].apply(clean_item_code)
@@ -874,7 +1166,7 @@ def main():
     # Parse time
     knkh_df['Giờ_time'] = knkh_df['Giờ_extracted'].apply(parse_time)
     
-    # Find the correct Giờ column in AQL data (handle renamed columns)
+    # Find the correct Giờ column in AQL data
     gio_column = None
     for col in aql_df.columns:
         if col.startswith('Giờ') or col == 'Giờ':
@@ -888,7 +1180,7 @@ def main():
         print("Warning: No time column found in AQL data")
         aql_df['Giờ_time'] = None
 
-    # Also ensure Line column is properly handled in AQL data
+    # Handle Line column in AQL data
     line_column = None
     for col in aql_df.columns:
         if col == 'Line' or col.startswith('Line'):
@@ -896,53 +1188,28 @@ def main():
             break
     
     if line_column and line_column != 'Line':
-        # Rename to standard 'Line' for easier processing
         aql_df['Line'] = aql_df[line_column]
         print(f"Using line column: {line_column}")
     elif not line_column:
         print("Warning: No Line column found in AQL data")
 
-    # FIXED: Convert AQL Line column to numeric BEFORE any sorting operations
+    # Convert AQL Line column to numeric BEFORE any sorting operations
     if 'Line' in aql_df.columns:
         aql_df['Line'] = pd.to_numeric(aql_df['Line'], errors='coerce')
         print(f"Converted Line column to numeric")
 
-    # Debug: Check AQL data sample to understand structure
-    print("\nAQL Data Sample:")
-    if len(aql_df) > 0:
-        print(f"Columns: {list(aql_df.columns)}")
-        sample_aql = aql_df.head(3)
-        for idx, row in sample_aql.iterrows():
-            print(f"Row {idx}: Date={row.get('Ngày SX')}, Item={row.get('Item')}, Line={row.get('Line')}, Time={row.get(gio_column) if gio_column else 'N/A'}")
-        print()
-    
-    # Debug: Check data types - NOW SAFE because Line is already converted to numeric
-    print("Data type checking:")
-    print(f"AQL Line column type: {aql_df['Line'].dtype if 'Line' in aql_df.columns else 'N/A'}")
-    
-    # FIXED: Safe sorting - only include non-null numeric values
-    if 'Line' in aql_df.columns:
-        valid_lines = aql_df['Line'].dropna()
-        if len(valid_lines) > 0:
-            print(f"AQL Line unique values: {sorted(valid_lines.unique())}")
-        else:
-            print("AQL Line unique values: No valid numeric values found")
-    else:
-        print("AQL Line unique values: N/A")
-    print()
-
     # Round time to 2-hour intervals
     knkh_df['Giờ_rounded'] = knkh_df['Giờ_time'].apply(round_to_2hour)
 
-    # Determine shift (now just returns 1, 2, or 3)
+    # Determine shift
     knkh_df['Shift'] = knkh_df['Giờ_time'].apply(determine_shift)
 
-    # Match QA and leader with improved matching function
-    # Create leader ID to name mapping
+    # Match QA and leader
+    print("🔍 Matching QA and leaders...")
     leader_mapping = create_leader_mapping(aql_df)
     print(f"Leader mapping: {leader_mapping}")
 
-    # Match QA and leader with improved debugging
+    # Match QA and leader
     knkh_df['QA_matched'] = None
     knkh_df['Tên Trưởng ca_matched'] = None
     knkh_df['debug_info'] = None
@@ -962,33 +1229,14 @@ def main():
             print(f"Processed {idx + 1} rows, {total_matched} matched so far")
     
     print(f"Matching process complete. Total matched: {total_matched} out of {len(knkh_df)} rows")
-    
-    # Show some sample matches for debugging
-    matched_rows = knkh_df[knkh_df['QA_matched'].notna()]
-    if len(matched_rows) > 0:
-        print("\nSample matched records:")
-        for idx in matched_rows.head(3).index:
-            row = knkh_df.loc[idx]
-            print(f"Ticket {row['Mã ticket']}: Date={row['Ngày SX']}, Item={row['Item']}, Line={row['Line_extracted']}, Time={row['Giờ_extracted']} -> QA={row['QA_matched']}, Leader={row['Tên Trưởng ca_matched']}")
-    
-    unmatched_rows = knkh_df[knkh_df['QA_matched'].isna()]
-    if len(unmatched_rows) > 0:
-        print(f"\nSample unmatched records ({len(unmatched_rows)} total):")
-        for idx in unmatched_rows.head(5).index:  # Show more unmatched records
-            row = knkh_df.loc[idx]
-            print(f"Ticket {row['Mã ticket']}: Date={row['Ngày SX']}, Item={row['Item']}, Line={row['Line_extracted']}, Time={row['Giờ_extracted']}")
-            print(f"  Debug: {row['debug_info']}")
-            print()
 
     # Format dates for Power BI (MM/DD/YYYY)
     knkh_df['Ngày tiếp nhận_formatted'] = knkh_df['Ngày tiếp nhận_std'].apply(format_date_mm_dd_yyyy)
     knkh_df['Ngày SX_formatted'] = knkh_df['Ngày SX_std'].apply(format_date_mm_dd_yyyy)
 
-    # Extract month and year from production date (Ngày SX)
+    # Extract time components
     knkh_df['Tháng sản xuất'] = knkh_df['Ngày SX_std'].apply(extract_month)
     knkh_df['Năm sản xuất'] = knkh_df['Ngày SX_std'].apply(extract_year)
-
-    # Extract week, month and year from receipt date (Ngày tiếp nhận)
     knkh_df['Tuần nhận khiếu nại'] = knkh_df['Ngày tiếp nhận_std'].apply(extract_week)
     knkh_df['Tháng nhận khiếu nại'] = knkh_df['Ngày tiếp nhận_std'].apply(extract_month)
     knkh_df['Năm nhận khiếu nại'] = knkh_df['Ngày tiếp nhận_std'].apply(extract_year)
@@ -998,23 +1246,23 @@ def main():
     knkh_df = knkh_df[knkh_df['Bộ phận chịu trách nhiệm'] == 'Nhà máy']
     print(f"Rows after filtering for 'Bộ phận chịu trách nhiệm' = 'Nhà máy': {len(knkh_df)}")
 
-    # Create the joined dataframe with all required columns
+    # Create the final output dataframe
     filtered_knkh_df = knkh_df.copy()
 
     # Extract short product names
     filtered_knkh_df['Tên sản phẩm ngắn'] = filtered_knkh_df['Tên sản phẩm'].apply(extract_short_product_name)
 
-    joined_df = filtered_knkh_df[[
+    final_df = filtered_knkh_df[[
         'Mã ticket', 'Ngày tiếp nhận_formatted', 'Tỉnh', 'Ngày SX_formatted', 'Sản phẩm/Dịch vụ',
         'Số lượng (ly/hộp/chai/gói/hủ)', 'Nội dung phản hồi', 'Item', 'Tên sản phẩm', 'Tên sản phẩm ngắn',
         'SL pack/ cây lỗi', 'Tên lỗi', 'Line_extracted', 'Máy_extracted', 'Giờ_extracted',
         'QA_matched', 'Tên Trưởng ca_matched', 'Shift', 
         'Tháng sản xuất', 'Năm sản xuất', 'Tuần nhận khiếu nại', 'Tháng nhận khiếu nại', 'Năm nhận khiếu nại',
-        'Bộ phận chịu trách nhiệm', 'debug_info'  # Added debug_info column for troubleshooting
+        'Bộ phận chịu trách nhiệm', 'debug_info'
     ]].copy()
 
     # Rename columns for clarity
-    joined_df.rename(columns={
+    final_df.rename(columns={
         'Line_extracted': 'Line',
         'Máy_extracted': 'Máy',
         'Giờ_extracted': 'Giờ',
@@ -1025,111 +1273,52 @@ def main():
     }, inplace=True)
 
     # Sort by Mã ticket from largest to smallest
-    joined_df = joined_df.sort_values(by='Mã ticket', ascending=False)
+    final_df = final_df.sort_values(by='Mã ticket', ascending=False)
 
-    # Save to Google Sheets (integrated data output)
+    print(f"\n📊 Final dataset prepared: {len(final_df)} records")
+
+    # ========================================================================
+    # OUTPUT TO SHAREPOINT
+    # ========================================================================
+
+    print("\n📤 Uploading results to SharePoint...")
     try:
-        print(f"\nWriting {len(joined_df)} rows to integrated Google Sheets...")
+        success = sp_processor.upload_excel_to_sharepoint(
+            final_df, 
+            SHAREPOINT_FILE_IDS['data_knkh_output'],
+            'Data_KNKH'
+        )
         
-        # Get or create the worksheet for integrated data
-        try:
-            output_worksheet = output_sheet.worksheet('Integrated_Data')
-            print("Found existing 'Integrated_Data' worksheet")
-        except:
-            print("Creating new 'Integrated_Data' worksheet")
-            output_worksheet = output_sheet.add_worksheet(title='Integrated_Data', rows=len(joined_df)+10, cols=len(joined_df.columns))
-        
-        # Clear existing data
-        output_worksheet.clear()
-        
-        # Prepare data for upload (convert to list of lists)
-        # Get headers
-        headers = joined_df.columns.tolist()
-        
-        # Convert DataFrame to list of lists (including headers)
-        data_to_upload = [headers] + joined_df.values.tolist()
-        
-        # Convert any NaN/None values to empty strings for Google Sheets
-        for i, row in enumerate(data_to_upload):
-            for j, cell in enumerate(row):
-                if pd.isna(cell) or cell is None:
-                    data_to_upload[i][j] = ''
-                else:
-                    data_to_upload[i][j] = str(cell)
-        
-        # Upload data in chunks to avoid API limits
-        chunk_size = 1000  # Adjust based on your data size and API limits
-        total_rows = len(data_to_upload)
-        
-        for start_row in range(0, total_rows, chunk_size):
-            end_row = min(start_row + chunk_size, total_rows)
-            chunk_data = data_to_upload[start_row:end_row]
+        if success:
+            print("✅ Data successfully uploaded to SharePoint!")
+            print(f"📊 Final results:")
+            print(f"  - Total records processed: {len(final_df)}")
+            print(f"  - Records with QA matched: {final_df['QA'].notna().sum()}")
+            print(f"  - Records with Leader matched: {final_df['Tên Trưởng ca'].notna().sum()}")
+        else:
+            print("❌ Failed to upload data to SharePoint")
             
-            # Define the range for this chunk
-            start_cell = f'A{start_row + 1}'
-            end_cell = f'{chr(65 + len(headers) - 1)}{start_row + len(chunk_data)}'
-            range_name = f'{start_cell}:{end_cell}'
+            # Fallback: save locally
+            print("💾 Saving data locally as backup...")
+            local_filename = "Data_KNKH_hybrid_backup.xlsx"
+            with pd.ExcelWriter(local_filename, engine='openpyxl') as writer:
+                final_df.to_excel(writer, sheet_name='Data_KNKH', index=False)
+                
+                # Create debug sheet
+                debug_df = final_df[['Mã ticket', 'Ngày SX', 'Item', 'Line', 'Giờ', 'QA', 'Tên Trưởng ca', 'debug_info']]
+                debug_df.head(500).to_excel(writer, sheet_name='Debug_Info', index=False)
             
-            print(f"Uploading rows {start_row + 1} to {start_row + len(chunk_data)} ({range_name})")
-            
-            # Upload this chunk
-            output_worksheet.update(range_name, chunk_data, value_input_option='USER_ENTERED')
-        
-        print(f"✓ Successfully wrote {len(joined_df)} rows to Google Sheets")
-        print(f"✓ Data written to: {output_sheet.url}")
-        
-        # Optionally create a debug sheet
-        try:
-            debug_worksheet = output_sheet.worksheet('Debug_Info')
-            print("Found existing 'Debug_Info' worksheet")
-        except:
-            print("Creating new 'Debug_Info' worksheet for debugging")
-            debug_worksheet = output_sheet.add_worksheet(title='Debug_Info', rows=510, cols=10)
-        
-        # Clear and upload debug data (first 500 rows only)
-        debug_worksheet.clear()
-        debug_df = joined_df[['Mã ticket', 'Ngày SX', 'Item', 'Line', 'Giờ', 'QA', 'Tên Trưởng ca', 'debug_info']].head(500)
-        
-        debug_headers = debug_df.columns.tolist()
-        debug_data = [debug_headers] + debug_df.values.tolist()
-        
-        # Convert debug data
-        for i, row in enumerate(debug_data):
-            for j, cell in enumerate(row):
-                if pd.isna(cell) or cell is None:
-                    debug_data[i][j] = ''
-                else:
-                    debug_data[i][j] = str(cell)
-        
-        debug_worksheet.update('A1', debug_data, value_input_option='USER_ENTERED')
-        print("✓ Debug information uploaded to 'Debug_Info' sheet")
-        
+            print(f"Data saved locally to {local_filename}")
+            sys.exit(1)
+
     except Exception as e:
-        print(f"Error writing to Google Sheets: {str(e)}")
-        
-        # Fallback: save locally
-        print("\nFalling back to local save...")
-        local_filename = "Data_KNKH_output.xlsx"
-        
-        # Import openpyxl for local save fallback
-        try:
-            from openpyxl import Workbook
-        except ImportError:
-            print("openpyxl not available, saving as CSV instead")
-            joined_df.to_csv("Data_KNKH_output.csv", index=False)
-            print(f"Data saved locally to Data_KNKH_output.csv")
-            return
-        
-        with pd.ExcelWriter(local_filename, engine='openpyxl') as writer:
-            joined_df.to_excel(writer, sheet_name='Integrated_Data', index=False)
-            
-            # Create debug sheet
-            debug_df = joined_df[['Mã ticket', 'Ngày SX', 'Item', 'Line', 'Giờ', 'QA', 'Tên Trưởng ca', 'debug_info']]
-            debug_df.head(500).to_excel(writer, sheet_name='Debug_Info', index=False)
-        
-        print(f"Data saved locally to {local_filename}")
-        print("Please upload this file manually or check your Google Sheets permissions")
-        return
+        print(f"❌ Error during SharePoint upload: {str(e)}")
+        print(f"Traceback: {traceback.format_exc()}")
+        sys.exit(1)
+
+    print("\n" + "="*80)
+    print("✅ HYBRID INTEGRATION COMPLETED SUCCESSFULLY!")
+    print("="*80)
 
 if __name__ == "__main__":
     main()
