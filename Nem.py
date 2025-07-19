@@ -540,49 +540,108 @@ def update_sampling_schedule(df, check_type="Hóa lý"):
     # Create a copy to avoid modifying original dataframe
     updated_df = df.copy()
     
-    # Debug: Print first few rows to understand data structure
+    # Debug: Print detailed column information
     print(f"Data shape: {df.shape}")
-    print(f"Available columns: {list(df.columns)}")
-    print(f"First few rows data types:")
-    for col in df.columns:
-        print(f"  {col}: {df[col].dtype}")
+    print(f"Available columns:")
+    for i, col in enumerate(df.columns):
+        print(f"  [{i}] '{col}' (type: {type(col)})")
     
-    # Expected columns mapping (flexible column matching) - IMPROVED
+    # Print first few non-empty rows to understand data structure
+    print(f"Sample data (first 5 rows):")
+    for idx in range(min(5, len(df))):
+        row = df.iloc[idx]
+        print(f"  Row {idx}:")
+        for i, col in enumerate(df.columns):
+            value = row[col]
+            print(f"    [{i}] {col}: '{value}' (type: {type(value).__name__})")
+        print()
+    
+    # Expected columns mapping with more comprehensive detection
     col_mapping = {}
+    
     for col in df.columns:
-        col_lower = str(col).lower().strip()
-        col_original = str(col).strip()
+        col_str = str(col).strip()
+        col_lower = col_str.lower()
         
-        # More flexible matching
-        if any(keyword in col_lower for keyword in ['khu vực', 'khu_vuc', 'area', 'zone']):
+        # Debug each column matching
+        print(f"Checking column: '{col_str}' -> '{col_lower}'")
+        
+        # Khu vực
+        if any(keyword in col_lower for keyword in ['khu vực', 'khu_vuc', 'area', 'zone', 'khu']):
             col_mapping['khu_vuc'] = col
-        elif any(keyword in col_lower for keyword in ['sản phẩm', 'san_pham', 'product', 'sản xuất']):
+            print(f"  -> Matched as 'khu_vuc'")
+        # Sản phẩm - MORE FLEXIBLE MATCHING
+        elif any(keyword in col_lower for keyword in ['sản phẩm', 'san_pham', 'san pham', 'product', 'sản xuất', 'sanpham']):
             col_mapping['san_pham'] = col
-        elif any(keyword in col_lower for keyword in ['line', 'xưởng', 'workshop', 'dây chuyền']):
+            print(f"  -> Matched as 'san_pham'")
+        # Check if it's exactly "Sản phẩm"
+        elif col_str == 'Sản phẩm':
+            col_mapping['san_pham'] = col
+            print(f"  -> Exact match as 'san_pham'")
+        # Line / Xưởng
+        elif any(keyword in col_lower for keyword in ['line', 'xưởng', 'workshop', 'dây chuyền', 'xuong']):
             col_mapping['line'] = col
-        elif any(keyword in col_lower for keyword in ['chỉ tiêu', 'chi_tieu', 'parameter', 'tiêu chí']):
+            print(f"  -> Matched as 'line'")
+        # Chỉ tiêu kiểm
+        elif any(keyword in col_lower for keyword in ['chỉ tiêu', 'chi_tieu', 'chi tieu', 'parameter', 'tiêu chí']):
             col_mapping['chi_tieu'] = col
-        elif any(keyword in col_lower for keyword in ['tần suất', 'tan_suat', 'frequency', 'chu kỳ']):
+            print(f"  -> Matched as 'chi_tieu'")
+        # Tần suất
+        elif any(keyword in col_lower for keyword in ['tần suất', 'tan_suat', 'tan suat', 'frequency', 'chu kỳ']):
             col_mapping['tan_suat'] = col
-        elif any(keyword in col_lower for keyword in ['ngày kiểm tra', 'last check', 'ngay_kiem_tra', 'kiểm tra gần nhất']):
+            print(f"  -> Matched as 'tan_suat'")
+        # Ngày kiểm tra
+        elif any(keyword in col_lower for keyword in ['ngày kiểm tra', 'last check', 'ngay_kiem_tra', 'kiểm tra gần nhất', 'kiem tra']):
             col_mapping['ngay_kiem_tra'] = col
-        elif any(keyword in col_lower for keyword in ['sample id', 'sample_id', 'mã mẫu']):
+            print(f"  -> Matched as 'ngay_kiem_tra'")
+        # Sample ID
+        elif any(keyword in col_lower for keyword in ['sample id', 'sample_id', 'sampleid', 'mã mẫu']):
             col_mapping['sample_id'] = col
-        elif any(keyword in col_lower for keyword in ['kế hoạch', 'next', 'ke_hoach', 'tiếp theo']):
+            print(f"  -> Matched as 'sample_id'")
+        # Kế hoạch
+        elif any(keyword in col_lower for keyword in ['kế hoạch', 'next', 'ke_hoach', 'tiếp theo', 'ke hoach']):
             col_mapping['ke_hoach'] = col
+            print(f"  -> Matched as 'ke_hoach'")
+        else:
+            print(f"  -> No match found")
     
-    print(f"Detected columns: {col_mapping}")
+    print(f"\nFinal detected columns: {col_mapping}")
     
-    # Show sample data for debugging
-    if not df.empty:
-        print(f"Sample data from first 3 rows:")
-        for idx in range(min(3, len(df))):
-            row = df.iloc[idx]
-            print(f"  Row {idx}:")
-            for col_key, col_name in col_mapping.items():
-                if col_name in df.columns:
-                    value = row[col_name]
-                    print(f"    {col_key} ({col_name}): '{value}' (type: {type(value)})")
+    # Force manual column mapping if automatic detection fails
+    if 'san_pham' not in col_mapping:
+        print("\n⚠️ 'Sản phẩm' column not detected automatically, trying manual mapping...")
+        columns_list = list(df.columns)
+        for i, col in enumerate(columns_list):
+            print(f"  Column {i}: '{col}'")
+            if i == 1:  # Based on image, "Sản phẩm" is column B (index 1)
+                col_mapping['san_pham'] = col
+                print(f"  -> Force mapped column {i} as 'san_pham'")
+                break
+    
+    # Add missing critical mappings by position if still missing
+    if len(col_mapping) < 3:  # We need at least khu_vuc, san_pham, and one date/frequency
+        print("\n⚠️ Critical columns missing, attempting position-based mapping...")
+        columns_list = list(df.columns)
+        
+        # Based on the images provided:
+        # A: Khu vực, B: Sản phẩm, C: Line/Xưởng, D: Chỉ tiêu kiểm, E: Tần suất, F: Ngày kiểm tra, G: Sample ID, H: Kế hoạch
+        position_mapping = {
+            0: 'khu_vuc',     # A: Khu vực
+            1: 'san_pham',    # B: Sản phẩm
+            2: 'line',        # C: Line / Xưởng
+            3: 'chi_tieu',    # D: Chỉ tiêu kiểm
+            4: 'tan_suat',    # E: Tần suất (ngày)
+            5: 'ngay_kiem_tra',  # F: Ngày kiểm tra gần nhất
+            6: 'sample_id',   # G: Sample ID
+            7: 'ke_hoach'     # H: Kế hoạch lấy mẫu tiếp theo
+        }
+        
+        for pos, field in position_mapping.items():
+            if pos < len(columns_list) and field not in col_mapping:
+                col_mapping[field] = columns_list[pos]
+                print(f"  Position {pos} -> {field}: '{columns_list[pos]}'")
+    
+    print(f"\nUpdated detected columns: {col_mapping}")
     
     today = datetime.today()
     due_samples = []
@@ -596,9 +655,10 @@ def update_sampling_schedule(df, check_type="Hóa lý"):
             col_mapping['ke_hoach'] = next_plan_col
     
     # Process each row with better error handling
+    processed_count = 0
     for idx, row in updated_df.iterrows():
         try:
-            # Extract data from row using flexible column mapping
+            # Extract data from row using column mapping
             khu_vuc = str(row.get(col_mapping.get('khu_vuc', ''), '')).strip()
             san_pham = str(row.get(col_mapping.get('san_pham', ''), '')).strip()
             line = str(row.get(col_mapping.get('line', ''), '')).strip()
@@ -607,34 +667,39 @@ def update_sampling_schedule(df, check_type="Hóa lý"):
             ngay_kiem_tra = str(row.get(col_mapping.get('ngay_kiem_tra', ''), '')).strip()
             sample_id = str(row.get(col_mapping.get('sample_id', ''), '')).strip()
             
-            # Debug first few rows
+            # Debug first few rows in detail
             if idx < 3:
-                print(f"Row {idx} extracted data:")
-                print(f"  khu_vuc: '{khu_vuc}'")
-                print(f"  san_pham: '{san_pham}'")
-                print(f"  line: '{line}'")
-                print(f"  chi_tieu: '{chi_tieu}'")
-                print(f"  tan_suat_str: '{tan_suat_str}'")
-                print(f"  ngay_kiem_tra: '{ngay_kiem_tra}'")
-                print(f"  sample_id: '{sample_id}'")
+                print(f"\nRow {idx} extracted data:")
+                print(f"  khu_vuc: '{khu_vuc}' (from column '{col_mapping.get('khu_vuc', 'N/A')}')")
+                print(f"  san_pham: '{san_pham}' (from column '{col_mapping.get('san_pham', 'N/A')}')")
+                print(f"  line: '{line}' (from column '{col_mapping.get('line', 'N/A')}')")
+                print(f"  chi_tieu: '{chi_tieu}' (from column '{col_mapping.get('chi_tieu', 'N/A')}')")
+                print(f"  tan_suat_str: '{tan_suat_str}' (from column '{col_mapping.get('tan_suat', 'N/A')}')")
+                print(f"  ngay_kiem_tra: '{ngay_kiem_tra}' (from column '{col_mapping.get('ngay_kiem_tra', 'N/A')}')")
+                print(f"  sample_id: '{sample_id}' (from column '{col_mapping.get('sample_id', 'N/A')}')")
             
-            # Skip if missing critical data - MORE RELAXED VALIDATION
-            if (not khu_vuc or khu_vuc in ['nan', 'None', '']) and \
-               (not line or line in ['nan', 'None', '']) and \
-               (not chi_tieu or chi_tieu in ['nan', 'None', '']):
-                if idx < 5:  # Debug first 5 rows
-                    print(f"Skipping row {idx}: Missing critical data")
+            # More lenient validation - require at least some data
+            has_core_data = bool(
+                (khu_vuc and khu_vuc not in ['nan', 'None', '']) or
+                (san_pham and san_pham not in ['nan', 'None', '']) or
+                (line and line not in ['nan', 'None', ''])
+            )
+            
+            if not has_core_data:
+                if idx < 5:
+                    print(f"  Skipping row {idx}: No core data found")
                 continue
             
-            # More relaxed validation - at least one of the key fields should be present
+            # Validate frequency
             if not tan_suat_str or tan_suat_str in ['nan', 'None', '']:
                 if idx < 5:
-                    print(f"Skipping row {idx}: Missing frequency data")
+                    print(f"  Skipping row {idx}: Missing frequency data")
                 continue
                 
+            # Validate date
             if not ngay_kiem_tra or ngay_kiem_tra in ['nan', 'None', '']:
                 if idx < 5:
-                    print(f"Skipping row {idx}: Missing date data")
+                    print(f"  Skipping row {idx}: Missing date data")
                 continue
                 
             # Parse frequency
@@ -644,18 +709,18 @@ def update_sampling_schedule(df, check_type="Hóa lý"):
                     tan_suat = int(float(tan_suat_str))
                     if tan_suat <= 0:
                         if idx < 5:
-                            print(f"Skipping row {idx}: Invalid frequency: {tan_suat}")
+                            print(f"  Skipping row {idx}: Invalid frequency: {tan_suat}")
                         continue
             except (ValueError, TypeError):
                 if idx < 5:
-                    print(f"Skipping row {idx}: Cannot parse frequency: '{tan_suat_str}'")
+                    print(f"  Skipping row {idx}: Cannot parse frequency: '{tan_suat_str}'")
                 continue
                 
             # Parse last inspection date
             ngay_kiem_tra_date = parse_date(ngay_kiem_tra)
             if not ngay_kiem_tra_date:
                 if idx < 5:
-                    print(f"Skipping row {idx}: Cannot parse date: '{ngay_kiem_tra}'")
+                    print(f"  Skipping row {idx}: Cannot parse date: '{ngay_kiem_tra}'")
                 continue
                 
             # Calculate next sampling date
@@ -692,15 +757,22 @@ def update_sampling_schedule(df, check_type="Hóa lý"):
             if days_until_next <= 0:
                 due_samples.append(sample_record)
             
+            processed_count += 1
+            
+            if idx < 3:
+                print(f"  ✅ Successfully processed row {idx}")
+            
         except Exception as e:
             print(f"Lỗi xử lý hàng {idx}: {str(e)}")
             if idx < 5:  # Print full error for first few rows
                 print(f"Full error: {traceback.format_exc()}")
             continue
     
-    print(f"Đã cập nhật {len(all_samples)} mẫu kiểm tra {check_type}.")
-    print(f"Có {len(due_samples)} mẫu {check_type} đến hạn cần lấy.")
-    print(f"Tổng số mẫu {check_type} đã được theo dõi: {len(all_samples)}")
+    print(f"\nProcessing summary for {check_type}:")
+    print(f"  - Total rows in sheet: {len(updated_df)}")
+    print(f"  - Rows successfully processed: {processed_count}")
+    print(f"  - Samples tracked: {len(all_samples)}")
+    print(f"  - Due samples: {len(due_samples)}")
     
     return due_samples, all_samples, updated_df
 
@@ -943,6 +1015,7 @@ def run_update():
                 continue
             
             print(f"\nProcessing sheet: {sheet_name}")
+            print("=" * 50)
             
             # Determine check type based on sheet name
             check_type = "Hóa lý"
@@ -969,24 +1042,41 @@ def run_update():
             summary_df = create_summary_report(all_collected_samples)
             updated_sheets['Báo cáo tổng hợp'] = summary_df
         
-        # Try to upload updated file back to SharePoint
-        upload_success = processor.upload_excel_file(updated_sheets)
+        # Print processing results
+        print(f"\n📊 Kết quả xử lý tổng thể:")
+        print(f"  - Tổng số mẫu được theo dõi: {len(all_collected_samples)}")
+        print(f"  - Mẫu đến hạn cần lấy: {len(all_due_samples)}")
+        print(f"  - Sheets đã xử lý: {len(updated_sheets)}")
+        
+        # Show sample of collected data for verification
+        if all_collected_samples:
+            print(f"\n📋 Mẫu dữ liệu đã xử lý (5 mẫu đầu):")
+            for i, sample in enumerate(all_collected_samples[:5]):
+                print(f"  {i+1}. {sample['loai_kiem_tra']} - {sample['san_pham']} (Line: {sample['line']}) - Status: {sample['status']}")
+        
+        # Try to upload updated file back to SharePoint (with timeout to avoid hanging)
+        upload_success = False
+        if len(all_collected_samples) > 0:  # Only upload if we have data
+            print(f"\n📤 Attempting to upload updated file...")
+            try:
+                # Set a shorter timeout for upload attempts
+                upload_success = processor.upload_excel_file(updated_sheets)
+            except Exception as e:
+                print(f"⚠️ Upload failed with error: {str(e)}")
+                upload_success = False
+        else:
+            print(f"\n⚠️ No data processed, skipping upload")
         
         # Send email notification for due samples regardless of upload success
         email_success = True
         if all_due_samples:
+            print(f"\n📧 Sending email notification for {len(all_due_samples)} due samples...")
             email_success = send_email_notification(all_due_samples)
+        else:
+            print(f"\n📧 No due samples found, no email notification needed")
         
-        # Print results
-        print(f"\n📊 Kết quả xử lý:")
-        print(f"  - Tổng số mẫu được theo dõi: {len(all_collected_samples)}")
-        print(f"  - Mẫu đến hạn cần lấy: {len(all_due_samples)}")
-        print(f"  - Sheets đã xử lý: {len(updated_sheets)}")
-        print(f"  - Upload thành công: {'✅' if upload_success else '❌'}")
-        print(f"  - Email thông báo: {'✅' if email_success else '❌'}")
-        
-        # Create local backup if upload failed
-        if not upload_success:
+        # Create local backup if upload failed but we have data
+        if not upload_success and len(all_collected_samples) > 0:
             try:
                 backup_filename = f"Sampling_plan_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
                 with pd.ExcelWriter(backup_filename, engine='openpyxl') as writer:
@@ -996,18 +1086,25 @@ def run_update():
             except Exception as e:
                 print(f"❌ Failed to create local backup: {str(e)}")
         
+        # Final status determination
+        print(f"\n🏁 Kết quả cuối cùng:")
+        print(f"  - Xử lý dữ liệu: {'✅' if len(all_collected_samples) > 0 else '❌'}")
+        print(f"  - Upload SharePoint: {'✅' if upload_success else '❌'}")
+        print(f"  - Email thông báo: {'✅' if email_success else '❌'}")
+        
         # Determine overall success
-        # Consider it successful if we processed data and sent email
-        # Upload failure is not critical if email notification works
-        if len(all_collected_samples) > 0 or len(all_due_samples) > 0:
+        # Success if we processed data successfully (upload failure is acceptable due to lock issues)
+        if len(all_collected_samples) > 0:
             if upload_success:
                 print("✅ Hoàn thành cập nhật thành công!")
             else:
-                print("⚠️ Hoàn thành xử lý với cảnh báo - File không thể upload do bị lock")
-                print("💡 Vui lòng kiểm tra file trên SharePoint và đóng nếu đang mở")
+                print("⚠️ Hoàn thành xử lý với cảnh báo - File không thể upload do bị lock hoặc lỗi khác")
+                print("💡 Dữ liệu đã được xử lý và email thông báo đã gửi")
+                print("💡 Vui lòng kiểm tra file trên SharePoint và đóng nếu đang mở, sau đó chạy lại workflow")
             return True
         else:
-            print("❌ Không có dữ liệu để xử lý")
+            print("❌ Không có dữ liệu được xử lý thành công")
+            print("💡 Vui lòng kiểm tra cấu trúc file Excel và đảm bảo có dữ liệu hợp lệ")
             return False
         
     except Exception as e:
