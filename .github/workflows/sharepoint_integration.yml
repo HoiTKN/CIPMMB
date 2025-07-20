@@ -3,7 +3,7 @@ name: QA Data Processing - Delegation Flow (Daily)
 on:
   # Chạy hàng ngày lúc 8:00 AM Vietnam time (1:00 AM UTC)
   schedule:
-    - cron: '0 1 * * *'
+    - cron: '0 0 * * *'
   
   # Cho phép chạy thủ công
   workflow_dispatch:
