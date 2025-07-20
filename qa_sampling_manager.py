@@ -871,7 +871,7 @@ def send_email_notification(due_samples):
         msg['From'] = 'hoitkn@msc.masangroup.com'
         
         # Recipients
-        recipients = ["ktcnnemmb@msc.masangroup.com"]
+        recipients = ["qatpmbmi@msc.masangroup.com"]
         msg['To'] = ", ".join(recipients)
         
         # Group samples by type for better organization in email
