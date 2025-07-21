@@ -3,7 +3,7 @@ name: Hybrid Google Sheets + SharePoint Integration
 on:
   schedule:
     # Run daily at 1 AM UTC (8 AM Vietnam time)
-    - cron: '0 1 * * *'
+    - cron: '0 0 * * *'
   
   # Allow manual trigger with debug option
   workflow_dispatch:
