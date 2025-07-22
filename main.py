@@ -1050,170 +1050,209 @@ def send_email_report(updated_values):
         print("  4. Column mapping issues")
         return True
 
-# Helper function to send area-specific emails with Outlook SMTP
+# Helper function to send area-specific emails with Graph API
 def send_area_specific_email(filtered_rows, recipients, area_name, status_img_buffer, results_img_buffer):
     """
-    Send an email for a specific area with the filtered rows using Outlook SMTP
+    Send an email for a specific area with the filtered rows using Microsoft Graph API
     """
-    # Create email
-    msg = MIMEMultipart()
-    msg['Subject'] = f'Báo cáo vệ sinh thiết bị - {area_name} - {datetime.today().strftime("%d/%m/%Y")}'
-    msg['From'] = 'hoitkn@msc.masangroup.com'
-    msg['To'] = ", ".join(recipients)
-    
-    # Prepare data for email summary
-    empty_tanks = [row for row in filtered_rows if not str(row[7]).strip()]
-    filled_tanks = [row for row in filtered_rows if str(row[7]).strip()]
-    
-    # HTML content with product status in a single table
-    html_content = f"""
-    <html>
-    <head>
-        <meta charset="UTF-8">
-        <style>
-            body {{ font-family: Arial, sans-serif; }}
-            table {{ border-collapse: collapse; width: 100%; margin-top: 20px; }}
-            th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
-            th {{ background-color: #f2f2f2; color: #333; }}
-            .overdue {{ background-color: #ffcccc; }}
-            .due-today {{ background-color: #ffeb99; }}
-            .due-soon {{ background-color: #e6ffcc; }}
-            .has-product {{ color: #cc0000; font-weight: bold; }}
-            .empty {{ color: #009900; }}
-            h2 {{ color: #003366; }}
-            h3 {{ color: #004d99; margin-top: 25px; }}
-            .summary {{ margin: 20px 0; }}
-            .footer {{ margin-top: 30px; font-size: 0.9em; color: #666; }}
-        </style>
-    </head>
-    <body>
-        <h2>Báo cáo vệ sinh thiết bị - {area_name} - {datetime.today().strftime("%d/%m/%Y")}</h2>
-        
-        <div class="summary">
-            <p><strong>Tổng số thiết bị cần vệ sinh:</strong> {len(filtered_rows)}</p>
-            <p><strong>Thiết bị trống có thể vệ sinh ngay:</strong> {len(empty_tanks)}</p>
-            <p><strong>Thiết bị đang chứa sản phẩm cần lên kế hoạch:</strong> {len(filled_tanks)}</p>
-        </div>
-        
-        <h3>Danh sách thiết bị cần vệ sinh:</h3>
-        <table>
-            <thead>
-                <tr>
-                    <th>Khu vực</th>
-                    <th>Thiết bị</th>
-                    <th>Phương pháp</th>
-                    <th>Tần suất (ngày)</th>
-                    <th>Ngày vệ sinh gần nhất (KQ)</th>
-                    <th>Ngày kế hoạch vệ sinh tiếp theo (KH)</th>
-                    <th>Trạng thái</th>
-                    <th>Đang chứa sản phẩm</th>
-                </tr>
-            </thead>
-            <tbody>
-    """
-    
-    # Add all tanks to the table (both empty and with product)
-    # Sort the rows to prioritize empty tanks first
-    sorted_rows = sorted(filtered_rows, key=lambda row: 1 if str(row[7]).strip() else 0)
-    
-    for row in sorted_rows:
-        area, device, method, freq_str, last_cleaning, next_plan_str, status, has_product = row
-        
-        # Define CSS class based on status
-        css_class = ""
-        if status == "Quá hạn":
-            css_class = "overdue"
-        elif status == "Đến hạn":
-            css_class = "due-today"
-        
-        # Define product status class
-        product_class = "has-product" if str(has_product).strip() else "empty"
-        
-        html_content += f"""
-                <tr class="{css_class}">
-                    <td>{area}</td>
-                    <td>{device}</td>
-                    <td>{method}</td>
-                    <td>{freq_str}</td>
-                    <td>{last_cleaning}</td>
-                    <td>{next_plan_str}</td>
-                    <td>{status}</td>
-                    <td class="{product_class}">{has_product}</td>
-                </tr>
-        """
-    
-    html_content += """
-            </tbody>
-        </table>
-        
-        <div class="footer">
-            <p>Vui lòng xem SharePoint để biết chi tiết và cập nhật trạng thái của các thiết bị.</p>
-            <p>Email này được tự động tạo bởi hệ thống. Vui lòng không trả lời.</p>
-        </div>
-    </body>
-    </html>
-    """
-    
-    # Attach HTML
-    msg.attach(MIMEText(html_content, "html", "utf-8"))
-    
-    # Attach status chart if available
-    if status_img_buffer:
-        status_img_buffer.seek(0)  # Reset buffer position to start
-        part = MIMEBase('application', 'octet-stream')
-        part.set_payload(status_img_buffer.read())
-        encoders.encode_base64(part)
-        part.add_header('Content-Disposition', 'attachment; filename="cleaning_status.png"')
-        msg.attach(part)
-        
-    # Attach results chart if available
-    if results_img_buffer:
-        results_img_buffer.seek(0)  # Reset buffer position to start
-        part = MIMEBase('application', 'octet-stream')
-        part.set_payload(results_img_buffer.read())
-        encoders.encode_base64(part)
-        part.add_header('Content-Disposition', 'attachment; filename="cleaning_results.png"')
-        msg.attach(part)
-    
-    # Send email using Outlook SMTP
-    smtp_server = 'smtp-mail.outlook.com'
-    smtp_port = 587
-    
     try:
-        with smtplib.SMTP(smtp_server, smtp_port) as server:
-            print(f"📧 Connecting to Outlook SMTP server: {smtp_server}:{smtp_port}")
-            
-            # Start TLS encryption
-            server.starttls()
-            print("✅ TLS encryption started")
-            
-            # Get email password from environment variable
-            email_password = os.environ.get('EMAIL_PASSWORD')
-            if not email_password:
-                print("❌ Cảnh báo: Không tìm thấy mật khẩu email trong biến môi trường EMAIL_PASSWORD.")
-                print("💡 Đối với Outlook, bạn cần sử dụng App Password thay vì mật khẩu thường.")
-                return False
-            
-            # Authenticate with Outlook
-            print(f"🔐 Authenticating with email: hoitkn@msc.masangroup.com")
-            server.login("hoitkn@msc.masangroup.com", email_password)
-            print("✅ Authentication successful")
-            
-            # Send the message
-            print(f"📤 Sending email to {len(recipients)} recipients...")
-            server.send_message(msg)
-            print("✅ Email sent successfully")
-            
-    except smtplib.SMTPAuthenticationError as e:
-        print(f"❌ SMTP Authentication Error: {str(e)}")
-        print("💡 For Outlook, use App Password instead of regular password")
-        return False
+        # Get access token from the processor (reuse SharePoint token)
+        from update_cleaning_schedule import processor  # Access the global processor
         
+        if not processor or not processor.access_token:
+            print("❌ No valid access token for Graph API")
+            return False
+            
+        print(f"📧 Preparing email via Microsoft Graph API for {area_name}")
+        
+        # Prepare data for email summary
+        empty_tanks = [row for row in filtered_rows if not str(row[7]).strip()]
+        filled_tanks = [row for row in filtered_rows if str(row[7]).strip()]
+        
+        # Create HTML content
+        html_content = f"""
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <style>
+                body {{ font-family: Arial, sans-serif; }}
+                table {{ border-collapse: collapse; width: 100%; margin-top: 20px; }}
+                th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+                th {{ background-color: #f2f2f2; color: #333; }}
+                .overdue {{ background-color: #ffcccc; }}
+                .due-today {{ background-color: #ffeb99; }}
+                .due-soon {{ background-color: #e6ffcc; }}
+                .has-product {{ color: #cc0000; font-weight: bold; }}
+                .empty {{ color: #009900; }}
+                h2 {{ color: #003366; }}
+                h3 {{ color: #004d99; margin-top: 25px; }}
+                .summary {{ margin: 20px 0; }}
+                .footer {{ margin-top: 30px; font-size: 0.9em; color: #666; }}
+            </style>
+        </head>
+        <body>
+            <h2>Báo cáo vệ sinh thiết bị - {area_name} - {datetime.today().strftime("%d/%m/%Y")}</h2>
+            
+            <div class="summary">
+                <p><strong>Tổng số thiết bị cần vệ sinh:</strong> {len(filtered_rows)}</p>
+                <p><strong>Thiết bị trống có thể vệ sinh ngay:</strong> {len(empty_tanks)}</p>
+                <p><strong>Thiết bị đang chứa sản phẩm cần lên kế hoạch:</strong> {len(filled_tanks)}</p>
+            </div>
+            
+            <h3>Danh sách thiết bị cần vệ sinh:</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Khu vực</th>
+                        <th>Thiết bị</th>
+                        <th>Phương pháp</th>
+                        <th>Tần suất (ngày)</th>
+                        <th>Ngày vệ sinh gần nhất (KQ)</th>
+                        <th>Ngày kế hoạch vệ sinh tiếp theo (KH)</th>
+                        <th>Trạng thái</th>
+                        <th>Đang chứa sản phẩm</th>
+                    </tr>
+                </thead>
+                <tbody>
+        """
+        
+        # Add all tanks to the table (both empty and with product)
+        # Sort the rows to prioritize empty tanks first
+        sorted_rows = sorted(filtered_rows, key=lambda row: 1 if str(row[7]).strip() else 0)
+        
+        for row in sorted_rows:
+            area, device, method, freq_str, last_cleaning, next_plan_str, status, has_product = row
+            
+            # Define CSS class based on status
+            css_class = ""
+            if status == "Quá hạn":
+                css_class = "overdue"
+            elif status == "Đến hạn":
+                css_class = "due-today"
+            
+            # Define product status class
+            product_class = "has-product" if str(has_product).strip() else "empty"
+            
+            html_content += f"""
+                    <tr class="{css_class}">
+                        <td>{area}</td>
+                        <td>{device}</td>
+                        <td>{method}</td>
+                        <td>{freq_str}</td>
+                        <td>{last_cleaning}</td>
+                        <td>{next_plan_str}</td>
+                        <td>{status}</td>
+                        <td class="{product_class}">{has_product}</td>
+                    </tr>
+            """
+        
+        html_content += """
+                </tbody>
+            </table>
+            
+            <div class="footer">
+                <p>Vui lòng xem SharePoint để biết chi tiết và cập nhật trạng thái của các thiết bị.</p>
+                <p>Email này được tự động tạo bởi hệ thống. Vui lòng không trả lời.</p>
+            </div>
+        </body>
+        </html>
+        """
+        
+        # Prepare email data for Graph API
+        email_data = {
+            "message": {
+                "subject": f"Báo cáo vệ sinh thiết bị - {area_name} - {datetime.today().strftime('%d/%m/%Y')}",
+                "body": {
+                    "contentType": "HTML",
+                    "content": html_content
+                },
+                "toRecipients": []
+            }
+        }
+        
+        # Add recipients
+        for recipient in recipients:
+            email_data["message"]["toRecipients"].append({
+                "emailAddress": {
+                    "address": recipient
+                }
+            })
+        
+        # Prepare attachments if available
+        attachments = []
+        
+        if status_img_buffer:
+            status_img_buffer.seek(0)
+            status_img_data = status_img_buffer.read()
+            status_img_b64 = base64.b64encode(status_img_data).decode('utf-8')
+            
+            attachments.append({
+                "@odata.type": "#microsoft.graph.fileAttachment",
+                "name": "cleaning_status.png",
+                "contentType": "image/png",
+                "contentBytes": status_img_b64
+            })
+        
+        if results_img_buffer:
+            results_img_buffer.seek(0)
+            results_img_data = results_img_buffer.read()
+            results_img_b64 = base64.b64encode(results_img_data).decode('utf-8')
+            
+            attachments.append({
+                "@odata.type": "#microsoft.graph.fileAttachment", 
+                "name": "cleaning_results.png",
+                "contentType": "image/png",
+                "contentBytes": results_img_b64
+            })
+        
+        if attachments:
+            email_data["message"]["attachments"] = attachments
+        
+        # Send email via Graph API
+        graph_url = "https://graph.microsoft.com/v1.0/me/sendMail"
+        headers = {
+            'Authorization': f'Bearer {processor.access_token}',
+            'Content-Type': 'application/json'
+        }
+        
+        print(f"📤 Sending email via Graph API to {len(recipients)} recipients...")
+        print(f"🔗 Graph URL: {graph_url}")
+        
+        response = requests.post(graph_url, headers=headers, json=email_data, timeout=60)
+        
+        if response.status_code == 202:
+            print("✅ Email sent successfully via Graph API")
+            print(f"✅ Email cho {area_name} đã được gửi đến {len(recipients)} người nhận.")
+            return True
+        elif response.status_code == 401:
+            print("❌ Graph API Authentication Error - Token may have expired")
+            print("🔄 Attempting to refresh token...")
+            if processor.refresh_access_token():
+                print("✅ Token refreshed, retrying email send...")
+                headers['Authorization'] = f'Bearer {processor.access_token}'
+                response = requests.post(graph_url, headers=headers, json=email_data, timeout=60)
+                if response.status_code == 202:
+                    print("✅ Email sent successfully after token refresh")
+                    return True
+            print("❌ Failed to send email even after token refresh")
+            return False
+        elif response.status_code == 403:
+            print("❌ Graph API Permission Error")
+            print("💡 Please ensure Mail.Send permission is granted in Azure App Registration:")
+            print("   1. Go to Azure Portal → App registrations")
+            print("   2. Find your app → API permissions")
+            print("   3. Add Microsoft Graph → Delegated permissions → Mail.Send")
+            print("   4. Grant admin consent")
+            return False
+        else:
+            print(f"❌ Graph API Error: {response.status_code}")
+            print(f"❌ Response: {response.text[:500]}")
+            return False
+            
     except Exception as e:
-        print(f"❌ Error sending email: {str(e)}")
+        print(f"❌ Error sending email via Graph API: {str(e)}")
+        print(f"❌ Traceback: {traceback.format_exc()}")
         return False
-        
-    print(f"Email cho {area_name} đã được gửi đến {len(recipients)} người nhận.")
 
 # Main function to run everything
 def run_update():
