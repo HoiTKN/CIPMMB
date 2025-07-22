@@ -461,16 +461,82 @@ class SharePointCIPProcessor:
 
 # Helper function to parse dates in different formats
 def parse_date(date_str):
-    """Try to parse date with multiple formats"""
-    if not date_str:
+    """Try to parse date with multiple formats and handle Excel date formats"""
+    if not date_str or str(date_str).strip() in ['nan', 'None', '', 'NaT']:
         return None
-        
-    date_formats = ['%B %d, %Y', '%d/%m/%Y', '%Y-%m-%d', '%m/%d/%Y', '%d-%m-%Y']
+    
+    # If it's already a datetime object, return it
+    if isinstance(date_str, datetime):
+        return date_str
+    
+    # If it's a pandas timestamp, convert it
+    if hasattr(date_str, 'to_pydatetime'):
+        try:
+            return date_str.to_pydatetime()
+        except:
+            pass
+    
+    # Convert to string and clean
+    date_str = str(date_str).strip()
+    
+    # Handle Excel serial dates (numbers like 45123.0)
+    try:
+        # If it's a number that could be an Excel date
+        if date_str.replace('.', '').isdigit():
+            excel_date = float(date_str)
+            # Excel date serial numbers are typically > 1 and < 50000 for reasonable dates
+            if 1 < excel_date < 50000:
+                # Excel epoch is 1900-01-01 (with some quirks)
+                excel_epoch = datetime(1900, 1, 1)
+                # Excel incorrectly treats 1900 as a leap year, so subtract 2 days
+                return excel_epoch + timedelta(days=excel_date - 2)
+    except (ValueError, TypeError):
+        pass
+    
+    # Try various date formats
+    date_formats = [
+        '%B %d, %Y',     # June 7, 2025
+        '%d/%m/%Y',      # 07/06/2025
+        '%m/%d/%Y',      # 06/07/2025
+        '%Y-%m-%d',      # 2025-06-07
+        '%d-%m-%Y',      # 07-06-2025
+        '%d %B %Y',      # 7 June 2025
+        '%d %B, %Y',     # 7 June, 2025
+        '%d/%m/%y',      # 07/06/25
+        '%m/%d/%y',      # 06/07/25
+        '%d-%m-%y',      # 07-06-25
+        '%d.%m.%Y',      # 07.06.2025
+        '%d.%m.%y',      # 07.06.25
+        '%Y/%m/%d',      # 2025/06/07
+        '%d-%b-%Y',      # 07-Jun-2025
+        '%d-%b-%y',      # 07-Jun-25
+        '%d %b %Y',      # 7 Jun 2025
+        '%d %b %y',      # 7 Jun 25
+        '%Y-%m-%d %H:%M:%S',  # 2025-06-07 00:00:00
+        '%B %d %Y',      # June 7 2025 (no comma)
+        '%b %d, %Y',     # Jun 7, 2025
+        '%b %d %Y',      # Jun 7 2025
+    ]
+    
     for fmt in date_formats:
         try:
-            return datetime.strptime(str(date_str), fmt)
-        except ValueError:
+            parsed_date = datetime.strptime(date_str, fmt)
+            # Sanity check - date should be between 1900 and 2100
+            if 1900 <= parsed_date.year <= 2100:
+                return parsed_date
+        except (ValueError, TypeError):
             continue
+    
+    # Try pandas to_datetime as last resort
+    try:
+        import pandas as pd
+        parsed_date = pd.to_datetime(date_str, dayfirst=True, errors='coerce')
+        if not pd.isna(parsed_date):
+            return parsed_date.to_pydatetime()
+    except:
+        pass
+    
+    print(f"⚠️ Warning: Could not parse date: '{date_str}'")
     return None
 
 # Main function to update cleaning schedule using SharePoint
@@ -514,27 +580,79 @@ def update_cleaning_schedule():
     today = datetime.today()
     updated_values = []
     
-    # Process each row and calculate status
+    # Check if data already has status column - maybe we don't need to calculate
+    print(f"🔍 Checking existing status data...")
+    
+    # Check if there's already a status column with data
+    existing_status_col = None
+    for col in master_plan_df.columns:
+        col_lower = str(col).lower().strip()
+        if 'trạng thái' in col_lower:
+            existing_status_col = col
+            break
+    
+    if existing_status_col:
+        print(f"✅ Found existing status column: '{existing_status_col}'")
+        existing_statuses = master_plan_df[existing_status_col].value_counts()
+        print(f"📊 Existing status breakdown:")
+        for status, count in existing_statuses.items():
+            print(f"  - '{status}': {count}")
+        
+        # If we already have status data, let's use it and just update dates
+        use_existing_status = True
+        print(f"🔄 Using existing status data instead of recalculating")
+    else:
+        print(f"⚠️ No existing status column found, will calculate status")
+        use_existing_status = False
+    
     for idx, row in master_plan_df.iterrows():
         try:
-            # Get values, handle missing columns
-            area = str(row.get('Khu vực', '')).strip() if pd.notna(row.get('Khu vực', '')) else ''
-            device = str(row.get('Thiết bị', '')).strip() if pd.notna(row.get('Thiết bị', '')) else ''
-            method = str(row.get('Phương pháp', '')).strip() if pd.notna(row.get('Phương pháp', '')) else ''
-            freq_str = str(row.get('Tần suất (ngày)', '')).strip() if pd.notna(row.get('Tần suất (ngày)', '')) else ''
-            last_cleaning = str(row.get('Ngày vệ sinh gần nhất', '')).strip() if pd.notna(row.get('Ngày vệ sinh gần nhất', '')) else ''
-            has_product = str(row.get('Đang chứa sản phẩm', '')).strip() if pd.notna(row.get('Đang chứa sản phẩm', '')) else ''
+            # Get values, handle missing columns with more flexible column name matching
+            area = ''
+            device = ''
+            method = ''
+            freq_str = ''
+            last_cleaning = ''
+            has_product = ''
+            
+            # More flexible column matching
+            for col in master_plan_df.columns:
+                col_lower = str(col).lower().strip()
+                if 'khu' in col_lower and 'vực' in col_lower:
+                    area = str(row.get(col, '')).strip() if pd.notna(row.get(col, '')) else ''
+                elif 'thiết' in col_lower and 'bị' in col_lower:
+                    device = str(row.get(col, '')).strip() if pd.notna(row.get(col, '')) else ''
+                elif 'phương' in col_lower and 'pháp' in col_lower:
+                    method = str(row.get(col, '')).strip() if pd.notna(row.get(col, '')) else ''
+                elif 'tần' in col_lower and 'suất' in col_lower:
+                    freq_str = str(row.get(col, '')).strip() if pd.notna(row.get(col, '')) else ''
+                elif 'ngày' in col_lower and 'vệ sinh' in col_lower and 'gần' in col_lower:
+                    last_cleaning = str(row.get(col, '')).strip() if pd.notna(row.get(col, '')) else ''
+                elif 'chứa' in col_lower and 'sản phẩm' in col_lower:
+                    has_product = str(row.get(col, '')).strip() if pd.notna(row.get(col, '')) else ''
+            
+            # Debug first few rows
+            if idx < 5:
+                print(f"🔍 Row {idx} extracted data:")
+                print(f"  area: '{area}', device: '{device}', method: '{method}'")
+                print(f"  freq_str: '{freq_str}', last_cleaning: '{last_cleaning}', has_product: '{has_product}'")
             
             # Skip empty rows
             if not area and not device:
+                if idx < 5:
+                    print(f"  -> Skipping empty row {idx}")
                 continue
                 
-            if not last_cleaning:
-                updated_values.append([area, device, method, freq_str, last_cleaning, "", "Chưa có dữ liệu", has_product])
+            if not last_cleaning or last_cleaning in ['nan', 'None', '']:
+                status = "Chưa có dữ liệu"
+                updated_values.append([area, device, method, freq_str, last_cleaning, "", status, has_product])
+                status_counts[status] += 1
+                if idx < 5:
+                    print(f"  -> Status: {status} (no cleaning date)")
                 continue
     
             freq = 0
-            if freq_str:
+            if freq_str and freq_str not in ['nan', 'None', '']:
                 try:
                     freq = int(float(freq_str))
                 except ValueError:
@@ -542,7 +660,11 @@ def update_cleaning_schedule():
     
             last_cleaning_date = parse_date(last_cleaning)
             if not last_cleaning_date:
-                updated_values.append([area, device, method, freq_str, last_cleaning, "", "Định dạng ngày không hợp lệ", has_product])
+                status = "Định dạng ngày không hợp lệ"
+                updated_values.append([area, device, method, freq_str, last_cleaning, "", status, has_product])
+                status_counts['Lỗi'] += 1
+                if idx < 5:
+                    print(f"  -> Status: {status} (invalid date: '{last_cleaning}')")
                 continue
     
             next_plan_date = last_cleaning_date + timedelta(days=freq)
@@ -560,14 +682,41 @@ def update_cleaning_schedule():
                 current_status = 'Quá hạn'
     
             updated_values.append([area, device, method, freq_str, last_cleaning, next_plan_str, current_status, has_product])
+            status_counts[current_status] += 1
+            processed_count += 1
+            
+            # Debug first few rows
+            if idx < 5:
+                print(f"  -> Status: {current_status} (days until next: {days_until_next})")
+                print(f"  -> Last cleaning: {last_cleaning_date.strftime('%d/%m/%Y')}, Next: {next_plan_str}")
             
             # Update the DataFrame
-            master_plan_df.at[idx, 'Ngày kế hoạch vệ sinh tiếp theo'] = next_plan_str
-            master_plan_df.at[idx, 'Trạng thái'] = current_status
+            # Find the correct column names for updating
+            for col in master_plan_df.columns:
+                col_lower = str(col).lower().strip()
+                if 'kế hoạch' in col_lower or ('ngày' in col_lower and 'tiếp theo' in col_lower):
+                    master_plan_df.at[idx, col] = next_plan_str
+                elif 'trạng thái' in col_lower:
+                    master_plan_df.at[idx, col] = current_status
             
         except Exception as e:
-            print(f"Error processing row {idx}: {str(e)}")
+            print(f"❌ Error processing row {idx}: {str(e)}")
+            status_counts['Lỗi'] += 1
             continue
+    
+    # Print processing summary
+    print(f"\n📊 Processing Summary:")
+    print(f"  - Total rows processed: {processed_count}")
+    print(f"  - Status breakdown:")
+    for status, count in status_counts.items():
+        if count > 0:
+            print(f"    - {status}: {count}")
+    
+    print(f"\n🎯 Due/Overdue Equipment Check:")
+    due_count = status_counts.get('Đến hạn', 0) + status_counts.get('Quá hạn', 0)
+    print(f"  - Equipment due for cleaning: {due_count}")
+    print(f"    - Đến hạn: {status_counts.get('Đến hạn', 0)}")
+    print(f"    - Quá hạn: {status_counts.get('Quá hạn', 0)}")
     
     # Update sheets data
     sheets_data['Master plan'] = master_plan_df
@@ -767,18 +916,53 @@ def create_results_chart():
 def send_email_report(updated_values):
     print("Đang chuẩn bị gửi email báo cáo...")
     
+    # Debug: Print all updated values to understand the data structure
+    print(f"🔍 Total updated_values: {len(updated_values)}")
+    if updated_values:
+        print(f"🔍 Sample updated_values (first 3):")
+        for i, row in enumerate(updated_values[:3]):
+            print(f"  Row {i}: {row}")
+            if len(row) > 6:
+                print(f"    Status (index 6): '{row[6]}'")
+    
     # Filter devices requiring attention
-    due_rows = [row for row in updated_values if row[6] in ['Đến hạn', 'Quá hạn']]
+    due_rows = [row for row in updated_values if len(row) > 6 and row[6] in ['Đến hạn', 'Quá hạn']]
+    
+    print(f"🔍 Filtering logic:")
+    print(f"  - Looking for status in ['Đến hạn', 'Quá hạn']")
+    print(f"  - Found {len(due_rows)} due/overdue devices")
+    
+    # Debug: Print status breakdown
+    status_breakdown = {}
+    for row in updated_values:
+        if len(row) > 6:
+            status = row[6]
+            status_breakdown[status] = status_breakdown.get(status, 0) + 1
+    
+    print(f"🔍 Status breakdown from updated_values:")
+    for status, count in status_breakdown.items():
+        print(f"  - '{status}': {count}")
     
     if due_rows:
+        print(f"✅ Found {len(due_rows)} devices requiring attention")
+        
+        # Debug: Print due devices
+        print(f"🔍 Due devices details:")
+        for i, row in enumerate(due_rows[:5]):  # Show first 5
+            print(f"  {i+1}. {row[0]} - {row[1]} - Status: {row[6]}")
+        
         try:
             # Create charts
             status_img_buffer = create_status_chart(updated_values)
             results_img_buffer = create_results_chart()
             
             # Split the devices by area
-            ro_station_rows = [row for row in due_rows if row[0] == 'Trạm RO']
-            other_area_rows = [row for row in due_rows if row[0] != 'Trạm RO']
+            ro_station_rows = [row for row in due_rows if 'trạm ro' in str(row[0]).lower()]
+            other_area_rows = [row for row in due_rows if 'trạm ro' not in str(row[0]).lower()]
+            
+            print(f"🔍 Area breakdown:")
+            print(f"  - RO station devices: {len(ro_station_rows)}")
+            print(f"  - Other area devices: {len(other_area_rows)}")
             
             # Define email recipient lists
             ro_recipients = [
@@ -792,6 +976,7 @@ def send_email_report(updated_values):
             
             # Send RO station email if there are relevant items
             if ro_station_rows:
+                print(f"📧 Sending email for RO station ({len(ro_station_rows)} devices)")
                 send_area_specific_email(
                     ro_station_rows, 
                     ro_recipients, 
@@ -802,6 +987,7 @@ def send_email_report(updated_values):
             
             # Send other areas email if there are relevant items
             if other_area_rows:
+                print(f"📧 Sending email for other areas ({len(other_area_rows)} devices)")
                 send_area_specific_email(
                     other_area_rows, 
                     other_recipients, 
@@ -810,14 +996,20 @@ def send_email_report(updated_values):
                     results_img_buffer
                 )
                 
-            print("Email đã được gửi kèm bảng HTML và biểu đồ.")
+            print("✅ Email đã được gửi kèm bảng HTML và biểu đồ.")
             return True
             
         except Exception as e:
-            print(f"Lỗi khi gửi email: {str(e)}")
+            print(f"❌ Lỗi khi gửi email: {str(e)}")
+            print(f"❌ Traceback: {traceback.format_exc()}")
             return False
     else:
-        print("Không có thiết bị đến hạn/quá hạn, không gửi email.")
+        print("⚠️ Không có thiết bị đến hạn/quá hạn, không gửi email.")
+        print("🔍 This might be due to:")
+        print("  1. Date parsing issues")
+        print("  2. Incorrect status calculation")
+        print("  3. Data structure problems")
+        print("  4. Column mapping issues")
         return True
 
 # Helper function to send area-specific emails with Outlook SMTP
