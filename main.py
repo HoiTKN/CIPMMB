@@ -580,6 +580,10 @@ def update_cleaning_schedule():
     today = datetime.today()
     updated_values = []
     
+    # Initialize counters FIRST - CRITICAL!
+    processed_count = 0
+    status_counts = {'Bình thường': 0, 'Sắp đến hạn': 0, 'Đến hạn': 0, 'Quá hạn': 0, 'Chưa có dữ liệu': 0, 'Lỗi': 0}
+    
     # Check if data already has status column - maybe we don't need to calculate
     print(f"🔍 Checking existing status data...")
     
@@ -614,6 +618,7 @@ def update_cleaning_schedule():
             freq_str = ''
             last_cleaning = ''
             has_product = ''
+            existing_status = ''
             
             # More flexible column matching
             for col in master_plan_df.columns:
@@ -630,23 +635,54 @@ def update_cleaning_schedule():
                     last_cleaning = str(row.get(col, '')).strip() if pd.notna(row.get(col, '')) else ''
                 elif 'chứa' in col_lower and 'sản phẩm' in col_lower:
                     has_product = str(row.get(col, '')).strip() if pd.notna(row.get(col, '')) else ''
+                elif 'trạng thái' in col_lower:
+                    existing_status = str(row.get(col, '')).strip() if pd.notna(row.get(col, '')) else ''
             
             # Debug first few rows
             if idx < 5:
                 print(f"🔍 Row {idx} extracted data:")
                 print(f"  area: '{area}', device: '{device}', method: '{method}'")
                 print(f"  freq_str: '{freq_str}', last_cleaning: '{last_cleaning}', has_product: '{has_product}'")
+                print(f"  existing_status: '{existing_status}'")
             
             # Skip empty rows
             if not area and not device:
                 if idx < 5:
                     print(f"  -> Skipping empty row {idx}")
                 continue
+            
+            # If we have existing status and it's valid, use it
+            if use_existing_status and existing_status and existing_status not in ['nan', 'None', '']:
+                current_status = existing_status
                 
+                # Still try to calculate next plan date if we have the data
+                next_plan_str = ''
+                if last_cleaning and last_cleaning not in ['nan', 'None', '']:
+                    if freq_str and freq_str not in ['nan', 'None', '']:
+                        try:
+                            freq = int(float(freq_str))
+                            last_cleaning_date = parse_date(last_cleaning)
+                            if last_cleaning_date:
+                                next_plan_date = last_cleaning_date + timedelta(days=freq)
+                                next_plan_str = next_plan_date.strftime('%d/%m/%Y')
+                        except (ValueError, TypeError):
+                            pass
+                
+                updated_values.append([area, device, method, freq_str, last_cleaning, next_plan_str, current_status, has_product])
+                
+                # Safe increment using .get() method
+                status_counts[current_status] = status_counts.get(current_status, 0) + 1
+                processed_count += 1
+                
+                if idx < 5:
+                    print(f"  -> Using existing status: {current_status}")
+                continue
+                
+            # Otherwise, calculate status as before
             if not last_cleaning or last_cleaning in ['nan', 'None', '']:
                 status = "Chưa có dữ liệu"
                 updated_values.append([area, device, method, freq_str, last_cleaning, "", status, has_product])
-                status_counts[status] += 1
+                status_counts[status] = status_counts.get(status, 0) + 1
                 if idx < 5:
                     print(f"  -> Status: {status} (no cleaning date)")
                 continue
@@ -662,7 +698,7 @@ def update_cleaning_schedule():
             if not last_cleaning_date:
                 status = "Định dạng ngày không hợp lệ"
                 updated_values.append([area, device, method, freq_str, last_cleaning, "", status, has_product])
-                status_counts['Lỗi'] += 1
+                status_counts['Lỗi'] = status_counts.get('Lỗi', 0) + 1
                 if idx < 5:
                     print(f"  -> Status: {status} (invalid date: '{last_cleaning}')")
                 continue
@@ -682,26 +718,28 @@ def update_cleaning_schedule():
                 current_status = 'Quá hạn'
     
             updated_values.append([area, device, method, freq_str, last_cleaning, next_plan_str, current_status, has_product])
-            status_counts[current_status] += 1
+            status_counts[current_status] = status_counts.get(current_status, 0) + 1
             processed_count += 1
             
             # Debug first few rows
             if idx < 5:
-                print(f"  -> Status: {current_status} (days until next: {days_until_next})")
+                print(f"  -> Calculated status: {current_status} (days until next: {days_until_next})")
                 print(f"  -> Last cleaning: {last_cleaning_date.strftime('%d/%m/%Y')}, Next: {next_plan_str}")
             
-            # Update the DataFrame
-            # Find the correct column names for updating
-            for col in master_plan_df.columns:
-                col_lower = str(col).lower().strip()
-                if 'kế hoạch' in col_lower or ('ngày' in col_lower and 'tiếp theo' in col_lower):
-                    master_plan_df.at[idx, col] = next_plan_str
-                elif 'trạng thái' in col_lower:
-                    master_plan_df.at[idx, col] = current_status
+            # Update the DataFrame (only if we calculated new values)
+            if not use_existing_status:
+                # Find the correct column names for updating
+                for col in master_plan_df.columns:
+                    col_lower = str(col).lower().strip()
+                    if 'kế hoạch' in col_lower or ('ngày' in col_lower and 'tiếp theo' in col_lower):
+                        master_plan_df.at[idx, col] = next_plan_str
+                    elif 'trạng thái' in col_lower:
+                        master_plan_df.at[idx, col] = current_status
             
         except Exception as e:
             print(f"❌ Error processing row {idx}: {str(e)}")
-            status_counts['Lỗi'] += 1
+            print(f"❌ Full traceback: {traceback.format_exc()}")
+            status_counts['Lỗi'] = status_counts.get('Lỗi', 0) + 1
             continue
     
     # Print processing summary
