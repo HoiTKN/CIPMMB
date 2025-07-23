@@ -15,6 +15,9 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email import encoders
 
+# Global processor variable
+global_processor = None
+
 # SharePoint Configuration
 SHAREPOINT_CONFIG = {
     'tenant_id': '81060475-7e7f-4ede-8d8d-bf61f53ca528',
@@ -541,13 +544,15 @@ def parse_date(date_str):
 
 # Main function to update cleaning schedule using SharePoint
 def update_cleaning_schedule():
+    global global_processor  # Use global processor
+    
     print("Đang cập nhật lịch vệ sinh từ SharePoint...")
     
     # Initialize SharePoint processor
-    processor = SharePointCIPProcessor()
+    global_processor = SharePointCIPProcessor()
     
     # Download Excel file from SharePoint
-    sheets_data = processor.download_excel_file()
+    sheets_data = global_processor.download_excel_file()
     if not sheets_data:
         print("❌ Failed to download CIP plan file")
         return []
@@ -823,7 +828,7 @@ def update_cleaning_schedule():
     if len(updated_values) > 0:
         print(f"\n📤 Attempting to upload updated file...")
         try:
-            upload_success = processor.upload_excel_file(sheets_data)
+            upload_success = global_processor.upload_excel_file(sheets_data)
         except Exception as e:
             print(f"⚠️ Upload failed with error: {str(e)}")
             upload_success = False
@@ -1055,11 +1060,10 @@ def send_area_specific_email(filtered_rows, recipients, area_name, status_img_bu
     """
     Send an email for a specific area with the filtered rows using Microsoft Graph API
     """
+    global global_processor  # Use the global processor
+    
     try:
-        # Get access token from the processor (reuse SharePoint token)
-        from update_cleaning_schedule import processor  # Access the global processor
-        
-        if not processor or not processor.access_token:
+        if not global_processor or not global_processor.access_token:
             print("❌ No valid access token for Graph API")
             return False
             
@@ -1211,7 +1215,7 @@ def send_area_specific_email(filtered_rows, recipients, area_name, status_img_bu
         # Send email via Graph API
         graph_url = "https://graph.microsoft.com/v1.0/me/sendMail"
         headers = {
-            'Authorization': f'Bearer {processor.access_token}',
+            'Authorization': f'Bearer {global_processor.access_token}',
             'Content-Type': 'application/json'
         }
         
@@ -1227,9 +1231,9 @@ def send_area_specific_email(filtered_rows, recipients, area_name, status_img_bu
         elif response.status_code == 401:
             print("❌ Graph API Authentication Error - Token may have expired")
             print("🔄 Attempting to refresh token...")
-            if processor.refresh_access_token():
+            if global_processor.refresh_access_token():
                 print("✅ Token refreshed, retrying email send...")
-                headers['Authorization'] = f'Bearer {processor.access_token}'
+                headers['Authorization'] = f'Bearer {global_processor.access_token}'
                 response = requests.post(graph_url, headers=headers, json=email_data, timeout=60)
                 if response.status_code == 202:
                     print("✅ Email sent successfully after token refresh")
