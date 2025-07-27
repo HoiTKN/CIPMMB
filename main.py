@@ -15,6 +15,14 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email import encoders
 
+# Import openpyxl for advanced Excel formatting
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Border, Side, Alignment, NamedStyle
+from openpyxl.formatting.rule import CellIsRule, FormulaRule
+from openpyxl.utils.dataframe import dataframe_to_rows
+from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.datavalidation import DataValidation
+
 # Global processor variable
 global_processor = None
 
@@ -30,6 +38,430 @@ SHAREPOINT_CONFIG = {
 
 # SharePoint File ID for "CIP plan.xlsx"
 CIP_PLAN_FILE_ID = '8C90FB38-DA8C-59CC-547D-53BEA1C8B16D'
+
+# Excel formatting styles
+def create_excel_styles():
+    """Create professional Excel styles for different data types"""
+    
+    # Header style
+    header_style = NamedStyle(name="header_style")
+    header_style.font = Font(name='Arial', size=12, bold=True, color="FFFFFF")
+    header_style.fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+    header_style.border = Border(
+        left=Side(style='thin', color='FFFFFF'),
+        right=Side(style='thin', color='FFFFFF'),
+        top=Side(style='thin', color='FFFFFF'),
+        bottom=Side(style='thin', color='FFFFFF')
+    )
+    header_style.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+    
+    # Normal data style
+    normal_style = NamedStyle(name="normal_style")
+    normal_style.font = Font(name='Arial', size=10)
+    normal_style.border = Border(
+        left=Side(style='thin', color='D3D3D3'),
+        right=Side(style='thin', color='D3D3D3'),
+        top=Side(style='thin', color='D3D3D3'),
+        bottom=Side(style='thin', color='D3D3D3')
+    )
+    normal_style.alignment = Alignment(horizontal='left', vertical='center', wrap_text=True)
+    
+    # Date style
+    date_style = NamedStyle(name="date_style")
+    date_style.font = Font(name='Arial', size=10)
+    date_style.border = Border(
+        left=Side(style='thin', color='D3D3D3'),
+        right=Side(style='thin', color='D3D3D3'),
+        top=Side(style='thin', color='D3D3D3'),
+        bottom=Side(style='thin', color='D3D3D3')
+    )
+    date_style.alignment = Alignment(horizontal='center', vertical='center')
+    date_style.number_format = 'DD/MM/YYYY'
+    
+    # Center align style
+    center_style = NamedStyle(name="center_style")
+    center_style.font = Font(name='Arial', size=10)
+    center_style.border = Border(
+        left=Side(style='thin', color='D3D3D3'),
+        right=Side(style='thin', color='D3D3D3'),
+        top=Side(style='thin', color='D3D3D3'),
+        bottom=Side(style='thin', color='D3D3D3')
+    )
+    center_style.alignment = Alignment(horizontal='center', vertical='center')
+    
+    # Status styles with different colors
+    status_styles = {
+        'Bình thường': {
+            'fill': PatternFill(start_color="D4F4DD", end_color="D4F4DD", fill_type="solid"),
+            'font': Font(name='Arial', size=10, color="2D5016", bold=True)
+        },
+        'Sắp đến hạn': {
+            'fill': PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid"),
+            'font': Font(name='Arial', size=10, color="7F6000", bold=True)
+        },
+        'Đến hạn': {
+            'fill': PatternFill(start_color="FFE699", end_color="FFE699", fill_type="solid"),
+            'font': Font(name='Arial', size=10, color="9C6500", bold=True)
+        },
+        'Quá hạn': {
+            'fill': PatternFill(start_color="FFCCCB", end_color="FFCCCB", fill_type="solid"),
+            'font': Font(name='Arial', size=10, color="9C0006", bold=True)
+        },
+        'Chưa có dữ liệu': {
+            'fill': PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid"),
+            'font': Font(name='Arial', size=10, color="7F7F7F")
+        },
+        'Lỗi': {
+            'fill': PatternFill(start_color="C00000", end_color="C00000", fill_type="solid"),
+            'font': Font(name='Arial', size=10, color="FFFFFF", bold=True)
+        }
+    }
+    
+    return header_style, normal_style, date_style, center_style, status_styles
+
+def format_worksheet(worksheet, df, sheet_name, status_styles, center_style):
+    """Apply professional formatting to a worksheet"""
+    
+    # Set column widths based on content and column names
+    column_widths = {
+        'Khu vực': 18,
+        'Thiết bị': 25,
+        'Phương pháp': 15,
+        'Tần suất (ngày)': 14,
+        'Ngày vệ sinh gần nhất': 20,
+        'Ngày kế hoạch vệ sinh tiếp theo': 25,
+        'Trạng thái': 16,
+        'Đang chứa sản phẩm': 20,
+        'Người thực hiện': 18,
+        'Kết quả': 12,
+        'Ghi chú': 35,
+        'Ngày vệ sinh': 16
+    }
+    
+    # Auto-adjust column widths
+    for idx, column in enumerate(df.columns, 1):
+        column_letter = get_column_letter(idx)
+        
+        # Set width based on column name or calculate from content
+        base_width = column_widths.get(column, 15)
+        
+        # Calculate max content width for better auto-sizing
+        max_length = len(str(column))
+        for cell_value in df[column].astype(str):
+            if len(cell_value) > max_length:
+                max_length = min(len(cell_value), 60)  # Cap at 60 chars
+        
+        # Use the larger of predefined width or content-based width
+        final_width = max(base_width, max_length + 3)
+        worksheet.column_dimensions[column_letter].width = final_width
+    
+    # Apply header formatting
+    for cell in worksheet[1]:
+        cell.style = "header_style"
+    
+    # Apply data formatting
+    for row_idx in range(2, worksheet.max_row + 1):
+        for col_idx in range(1, worksheet.max_column + 1):
+            cell = worksheet.cell(row=row_idx, column=col_idx)
+            column_name = df.columns[col_idx - 1]
+            
+            # Apply date formatting to date columns
+            if any(date_keyword in column_name.lower() for date_keyword in ['ngày', 'date']):
+                cell.style = "date_style"
+                
+                # Try to parse and format date properly
+                if cell.value and str(cell.value).strip() not in ['nan', 'None', '']:
+                    try:
+                        if isinstance(cell.value, str):
+                            # Try to parse the date string
+                            date_obj = parse_date(cell.value)
+                            if date_obj:
+                                cell.value = date_obj
+                    except:
+                        pass
+            
+            # Apply status formatting
+            elif 'trạng thái' in column_name.lower():
+                cell_value = str(cell.value).strip()
+                if cell_value in status_styles:
+                    cell.fill = status_styles[cell_value]['fill']
+                    cell.font = status_styles[cell_value]['font']
+                    cell.border = Border(
+                        left=Side(style='thin', color='D3D3D3'),
+                        right=Side(style='thin', color='D3D3D3'),
+                        top=Side(style='thin', color='D3D3D3'),
+                        bottom=Side(style='thin', color='D3D3D3')
+                    )
+                    cell.alignment = Alignment(horizontal='center', vertical='center')
+                else:
+                    cell.style = "normal_style"
+            
+            # Apply center alignment for specific columns
+            elif any(keyword in column_name.lower() for keyword in ['tần suất', 'kết quả', 'frequency']):
+                cell.style = center_style
+            
+            # Apply normal formatting to other cells
+            else:
+                cell.style = "normal_style"
+    
+    # Add conditional formatting for critical items (has product + overdue)
+    add_critical_formatting(worksheet, df)
+    
+    # Freeze panes (freeze first row)
+    worksheet.freeze_panes = worksheet['A2']
+    
+    # Add filter to header row
+    worksheet.auto_filter.ref = f"A1:{get_column_letter(worksheet.max_column)}{worksheet.max_row}"
+    
+    # Set row heights
+    worksheet.row_dimensions[1].height = 35  # Header row
+    for row_idx in range(2, worksheet.max_row + 1):
+        worksheet.row_dimensions[row_idx].height = 25
+
+def add_critical_formatting(worksheet, df):
+    """Add conditional formatting for critical items"""
+    try:
+        # Find status and product columns
+        status_col = None
+        product_col = None
+        
+        for idx, col in enumerate(df.columns):
+            if 'trạng thái' in col.lower():
+                status_col = idx + 1
+            elif 'chứa sản phẩm' in col.lower():
+                product_col = idx + 1
+        
+        if status_col and product_col:
+            # Rule for equipment with product that is overdue (CRITICAL)
+            status_col_letter = get_column_letter(status_col)
+            product_col_letter = get_column_letter(product_col)
+            
+            critical_rule = FormulaRule(
+                formula=[f'AND(${status_col_letter}2="Quá hạn", ${product_col_letter}2<>"")'],
+                fill=PatternFill(start_color="FF0000", end_color="FF0000", fill_type="solid"),
+                font=Font(color="FFFFFF", bold=True)
+            )
+            
+            worksheet.conditional_formatting.add(
+                f'A2:{get_column_letter(worksheet.max_column)}{worksheet.max_row}',
+                critical_rule
+            )
+    except Exception as e:
+        print(f"Warning: Could not add critical formatting: {e}")
+
+def add_summary_section(worksheet, df):
+    """Add a comprehensive summary section to the Master plan sheet"""
+    
+    # Find last row with data
+    last_row = worksheet.max_row
+    
+    # Add some spacing
+    summary_start_row = last_row + 3
+    
+    # Add summary header
+    summary_cell = worksheet.cell(row=summary_start_row, column=1)
+    summary_cell.value = "📊 THỐNG KÊ TỔNG QUAN TÌNH TRẠNG THIẾT BỊ"
+    summary_cell.font = Font(name='Arial', size=14, bold=True, color="FFFFFF")
+    summary_cell.fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+    summary_cell.alignment = Alignment(horizontal='center', vertical='center')
+    
+    # Merge cells for summary header
+    worksheet.merge_cells(f'A{summary_start_row}:F{summary_start_row}')
+    worksheet.row_dimensions[summary_start_row].height = 35
+    
+    # Calculate statistics
+    if 'Trạng thái' in df.columns:
+        status_counts = df['Trạng thái'].value_counts()
+        total_equipment = len(df)
+        
+        # Calculate compliance rate
+        compliant = status_counts.get('Bình thường', 0) + status_counts.get('Sắp đến hạn', 0)
+        compliance_rate = (compliant / total_equipment * 100) if total_equipment > 0 else 0
+        
+        # Add main statistics
+        stats_start_row = summary_start_row + 2
+        
+        # Main KPIs
+        main_kpis = [
+            ['📈 Tỷ lệ tuân thủ (Compliance Rate):', f"{compliance_rate:.1f}%"],
+            ['🏭 Tổng số thiết bị:', total_equipment],
+            ['🚨 Thiết bị cần chú ý ngay:', status_counts.get('Quá hạn', 0) + status_counts.get('Đến hạn', 0)]
+        ]
+        
+        for i, (label, value) in enumerate(main_kpis):
+            row = stats_start_row + i
+            
+            # Label cell
+            label_cell = worksheet.cell(row=row, column=1)
+            label_cell.value = label
+            label_cell.font = Font(name='Arial', size=12, bold=True)
+            
+            # Value cell
+            value_cell = worksheet.cell(row=row, column=3)
+            value_cell.value = value
+            value_cell.font = Font(name='Arial', size=12, bold=True, color="C00000")
+            value_cell.alignment = Alignment(horizontal='center', vertical='center')
+        
+        # Detailed breakdown
+        detail_start_row = stats_start_row + len(main_kpis) + 2
+        
+        # Detail header
+        detail_header = worksheet.cell(row=detail_start_row, column=1)
+        detail_header.value = "📋 CHI TIẾT THEO TRẠNG THÁI:"
+        detail_header.font = Font(name='Arial', size=12, bold=True, color="366092")
+        
+        stats_data = [
+            ['✅ Bình thường:', status_counts.get('Bình thường', 0), 'D4F4DD', '2D5016'],
+            ['⚠️ Sắp đến hạn:', status_counts.get('Sắp đến hạn', 0), 'FFF2CC', '7F6000'],
+            ['🔶 Đến hạn:', status_counts.get('Đến hạn', 0), 'FFE699', '9C6500'],
+            ['🔴 Quá hạn:', status_counts.get('Quá hạn', 0), 'FFCCCB', '9C0006'],
+            ['❓ Chưa có dữ liệu:', status_counts.get('Chưa có dữ liệu', 0), 'F2F2F2', '7F7F7F']
+        ]
+        
+        for i, (label, value, bg_color, font_color) in enumerate(stats_data):
+            row = detail_start_row + 1 + i
+            
+            # Label cell
+            label_cell = worksheet.cell(row=row, column=1)
+            label_cell.value = label
+            label_cell.font = Font(name='Arial', size=11, bold=True)
+            
+            # Value cell
+            value_cell = worksheet.cell(row=row, column=3)
+            value_cell.value = value
+            value_cell.font = Font(name='Arial', size=11, bold=True, color=font_color)
+            value_cell.fill = PatternFill(start_color=bg_color, end_color=bg_color, fill_type="solid")
+            value_cell.alignment = Alignment(horizontal='center', vertical='center')
+            value_cell.border = Border(
+                left=Side(style='thin', color='D3D3D3'),
+                right=Side(style='thin', color='D3D3D3'),
+                top=Side(style='thin', color='D3D3D3'),
+                bottom=Side(style='thin', color='D3D3D3')
+            )
+            
+            # Percentage cell
+            if total_equipment > 0:
+                percentage = (value / total_equipment * 100)
+                pct_cell = worksheet.cell(row=row, column=4)
+                pct_cell.value = f"({percentage:.1f}%)"
+                pct_cell.font = Font(name='Arial', size=10, color=font_color)
+                pct_cell.alignment = Alignment(horizontal='left', vertical='center')
+        
+        # Add equipment with product analysis
+        if 'Đang chứa sản phẩm' in df.columns:
+            product_start_row = detail_start_row + len(stats_data) + 3
+            
+            # Product analysis header
+            product_header = worksheet.cell(row=product_start_row, column=1)
+            product_header.value = "🏭 PHÂN TÍCH THIẾT BỊ CHỨA SẢN PHẨM:"
+            product_header.font = Font(name='Arial', size=12, bold=True, color="C00000")
+            
+            # Calculate equipment with product that are overdue
+            overdue_with_product = 0
+            due_with_product = 0
+            
+            for idx, row_data in df.iterrows():
+                status = str(row_data.get('Trạng thái', '')).strip()
+                has_product = str(row_data.get('Đang chứa sản phẩm', '')).strip()
+                
+                if has_product and has_product not in ['nan', 'None', '']:
+                    if status == 'Quá hạn':
+                        overdue_with_product += 1
+                    elif status == 'Đến hạn':
+                        due_with_product += 1
+            
+            product_stats = [
+                ['🚨 Quá hạn + Có sản phẩm (KHẨN CẤP):', overdue_with_product],
+                ['⚠️ Đến hạn + Có sản phẩm:', due_with_product]
+            ]
+            
+            for i, (label, value) in enumerate(product_stats):
+                row = product_start_row + 1 + i
+                
+                # Label cell
+                label_cell = worksheet.cell(row=row, column=1)
+                label_cell.value = label
+                label_cell.font = Font(name='Arial', size=11, bold=True)
+                
+                # Value cell
+                value_cell = worksheet.cell(row=row, column=3)
+                value_cell.value = value
+                if value > 0:
+                    value_cell.font = Font(name='Arial', size=11, bold=True, color="C00000")
+                    value_cell.fill = PatternFill(start_color="FFCCCB", end_color="FFCCCB", fill_type="solid")
+                else:
+                    value_cell.font = Font(name='Arial', size=11, bold=True, color="2D5016")
+                    value_cell.fill = PatternFill(start_color="D4F4DD", end_color="D4F4DD", fill_type="solid")
+                
+                value_cell.alignment = Alignment(horizontal='center', vertical='center')
+        
+        # Add timestamp
+        timestamp_row = product_start_row + len(product_stats) + 3
+        timestamp_cell = worksheet.cell(row=timestamp_row, column=1)
+        timestamp_cell.value = f"🕒 Cập nhật lần cuối: {datetime.now().strftime('%d/%m/%Y lúc %H:%M:%S')}"
+        timestamp_cell.font = Font(name='Arial', size=10, italic=True, color="7F7F7F")
+        
+        # Add note
+        note_row = timestamp_row + 1
+        note_cell = worksheet.cell(row=note_row, column=1)
+        note_cell.value = "💡 Lưu ý: Thiết bị có sản phẩm + quá hạn được highlight màu đỏ cần ưu tiên xử lý"
+        note_cell.font = Font(name='Arial', size=10, italic=True, color="7F7F7F")
+
+def create_formatted_excel(sheets_data):
+    """Create a professionally formatted Excel file"""
+    
+    # Create workbook
+    wb = Workbook()
+    
+    # Remove default sheet
+    if 'Sheet' in wb.sheetnames:
+        wb.remove(wb['Sheet'])
+    
+    # Create and register styles
+    header_style, normal_style, date_style, center_style, status_styles = create_excel_styles()
+    
+    # Add styles to workbook
+    wb.add_named_style(header_style)
+    wb.add_named_style(normal_style)
+    wb.add_named_style(date_style)
+    wb.add_named_style(center_style)
+    
+    # Define sheet order
+    sheet_order = ['Master plan', 'Actual result', 'Cleaning History']
+    
+    # Process sheets in order
+    for sheet_name in sheet_order:
+        if sheet_name in sheets_data and not sheets_data[sheet_name].empty:
+            df = sheets_data[sheet_name]
+            
+            # Create worksheet
+            ws = wb.create_sheet(title=sheet_name)
+            
+            # Add data to worksheet
+            for r in dataframe_to_rows(df, index=False, header=True):
+                ws.append(r)
+            
+            # Apply formatting
+            format_worksheet(ws, df, sheet_name, status_styles, center_style)
+            
+            # Add summary information for Master plan sheet
+            if sheet_name == 'Master plan' and 'Trạng thái' in df.columns:
+                add_summary_section(ws, df)
+    
+    # Process any remaining sheets not in the order
+    for sheet_name, df in sheets_data.items():
+        if sheet_name not in sheet_order and not df.empty:
+            # Create worksheet
+            ws = wb.create_sheet(title=sheet_name)
+            
+            # Add data to worksheet
+            for r in dataframe_to_rows(df, index=False, header=True):
+                ws.append(r)
+            
+            # Apply formatting
+            format_worksheet(ws, df, sheet_name, status_styles, center_style)
+    
+    return wb
 
 class GitHubSecretsUpdater:
     """Helper class to update GitHub Secrets using GitHub API"""
@@ -96,7 +528,7 @@ class GitHubSecretsUpdater:
             return False
 
 class SharePointCIPProcessor:
-    """SharePoint integration for CIP Cleaning automation"""
+    """SharePoint integration for CIP Cleaning automation with improved formatting"""
     
     def __init__(self):
         self.access_token = None
@@ -329,22 +761,23 @@ class SharePointCIPProcessor:
         return None
 
     def upload_excel_file(self, sheets_data):
-        """Upload updated Excel file back to SharePoint with retry logic for locked files"""
+        """Upload updated Excel file back to SharePoint with professional formatting"""
         max_retries = 5
         retry_delay = 30  # seconds
         
         try:
-            self.log(f"📤 Uploading updated CIP plan to SharePoint...")
+            self.log(f"📤 Creating professionally formatted Excel file...")
 
-            # Create Excel file in memory with multiple sheets
+            # Create formatted Excel file using the new formatting function
+            wb = create_formatted_excel(sheets_data)
+            
+            # Save to buffer
             excel_buffer = io.BytesIO()
-            with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-                for sheet_name, df in sheets_data.items():
-                    df.to_excel(writer, sheet_name=sheet_name, index=False)
-
+            wb.save(excel_buffer)
             excel_buffer.seek(0)
             excel_content = excel_buffer.getvalue()
-            self.log(f"Created Excel file with {len(excel_content)} bytes")
+            
+            self.log(f"✅ Created professionally formatted Excel file with {len(excel_content)} bytes")
 
             # Upload to SharePoint with retry logic
             upload_url = f"{self.base_url}/sites/{self.get_site_id()}/drive/items/{CIP_PLAN_FILE_ID}/content"
@@ -361,7 +794,7 @@ class SharePointCIPProcessor:
                     response = requests.put(upload_url, headers=headers, data=excel_content, timeout=60)
 
                     if response.status_code in [200, 201]:
-                        self.log(f"✅ Successfully uploaded updated CIP plan to SharePoint")
+                        self.log(f"✅ Successfully uploaded professionally formatted CIP plan to SharePoint")
                         return True
                     elif response.status_code == 423:
                         # File is locked
@@ -837,9 +1270,8 @@ def update_cleaning_schedule():
     if not upload_success and len(updated_values) > 0:
         try:
             backup_filename = f"CIP_plan_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-            with pd.ExcelWriter(backup_filename, engine='openpyxl') as writer:
-                for sheet_name, df in sheets_data.items():
-                    df.to_excel(writer, sheet_name=sheet_name, index=False)
+            wb = create_formatted_excel(sheets_data)
+            wb.save(backup_filename)
             print(f"💾 Created local backup: {backup_filename}")
         except Exception as e:
             print(f"❌ Failed to create local backup: {str(e)}")
@@ -886,7 +1318,8 @@ def create_status_chart(updated_values):
         ])
         
         # Set up figure with 2 subplots
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+        plt.style.use('default')  # Use default style for professional look
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
         
         # First subplot: Count statuses
         status_counts = df['Trạng thái'].value_counts()
@@ -900,41 +1333,68 @@ def create_status_chart(updated_values):
             if status in status_data.index:
                 status_data[status] = count
         
-        # Create a bar chart for cleaning status
-        colors = ['green', 'yellow', 'orange', 'red']
-        ax1.bar(status_data.index, status_data.values, color=colors)
-        ax1.set_title('Thống kê trạng thái thiết bị vệ sinh')
-        ax1.set_ylabel('Số lượng')
-        ax1.grid(axis='y', linestyle='--', alpha=0.7)
+        # Create a bar chart for cleaning status with professional colors
+        colors = ['#2D5016', '#7F6000', '#9C6500', '#9C0006']  # Matching Excel colors
+        bars = ax1.bar(status_data.index, status_data.values, color=colors)
+        ax1.set_title('📊 Thống kê trạng thái thiết bị vệ sinh', fontsize=14, fontweight='bold', pad=20)
+        ax1.set_ylabel('Số lượng thiết bị', fontsize=12)
+        ax1.grid(axis='y', linestyle='--', alpha=0.3)
+        
+        # Add value labels on bars
+        for bar in bars:
+            height = bar.get_height()
+            if height > 0:
+                ax1.text(bar.get_x() + bar.get_width()/2., height,
+                        f'{int(height)}',
+                        ha='center', va='bottom', fontweight='bold')
+        
+        # Rotate x-axis labels if needed
+        ax1.tick_params(axis='x', rotation=45)
         
         # Second subplot: Count product status for overdue equipment
         overdue_df = df[df['Trạng thái'].isin(['Đến hạn', 'Quá hạn'])]
         
-        # Count devices with/without product
-        product_status = overdue_df['Đang chứa sản phẩm'].fillna('Trống').map(lambda x: 'Có sản phẩm' if str(x).strip() else 'Trống')
-        product_counts = product_status.value_counts()
+        if len(overdue_df) > 0:
+            # Count devices with/without product
+            product_status = overdue_df['Đang chứa sản phẩm'].fillna('').map(
+                lambda x: 'Có sản phẩm' if str(x).strip() and str(x).strip() not in ['nan', 'None'] else 'Trống'
+            )
+            product_counts = product_status.value_counts()
+            
+            # Ensure both categories are present
+            product_data = pd.Series([0, 0], index=['Có sản phẩm', 'Trống'])
+            for status, count in product_counts.items():
+                if status in product_data.index:
+                    product_data[status] = count
+            
+            # Create a pie chart for product status
+            pie_colors = ['#FFCCCB', '#D4F4DD']  # Red for with product, green for empty
+            wedges, texts, autotexts = ax2.pie(
+                product_data.values,
+                labels=product_data.index,
+                colors=pie_colors,
+                autopct=lambda pct: f'{pct:.1f}%\n({int(pct/100*sum(product_data.values))} thiết bị)' if pct > 0 else '',
+                startangle=90,
+                textprops={'fontsize': 10, 'fontweight': 'bold'}
+            )
+            ax2.set_title('🏭 Trạng thái sản phẩm\n(Thiết bị cần vệ sinh)', fontsize=14, fontweight='bold', pad=20)
+        else:
+            ax2.text(0.5, 0.5, 'Không có thiết bị\ncần vệ sinh', 
+                    ha='center', va='center', fontsize=14, fontweight='bold',
+                    transform=ax2.transAxes)
+            ax2.set_title('🏭 Trạng thái sản phẩm\n(Thiết bị cần vệ sinh)', fontsize=14, fontweight='bold', pad=20)
         
-        # Ensure both categories are present
-        product_data = pd.Series([0, 0], index=['Có sản phẩm', 'Trống'])
-        for status, count in product_counts.items():
-            product_data[status] = count
-        
-        # Create a pie chart for product status
-        ax2.pie(
-            product_data.values,
-            labels=product_data.index,
-            colors=['red', 'green'],
-            autopct='%1.1f%%',
-            startangle=90
-        )
-        ax2.set_title('Trạng thái sản phẩm của thiết bị cần vệ sinh')
-        ax2.axis('equal')
+        # Add overall title and footer
+        fig.suptitle(f'📈 BÁO CÁO TÌNH TRẠNG VỆ SINH THIẾT BỊ\n{datetime.now().strftime("%d/%m/%Y %H:%M")}', 
+                    fontsize=16, fontweight='bold', y=0.95)
         
         plt.tight_layout()
+        plt.subplots_adjust(top=0.85)  # Make room for suptitle
         
         # Save chart for email
         img_buffer = io.BytesIO()
-        plt.savefig(img_buffer, format='png', dpi=100)
+        plt.savefig(img_buffer, format='png', dpi=150, bbox_inches='tight', 
+                   facecolor='white', edgecolor='none')
         img_buffer.seek(0)
         
         plt.close()  # Close the plot to avoid warnings
@@ -1070,93 +1530,268 @@ def send_area_specific_email(filtered_rows, recipients, area_name, status_img_bu
         print(f"📧 Preparing email via Microsoft Graph API for {area_name}")
         
         # Prepare data for email summary
-        empty_tanks = [row for row in filtered_rows if not str(row[7]).strip()]
-        filled_tanks = [row for row in filtered_rows if str(row[7]).strip()]
+        empty_tanks = [row for row in filtered_rows if not str(row[7]).strip() or str(row[7]).strip() in ['nan', 'None']]
+        filled_tanks = [row for row in filtered_rows if str(row[7]).strip() and str(row[7]).strip() not in ['nan', 'None']]
         
-        # Create HTML content
+        # Create HTML content with improved styling
         html_content = f"""
         <html>
         <head>
             <meta charset="UTF-8">
             <style>
-                body {{ font-family: Arial, sans-serif; }}
-                table {{ border-collapse: collapse; width: 100%; margin-top: 20px; }}
-                th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
-                th {{ background-color: #f2f2f2; color: #333; }}
-                .overdue {{ background-color: #ffcccc; }}
-                .due-today {{ background-color: #ffeb99; }}
-                .due-soon {{ background-color: #e6ffcc; }}
-                .has-product {{ color: #cc0000; font-weight: bold; }}
-                .empty {{ color: #009900; }}
-                h2 {{ color: #003366; }}
-                h3 {{ color: #004d99; margin-top: 25px; }}
-                .summary {{ margin: 20px 0; }}
-                .footer {{ margin-top: 30px; font-size: 0.9em; color: #666; }}
+                body {{ 
+                    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+                    line-height: 1.6;
+                    color: #333;
+                    background-color: #f8f9fa;
+                }}
+                .container {{
+                    max-width: 1200px;
+                    margin: 0 auto;
+                    background-color: white;
+                    padding: 20px;
+                    border-radius: 8px;
+                    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+                }}
+                .header {{
+                    background: linear-gradient(135deg, #366092, #4a7bb7);
+                    color: white;
+                    padding: 20px;
+                    border-radius: 8px 8px 0 0;
+                    margin: -20px -20px 20px -20px;
+                    text-align: center;
+                }}
+                .header h1 {{
+                    margin: 0;
+                    font-size: 24px;
+                    font-weight: bold;
+                }}
+                .summary {{
+                    background-color: #f8f9fa;
+                    padding: 20px;
+                    border-radius: 8px;
+                    margin: 20px 0;
+                    border-left: 4px solid #366092;
+                }}
+                .summary h3 {{
+                    color: #366092;
+                    margin-top: 0;
+                    font-size: 18px;
+                }}
+                .kpi {{
+                    display: inline-block;
+                    background: white;
+                    padding: 15px;
+                    margin: 10px;
+                    border-radius: 8px;
+                    text-align: center;
+                    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+                    min-width: 150px;
+                }}
+                .kpi-value {{
+                    font-size: 24px;
+                    font-weight: bold;
+                    color: #C00000;
+                }}
+                .kpi-label {{
+                    font-size: 12px;
+                    color: #666;
+                    margin-top: 5px;
+                }}
+                table {{ 
+                    border-collapse: collapse; 
+                    width: 100%; 
+                    margin-top: 20px;
+                    font-size: 11px;
+                }}
+                th, td {{ 
+                    border: 1px solid #ddd; 
+                    padding: 12px 8px; 
+                    text-align: left; 
+                    vertical-align: top;
+                }}
+                th {{ 
+                    background: linear-gradient(135deg, #366092, #4a7bb7);
+                    color: white;
+                    font-weight: bold;
+                    text-align: center;
+                    font-size: 10px;
+                }}
+                .overdue {{ background-color: #ffebee; border-left: 4px solid #f44336; }}
+                .due-today {{ background-color: #fff8e1; border-left: 4px solid #ff9800; }}
+                .has-product {{ 
+                    color: #C00000; 
+                    font-weight: bold;
+                    background-color: #ffebee;
+                    padding: 4px 8px;
+                    border-radius: 4px;
+                }}
+                .empty {{ 
+                    color: #2e7d32;
+                    background-color: #e8f5e8;
+                    padding: 4px 8px;
+                    border-radius: 4px;
+                }}
+                .status-normal {{ background-color: #e8f5e8; color: #2e7d32; }}
+                .status-coming {{ background-color: #fff8e1; color: #f57c00; }}
+                .status-due {{ background-color: #fff3e0; color: #f57c00; font-weight: bold; }}
+                .status-overdue {{ background-color: #ffebee; color: #c62828; font-weight: bold; }}
+                .footer {{ 
+                    margin-top: 30px; 
+                    padding-top: 20px;
+                    border-top: 1px solid #e0e0e0;
+                    font-size: 12px; 
+                    color: #666; 
+                    text-align: center;
+                }}
+                .priority-high {{
+                    background-color: #ffcdd2;
+                    border-left: 5px solid #f44336;
+                }}
+                .alert-box {{
+                    background-color: #ffebee;
+                    border: 1px solid #f44336;
+                    border-radius: 8px;
+                    padding: 15px;
+                    margin: 20px 0;
+                }}
+                .alert-title {{
+                    color: #c62828;
+                    font-weight: bold;
+                    font-size: 16px;
+                    margin-bottom: 10px;
+                }}
             </style>
         </head>
         <body>
-            <h2>Báo cáo vệ sinh thiết bị - {area_name} - {datetime.today().strftime("%d/%m/%Y")}</h2>
-            
-            <div class="summary">
-                <p><strong>Tổng số thiết bị cần vệ sinh:</strong> {len(filtered_rows)}</p>
-                <p><strong>Thiết bị trống có thể vệ sinh ngay:</strong> {len(empty_tanks)}</p>
-                <p><strong>Thiết bị đang chứa sản phẩm cần lên kế hoạch:</strong> {len(filled_tanks)}</p>
-            </div>
-            
-            <h3>Danh sách thiết bị cần vệ sinh:</h3>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Khu vực</th>
-                        <th>Thiết bị</th>
-                        <th>Phương pháp</th>
-                        <th>Tần suất (ngày)</th>
-                        <th>Ngày vệ sinh gần nhất (KQ)</th>
-                        <th>Ngày kế hoạch vệ sinh tiếp theo (KH)</th>
-                        <th>Trạng thái</th>
-                        <th>Đang chứa sản phẩm</th>
-                    </tr>
-                </thead>
-                <tbody>
+            <div class="container">
+                <div class="header">
+                    <h1>🏭 BÁO CÁO VỆ SINH THIẾT BỊ</h1>
+                    <p style="margin: 10px 0 0 0; font-size: 16px;">{area_name} - {datetime.today().strftime("%d/%m/%Y")}</p>
+                </div>
+                
+                <div class="summary">
+                    <h3>📊 TỔNG QUAN TÌNH TRẠNG</h3>
+                    <div style="text-align: center;">
+                        <div class="kpi">
+                            <div class="kpi-value">{len(filtered_rows)}</div>
+                            <div class="kpi-label">Tổng thiết bị cần vệ sinh</div>
+                        </div>
+                        <div class="kpi">
+                            <div class="kpi-value" style="color: #2e7d32;">{len(empty_tanks)}</div>
+                            <div class="kpi-label">Thiết bị trống<br>(Có thể vệ sinh ngay)</div>
+                        </div>
+                        <div class="kpi">
+                            <div class="kpi-value" style="color: #f57c00;">{len(filled_tanks)}</div>
+                            <div class="kpi-label">Thiết bị chứa sản phẩm<br>(Cần lên kế hoạch)</div>
+                        </div>
+                    </div>
+                </div>
         """
         
-        # Add all tanks to the table (both empty and with product)
-        # Sort the rows to prioritize empty tanks first
-        sorted_rows = sorted(filtered_rows, key=lambda row: 1 if str(row[7]).strip() else 0)
+        # Add alert for critical equipment
+        critical_count = len([row for row in filtered_rows if row[6] == 'Quá hạn' and str(row[7]).strip() and str(row[7]).strip() not in ['nan', 'None']])
+        if critical_count > 0:
+            html_content += f"""
+                <div class="alert-box">
+                    <div class="alert-title">🚨 CẢNH BÁO KHẨN CẤP</div>
+                    <p><strong>{critical_count} thiết bị</strong> đã quá hạn vệ sinh và đang chứa sản phẩm. Cần xử lý ngay lập tức để đảm bảo chất lượng sản phẩm!</p>
+                </div>
+            """
+        
+        html_content += """
+                <h3>📋 DANH SÁCH CHI TIẾT THIẾT BỊ CẦN VỆ SINH</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th style="width: 12%;">Khu vực</th>
+                            <th style="width: 18%;">Thiết bị</th>
+                            <th style="width: 10%;">Phương pháp</th>
+                            <th style="width: 8%;">Tần suất<br>(ngày)</th>
+                            <th style="width: 12%;">Ngày vệ sinh<br>gần nhất</th>
+                            <th style="width: 12%;">Ngày kế hoạch<br>vệ sinh tiếp theo</th>
+                            <th style="width: 10%;">Trạng thái</th>
+                            <th style="width: 18%;">Tình trạng<br>sản phẩm</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+        """
+        
+        # Sort rows: empty tanks first, then by status priority
+        def sort_priority(row):
+            area, device, method, freq_str, last_cleaning, next_plan_str, status, has_product = row
+            # Priority: empty tanks with overdue status first
+            if status == "Quá hạn":
+                if not str(has_product).strip() or str(has_product).strip() in ['nan', 'None']:
+                    return 0  # Highest priority: overdue + empty
+                else:
+                    return 1  # Second priority: overdue + has product
+            elif status == "Đến hạn":
+                if not str(has_product).strip() or str(has_product).strip() in ['nan', 'None']:
+                    return 2  # Third priority: due + empty
+                else:
+                    return 3  # Fourth priority: due + has product
+            return 4
+        
+        sorted_rows = sorted(filtered_rows, key=sort_priority)
         
         for row in sorted_rows:
             area, device, method, freq_str, last_cleaning, next_plan_str, status, has_product = row
             
             # Define CSS class based on status
             css_class = ""
+            status_class = ""
             if status == "Quá hạn":
                 css_class = "overdue"
+                status_class = "status-overdue"
             elif status == "Đến hạn":
                 css_class = "due-today"
+                status_class = "status-due"
             
-            # Define product status class
-            product_class = "has-product" if str(has_product).strip() else "empty"
+            # Check if this is a critical combination
+            is_critical = (status == "Quá hạn" and str(has_product).strip() and str(has_product).strip() not in ['nan', 'None'])
+            if is_critical:
+                css_class += " priority-high"
+            
+            # Define product status class and display
+            has_product_clean = str(has_product).strip()
+            if has_product_clean and has_product_clean not in ['nan', 'None']:
+                product_class = "has-product"
+                product_display = "🔴 Có sản phẩm"
+                if is_critical:
+                    product_display = "🚨 CÓ SẢN PHẨM (KHẨN CẤP)"
+            else:
+                product_class = "empty"
+                product_display = "✅ Trống"
             
             html_content += f"""
                     <tr class="{css_class}">
-                        <td>{area}</td>
-                        <td>{device}</td>
+                        <td style="font-weight: bold;">{area}</td>
+                        <td style="font-weight: bold;">{device}</td>
                         <td>{method}</td>
-                        <td>{freq_str}</td>
-                        <td>{last_cleaning}</td>
-                        <td>{next_plan_str}</td>
-                        <td>{status}</td>
-                        <td class="{product_class}">{has_product}</td>
+                        <td style="text-align: center;">{freq_str}</td>
+                        <td style="text-align: center;">{last_cleaning}</td>
+                        <td style="text-align: center;">{next_plan_str}</td>
+                        <td class="{status_class}" style="text-align: center; font-weight: bold;">{status}</td>
+                        <td class="{product_class}" style="text-align: center;">{product_display}</td>
                     </tr>
             """
         
-        html_content += """
+        html_content += f"""
                 </tbody>
             </table>
             
             <div class="footer">
-                <p>Vui lòng xem SharePoint để biết chi tiết và cập nhật trạng thái của các thiết bị.</p>
-                <p>Email này được tự động tạo bởi hệ thống. Vui lòng không trả lời.</p>
+                <p><strong>📍 Hướng dẫn xử lý:</strong></p>
+                <p>🟢 <strong>Thiết bị trống:</strong> Có thể tiến hành vệ sinh ngay lập tức</p>
+                <p>🟡 <strong>Thiết bị có sản phẩm:</strong> Cần lên kế hoạch vệ sinh sau khi xử lý sản phẩm</p>
+                <p>🔴 <strong>Thiết bị quá hạn + có sản phẩm:</strong> Ưu tiên cao nhất, xử lý ngay</p>
+                <br>
+                <p>📂 Vui lòng truy cập SharePoint để cập nhật trạng thái sau khi hoàn thành vệ sinh.</p>
+                <p>🤖 Email này được tự động tạo bởi hệ thống CIP Management. Vui lòng không trả lời.</p>
+                <p>🕒 Thời gian tạo: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}</p>
+            </div>
+            
             </div>
         </body>
         </html>
@@ -1165,7 +1800,7 @@ def send_area_specific_email(filtered_rows, recipients, area_name, status_img_bu
         # Prepare email data for Graph API
         email_data = {
             "message": {
-                "subject": f"Báo cáo vệ sinh thiết bị - {area_name} - {datetime.today().strftime('%d/%m/%Y')}",
+                "subject": f"🏭 Báo cáo vệ sinh thiết bị - {area_name} - {datetime.today().strftime('%d/%m/%Y')} ({'🚨 KHẨN CẤP' if critical_count > 0 else '📋 Thông thường'})",
                 "body": {
                     "contentType": "HTML",
                     "content": html_content
@@ -1192,7 +1827,7 @@ def send_area_specific_email(filtered_rows, recipients, area_name, status_img_bu
             
             attachments.append({
                 "@odata.type": "#microsoft.graph.fileAttachment",
-                "name": "cleaning_status.png",
+                "name": f"cleaning_status_chart_{datetime.now().strftime('%Y%m%d')}.png",
                 "contentType": "image/png",
                 "contentBytes": status_img_b64
             })
@@ -1204,7 +1839,7 @@ def send_area_specific_email(filtered_rows, recipients, area_name, status_img_bu
             
             attachments.append({
                 "@odata.type": "#microsoft.graph.fileAttachment", 
-                "name": "cleaning_results.png",
+                "name": f"cleaning_results_chart_{datetime.now().strftime('%Y%m%d')}.png",
                 "contentType": "image/png",
                 "contentBytes": results_img_b64
             })
@@ -1276,11 +1911,336 @@ def run_update():
         print(f"Traceback: {traceback.format_exc()}")
         return False
 
+# Additional utility functions for testing and maintenance
+
+def test_excel_formatting():
+    """
+    Test function to create a sample Excel file with formatting
+    """
+    print("🧪 Testing Excel formatting...")
+    
+    # Create sample data
+    sample_data = {
+        'Master plan': pd.DataFrame({
+            'Khu vực': ['Lọc thô', 'Lọc thô', 'Nấng - hạ', 'Lọc KB/ tủ', 'Đường ôn'] * 4,
+            'Thiết bị': [f'Bồn {i}' for i in range(1, 21)],
+            'Phương pháp': ['CIP 1', 'CIP 2'] * 10,
+            'Tần suất (ngày)': [7, 15, 30, 60] * 5,
+            'Ngày vệ sinh gần nhất': [
+                '10/06/2025', '25/04/2025', '09/06/2025', '09/06/2025', '22/06/2025',
+                '27/07/2025', '12/07/2025', '27/07/2025', '13/07/2025', '20/07/2025',
+                '20/07/2025', '26/07/2025', '26/07/2025', '20/07/2025', '20/07/2025',
+                '25/07/2025', '28/07/2025', '30/07/2025', '01/08/2025', '05/08/2025'
+            ],
+            'Ngày kế hoạch vệ sinh tiếp theo': [
+                '17/06/2025', '10/05/2025', '09/07/2025', '08/08/2025', '22/07/2025',
+                '03/08/2025', '27/07/2025', '03/08/2025', '28/07/2025', '04/08/2025',
+                '04/08/2025', '10/08/2025', '10/08/2025', '04/08/2025', '04/08/2025',
+                '09/08/2025', '12/08/2025', '14/08/2025', '16/08/2025', '20/08/2025'
+            ],
+            'Trạng thái': [
+                'Quá hạn', 'Quá hạn', 'Quá hạn', 'Quá hạn', 'Bình thường',
+                'Bình thường', 'Đến hạn', 'Bình thường', 'Đến hạn', 'Bình thường',
+                'Bình thường', 'Bình thường', 'Bình thường', 'Bình thường', 'Bình thường',
+                'Bình thường', 'Bình thường', 'Bình thường', 'Bình thường', 'Bình thường'
+            ],
+            'Đang chứa sản phẩm': ['Quá hạn', '', 'Quá hạn', 'Quá hạn', ''] * 4
+        }),
+        
+        'Cleaning History': pd.DataFrame({
+            'Khu vực': ['Lọc thô', 'Nấng - hạ', 'Đường ôn'] * 3,
+            'Thiết bị': [f'Bồn {i}' for i in range(1, 10)],
+            'Phương pháp': ['CIP 1', 'CIP 2'] * 5 + ['CIP 1'],
+            'Tần suất (ngày)': [7, 15, 30] * 3,
+            'Ngày vệ sinh': [
+                '20/07/2025', '21/07/2025', '22/07/2025', '23/07/2025', '24/07/2025',
+                '25/07/2025', '26/07/2025', '27/07/2025', '28/07/2025'
+            ],
+            'Người thực hiện': ['Nguyễn A', 'Trần B', 'Lê C'] * 3
+        }),
+        
+        'Actual result': pd.DataFrame({
+            'Khu vực': ['Lọc thô', 'Nấng - hạ', 'Đường ôn'] * 2,
+            'Thiết bị': [f'Bồn {i}' for i in range(1, 7)],
+            'Phương pháp': ['CIP 1', 'CIP 2'] * 3,
+            'Tần suất (ngày)': [7, 15, 30] * 2,
+            'Ngày vệ sinh': [
+                '20/07/2025', '21/07/2025', '22/07/2025', 
+                '23/07/2025', '24/07/2025', '25/07/2025'
+            ],
+            'Người thực hiện': ['Nguyễn A', 'Trần B'] * 3,
+            'Kết quả': ['Đạt', 'Đạt', 'Không đạt', 'Đạt', 'Đạt', 'Đạt'],
+            'Ghi chú': ['', '', 'Cần làm lại', '', '', '']
+        })
+    }
+    
+    # Create formatted Excel file
+    wb = create_formatted_excel(sample_data)
+    
+    # Save test file
+    test_filename = f"CIP_Plan_Test_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    wb.save(test_filename)
+    
+    print(f"✅ Created test file: {test_filename}")
+    print("📋 File features:")
+    print("  - Professional color coding by status")
+    print("  - Auto-adjusted column widths")
+    print("  - Consistent date formatting (DD/MM/YYYY)")
+    print("  - Freeze panes and auto-filters")
+    print("  - Summary statistics section")
+    print("  - Critical equipment highlighting")
+    
+    return test_filename
+
+def create_local_backup(sheets_data, filename_suffix="manual"):
+    """
+    Create a local backup of the Excel file with professional formatting
+    """
+    try:
+        backup_filename = f"CIP_plan_backup_{filename_suffix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        wb = create_formatted_excel(sheets_data)
+        wb.save(backup_filename)
+        print(f"💾 Created local backup: {backup_filename}")
+        return backup_filename
+    except Exception as e:
+        print(f"❌ Failed to create local backup: {str(e)}")
+        return None
+
+def validate_data_integrity(sheets_data):
+    """
+    Validate data integrity and consistency across sheets
+    """
+    print("🔍 Validating data integrity...")
+    
+    issues = []
+    
+    # Check Master plan
+    if 'Master plan' in sheets_data:
+        master_df = sheets_data['Master plan']
+        
+        # Check for missing required columns
+        required_columns = ['Khu vực', 'Thiết bị', 'Phương pháp', 'Tần suất (ngày)', 'Trạng thái']
+        for col in required_columns:
+            if col not in master_df.columns:
+                issues.append(f"Missing required column in Master plan: {col}")
+        
+        # Check for empty critical fields
+        if 'Thiết bị' in master_df.columns:
+            empty_devices = master_df['Thiết bị'].isna().sum()
+            if empty_devices > 0:
+                issues.append(f"Found {empty_devices} rows with empty device names")
+        
+        # Check date formats
+        date_columns = [col for col in master_df.columns if 'ngày' in col.lower()]
+        for date_col in date_columns:
+            invalid_dates = 0
+            for idx, date_val in master_df[date_col].items():
+                if pd.notna(date_val) and str(date_val).strip():
+                    if not parse_date(str(date_val)):
+                        invalid_dates += 1
+            
+            if invalid_dates > 0:
+                issues.append(f"Found {invalid_dates} invalid dates in column {date_col}")
+    
+    # Check consistency between sheets
+    if 'Master plan' in sheets_data and 'Actual result' in sheets_data:
+        master_devices = set(sheets_data['Master plan']['Thiết bị'].dropna())
+        actual_devices = set(sheets_data['Actual result']['Thiết bị'].dropna())
+        
+        # Devices in Actual result but not in Master plan
+        orphaned_devices = actual_devices - master_devices
+        if orphaned_devices:
+            issues.append(f"Found {len(orphaned_devices)} devices in Actual result not in Master plan")
+    
+    # Print results
+    if issues:
+        print("⚠️ Data integrity issues found:")
+        for issue in issues:
+            print(f"  - {issue}")
+    else:
+        print("✅ Data integrity validation passed")
+    
+    return len(issues) == 0
+
+def generate_compliance_report(updated_values):
+    """
+    Generate a detailed compliance report
+    """
+    if not updated_values:
+        print("❌ No data available for compliance report")
+        return None
+    
+    print("📊 Generating compliance report...")
+    
+    # Create DataFrame
+    df = pd.DataFrame(updated_values, columns=[
+        'Khu vực', 'Thiết bị', 'Phương pháp', 'Tần suất (ngày)',
+        'Ngày vệ sinh gần nhất', 'Ngày kế hoạch vệ sinh tiếp theo', 'Trạng thái', 'Đang chứa sản phẩm'
+    ])
+    
+    # Calculate compliance metrics
+    total_equipment = len(df)
+    status_counts = df['Trạng thái'].value_counts()
+    
+    compliant = status_counts.get('Bình thường', 0) + status_counts.get('Sắp đến hạn', 0)
+    compliance_rate = (compliant / total_equipment * 100) if total_equipment > 0 else 0
+    
+    critical_equipment = len(df[(df['Trạng thái'] == 'Quá hạn') & 
+                                (df['Đang chứa sản phẩm'].notna()) & 
+                                (df['Đang chứa sản phẩm'].str.strip() != '')])
+    
+    # Area-wise analysis
+    area_analysis = df.groupby('Khu vực')['Trạng thái'].value_counts().unstack(fill_value=0)
+    
+    # Generate report
+    report = {
+        'timestamp': datetime.now().strftime('%d/%m/%Y %H:%M:%S'),
+        'total_equipment': total_equipment,
+        'compliance_rate': round(compliance_rate, 2),
+        'status_breakdown': status_counts.to_dict(),
+        'critical_equipment': critical_equipment,
+        'area_analysis': area_analysis.to_dict() if not area_analysis.empty else {},
+        'recommendations': []
+    }
+    
+    # Add recommendations
+    if compliance_rate < 80:
+        report['recommendations'].append("Compliance rate below 80% - immediate action required")
+    
+    if critical_equipment > 0:
+        report['recommendations'].append(f"🚨 {critical_equipment} critical equipment (overdue + has product) needs immediate attention")
+    
+    overdue_count = status_counts.get('Quá hạn', 0)
+    if overdue_count > 0:
+        report['recommendations'].append(f"⚠️ {overdue_count} equipment overdue for cleaning")
+    
+    print(f"✅ Compliance report generated:")
+    print(f"  - Overall compliance rate: {compliance_rate:.1f}%")
+    print(f"  - Critical equipment: {critical_equipment}")
+    print(f"  - Total overdue: {overdue_count}")
+    
+    return report
+
+def export_to_csv(sheets_data, export_dir="exports"):
+    """
+    Export all sheets to CSV files for external analysis
+    """
+    try:
+        # Create export directory if it doesn't exist
+        if not os.path.exists(export_dir):
+            os.makedirs(export_dir)
+        
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        exported_files = []
+        
+        for sheet_name, df in sheets_data.items():
+            if not df.empty:
+                filename = f"{sheet_name.replace(' ', '_')}_{timestamp}.csv"
+                filepath = os.path.join(export_dir, filename)
+                df.to_csv(filepath, index=False, encoding='utf-8-sig')
+                exported_files.append(filepath)
+                print(f"✅ Exported {sheet_name} to {filepath}")
+        
+        print(f"📁 Exported {len(exported_files)} files to {export_dir}")
+        return exported_files
+        
+    except Exception as e:
+        print(f"❌ Error exporting to CSV: {str(e)}")
+        return []
+
+def print_system_info():
+    """
+    Print system information and requirements
+    """
+    print("🔧 CIP Cleaning Management System")
+    print("=" * 50)
+    print(f"📅 Current Date: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
+    print(f"🐍 Python Version: {sys.version}")
+    print("\n📋 Required Dependencies:")
+    required_packages = [
+        'pandas', 'openpyxl', 'requests', 'matplotlib', 
+        'msal', 'smtplib', 'email', 'datetime'
+    ]
+    
+    for package in required_packages:
+        try:
+            __import__(package)
+            print(f"  ✅ {package}")
+        except ImportError:
+            print(f"  ❌ {package} - NOT INSTALLED")
+    
+    print(f"\n🔑 Environment Variables:")
+    env_vars = ['SHAREPOINT_ACCESS_TOKEN', 'SHAREPOINT_REFRESH_TOKEN', 'GITHUB_TOKEN']
+    for var in env_vars:
+        if os.environ.get(var):
+            print(f"  ✅ {var}: {'*' * 20}...{os.environ.get(var)[-5:]}")
+        else:
+            print(f"  ❌ {var}: NOT SET")
+    
+    print(f"\n📁 SharePoint Configuration:")
+    print(f"  - Tenant ID: {SHAREPOINT_CONFIG['tenant_id']}")
+    print(f"  - Site Name: {SHAREPOINT_CONFIG['site_name']}")
+    print(f"  - File ID: {CIP_PLAN_FILE_ID}")
+
 # Run the update if executed directly
 if __name__ == "__main__":
-    success = run_update()
-    if success:
-        print("✅ CIP Cleaning automation completed successfully!")
-    else:
-        print("❌ CIP Cleaning automation failed!")
+    print("🚀 Starting CIP Cleaning Management System...")
+    print_system_info()
+    
+    # Ask user what to do
+    print("\n🎯 Available Operations:")
+    print("1. Full system update (SharePoint sync + email reports)")
+    print("2. Test Excel formatting only")
+    print("3. Create local backup")
+    print("4. Validate data integrity")
+    print("5. Export to CSV")
+    print("6. Generate compliance report")
+    
+    try:
+        # For automated runs, default to full update
+        choice = os.environ.get('RUN_MODE', '1')
+        
+        if choice == '1':
+            print("\n🔄 Running full system update...")
+            success = run_update()
+            if success:
+                print("✅ CIP Cleaning automation completed successfully!")
+            else:
+                print("❌ CIP Cleaning automation failed!")
+                sys.exit(1)
+                
+        elif choice == '2':
+            print("\n🧪 Testing Excel formatting...")
+            test_excel_formatting()
+            
+        elif choice == '3':
+            print("\n💾 Creating local backup...")
+            # This would need real data - placeholder for now
+            print("ℹ️ This option requires real SharePoint data")
+            
+        elif choice == '4':
+            print("\n🔍 Validating data integrity...")
+            # This would need real data - placeholder for now
+            print("ℹ️ This option requires real SharePoint data")
+            
+        elif choice == '5':
+            print("\n📄 Exporting to CSV...")
+            # This would need real data - placeholder for now
+            print("ℹ️ This option requires real SharePoint data")
+            
+        elif choice == '6':
+            print("\n📊 Generating compliance report...")
+            # This would need real data - placeholder for now
+            print("ℹ️ This option requires real SharePoint data")
+            
+        else:
+            print("❌ Invalid choice, defaulting to full update...")
+            success = run_update()
+            
+    except KeyboardInterrupt:
+        print("\n🛑 Operation cancelled by user")
+        sys.exit(0)
+    except Exception as e:
+        print(f"\n❌ Unexpected error: {str(e)}")
+        print(f"❌ Traceback: {traceback.format_exc()}")
         sys.exit(1)
