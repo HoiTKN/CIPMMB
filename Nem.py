@@ -337,7 +337,9 @@ class SharePointSamplingProcessor:
             excel_buffer = io.BytesIO()
             with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
                 for sheet_name, df in sheets_data.items():
-                    df.to_excel(writer, sheet_name=sheet_name, index=False)
+                    # Format date columns before saving
+                    df_formatted = self.format_dataframe_for_excel(df)
+                    df_formatted.to_excel(writer, sheet_name=sheet_name, index=False)
 
             excel_buffer.seek(0)
             excel_content = excel_buffer.getvalue()
@@ -405,6 +407,36 @@ class SharePointSamplingProcessor:
         except Exception as e:
             self.log(f"❌ Error uploading to SharePoint: {str(e)}")
             return False
+
+    def format_dataframe_for_excel(self, df):
+        """Format dataframe for better Excel display"""
+        df_formatted = df.copy()
+        
+        # Format date columns to DD/MM/YYYY
+        date_columns = ['Ngày kiểm tra gần nhất', 'Kế hoạch lấy mẫu tiếp theo', 'Ngày kiểm tra', 'Kế hoạch lấy mẫu', 'Ngày thực hiện']
+        
+        for col in df_formatted.columns:
+            col_name = str(col).strip()
+            if any(date_keyword in col_name for date_keyword in date_columns):
+                df_formatted[col] = df_formatted[col].apply(self.format_date_for_display)
+                
+        return df_formatted
+
+    def format_date_for_display(self, date_value):
+        """Format date to DD/MM/YYYY string"""
+        if pd.isna(date_value) or date_value == '' or str(date_value).strip() in ['nan', 'None', '']:
+            return ''
+            
+        # If already a string in correct format, return as is
+        if isinstance(date_value, str) and len(date_value) == 10 and date_value.count('/') == 2:
+            return date_value
+            
+        # Try to parse and format
+        parsed_date = parse_date(date_value)
+        if parsed_date:
+            return parsed_date.strftime('%d/%m/%Y')
+        else:
+            return str(date_value)
 
     def upload_backup_file(self, excel_content):
         """Upload to a backup file when original is locked"""
@@ -730,7 +762,7 @@ def update_sampling_schedule(df, check_type="Hóa lý"):
             next_sampling_date = ngay_kiem_tra_date + timedelta(days=tan_suat)
             next_sampling_str = next_sampling_date.strftime('%d/%m/%Y')
 
-            # Update the plan column
+            # Update the plan column with consistent DD/MM/YYYY format
             if col_mapping.get('ke_hoach'):
                 updated_df.at[idx, col_mapping['ke_hoach']] = next_sampling_str
 
@@ -745,7 +777,7 @@ def update_sampling_schedule(df, check_type="Hóa lý"):
                 'line': line or 'N/A',
                 'chi_tieu': chi_tieu or 'N/A',
                 'tan_suat': tan_suat_str,
-                'ngay_kiem_tra': ngay_kiem_tra,
+                'ngay_kiem_tra': ngay_kiem_tra_date.strftime('%d/%m/%Y'),  # Format consistently
                 'sample_id': sample_id or 'N/A',
                 'ke_hoach': next_sampling_str,
                 'loai_kiem_tra': check_type,
@@ -779,9 +811,9 @@ def update_sampling_schedule(df, check_type="Hóa lý"):
 
     return due_samples, all_samples, updated_df
 
-# Function to create summary report
+# Function to create summary report with better formatting
 def create_summary_report(all_samples):
-    """Create summary report DataFrame"""
+    """Create summary report DataFrame with improved formatting"""
     print("Đang tạo báo cáo tổng hợp...")
 
     if not all_samples:
@@ -798,21 +830,98 @@ def create_summary_report(all_samples):
             sample['chi_tieu'],
             sample['tan_suat'],
             sample['sample_id'],
-            sample['ngay_kiem_tra'],
-            sample['ke_hoach'],
+            sample['ngay_kiem_tra'],  # Already formatted as DD/MM/YYYY
+            sample['ke_hoach'],       # Already formatted as DD/MM/YYYY
             sample['loai_kiem_tra'],
             sample['status']
         ])
 
-    # Define headers
-    headers = ['Khu vực', 'Sản phẩm', 'Line / Xưởng', 'Chỉ tiêu kiểm', 
-               'Tần suất (ngày)', 'Sample ID', 'Ngày kiểm tra', 
-               'Kế hoạch lấy mẫu tiếp theo', 'Loại kiểm tra', 'Trạng thái']
+    # Define headers with proper Vietnamese formatting
+    headers = [
+        'Khu vực', 
+        'Sản phẩm', 
+        'Line / Xưởng', 
+        'Chỉ tiêu kiểm tra', 
+        'Tần suất (ngày)', 
+        'Sample ID', 
+        'Ngày kiểm tra gần nhất',  # DD/MM/YYYY
+        'Kế hoạch lấy mẫu tiếp theo',  # DD/MM/YYYY
+        'Loại kiểm tra', 
+        'Trạng thái'
+    ]
 
     summary_df = pd.DataFrame(summary_data, columns=headers)
 
     print(f"Đã tạo báo cáo tổng hợp với {len(summary_df)} mẫu.")
     return summary_df
+
+# NEW FUNCTION: Create testing history report
+def create_history_report(existing_history, new_samples):
+    """Create or update testing history report"""
+    print("Đang tạo/cập nhật lịch sử kiểm mẫu...")
+    
+    current_date = datetime.now().strftime('%d/%m/%Y')
+    current_time = datetime.now().strftime('%H:%M:%S')
+    
+    # Prepare new history entries for samples that are due (being tested)
+    new_history_data = []
+    
+    for sample in new_samples:
+        if sample['status'] == 'Đến hạn':
+            new_history_data.append([
+                current_date,           # Ngày thực hiện
+                current_time,           # Giờ thực hiện  
+                sample['khu_vuc'],      # Khu vực
+                sample['san_pham'],     # Sản phẩm
+                sample['line'],         # Line/Xưởng
+                sample['chi_tieu'],     # Chỉ tiêu kiểm tra
+                sample['loai_kiem_tra'], # Loại kiểm tra (Hóa lý/Vi sinh)
+                sample['sample_id'],    # Sample ID
+                'Đã lấy mẫu',          # Trạng thái
+                '',                     # Ghi chú (để trống cho user điền)
+                sample['ke_hoach']      # Ngày kế hoạch ban đầu
+            ])
+    
+    # Define headers for history sheet
+    history_headers = [
+        'Ngày thực hiện',           # DD/MM/YYYY
+        'Giờ thực hiện',            # HH:MM:SS
+        'Khu vực',
+        'Sản phẩm', 
+        'Line / Xưởng',
+        'Chỉ tiêu kiểm tra',
+        'Loại kiểm tra',            # Hóa lý hoặc Vi sinh
+        'Sample ID',
+        'Trạng thái',               # Đã lấy mẫu, Đang phân tích, Hoàn thành, etc.
+        'Ghi chú',                  # Để user thêm thông tin
+        'Ngày kế hoạch'             # Ngày ban đầu theo kế hoạch
+    ]
+    
+    # Create new history DataFrame
+    new_history_df = pd.DataFrame(new_history_data, columns=history_headers)
+    
+    # If there's existing history, combine them
+    if existing_history is not None and not existing_history.empty:
+        print(f"Tìm thấy lịch sử hiện có với {len(existing_history)} bản ghi.")
+        
+        # Ensure existing history has the same columns
+        for col in history_headers:
+            if col not in existing_history.columns:
+                existing_history[col] = ''
+        
+        # Combine old and new history
+        combined_history = pd.concat([existing_history, new_history_df], ignore_index=True)
+        
+        # Sort by date (most recent first)
+        combined_history['Ngày thực hiện_sorted'] = pd.to_datetime(combined_history['Ngày thực hiện'], format='%d/%m/%Y', errors='coerce')
+        combined_history = combined_history.sort_values('Ngày thực hiện_sorted', ascending=False, na_position='last')
+        combined_history = combined_history.drop('Ngày thực hiện_sorted', axis=1)
+        
+        print(f"Đã thêm {len(new_history_data)} bản ghi mới. Tổng cộng: {len(combined_history)} bản ghi.")
+        return combined_history
+    else:
+        print(f"Tạo lịch sử mới với {len(new_history_data)} bản ghi.")
+        return new_history_df
 
 # Create visualization charts for email
 def create_charts(due_samples):
@@ -879,45 +988,111 @@ def send_email_notification(due_samples):
         hoa_ly_samples = [s for s in due_samples if s['loai_kiem_tra'] == 'Hóa lý']
         vi_sinh_samples = [s for s in due_samples if s['loai_kiem_tra'] == 'Vi sinh']
 
-        # HTML content
+        # HTML content with better formatting
         html_content = f"""
         <html>
         <head>
             <meta charset="UTF-8">
             <style>
-                body {{ font-family: Arial, sans-serif; }}
-                table {{ border-collapse: collapse; width: 100%; margin-top: 20px; }}
-                th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
-                th {{ background-color: #f2f2f2; color: #333; }}
-                .due {{ background-color: #ffcccc; }}
-                h2 {{ color: #003366; }}
-                h3 {{ color: #004d99; margin-top: 25px; }}
-                .summary {{ margin: 20px 0; }}
-                .footer {{ margin-top: 30px; font-size: 0.9em; color: #666; }}
+                body {{ 
+                    font-family: Arial, sans-serif; 
+                    margin: 20px;
+                    background-color: #f5f5f5;
+                }}
+                .container {{
+                    background-color: white;
+                    padding: 20px;
+                    border-radius: 8px;
+                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                }}
+                table {{ 
+                    border-collapse: collapse; 
+                    width: 100%; 
+                    margin-top: 15px;
+                    background-color: white;
+                }}
+                th, td {{ 
+                    border: 1px solid #ddd; 
+                    padding: 8px; 
+                    text-align: left;
+                    font-size: 12px;
+                }}
+                th {{ 
+                    background-color: #4CAF50; 
+                    color: white;
+                    font-weight: bold;
+                }}
+                .due {{ 
+                    background-color: #fff3cd;
+                    border-left: 4px solid #ffc107;
+                }}
+                h2 {{ 
+                    color: #2c3e50; 
+                    border-bottom: 2px solid #3498db;
+                    padding-bottom: 10px;
+                }}
+                h3 {{ 
+                    color: #34495e; 
+                    margin-top: 25px;
+                    background-color: #ecf0f1;
+                    padding: 10px;
+                    border-radius: 4px;
+                }}
+                .summary {{ 
+                    margin: 20px 0;
+                    background-color: #e8f4fd;
+                    padding: 15px;
+                    border-radius: 4px;
+                    border-left: 4px solid #3498db;
+                }}
+                .summary-item {{
+                    margin: 5px 0;
+                    font-size: 14px;
+                }}
+                .footer {{ 
+                    margin-top: 30px; 
+                    font-size: 0.9em; 
+                    color: #666;
+                    background-color: #f8f9fa;
+                    padding: 15px;
+                    border-radius: 4px;
+                }}
+                .status-due {{
+                    color: #dc3545;
+                    font-weight: bold;
+                }}
             </style>
         </head>
         <body>
-            <h2>Thông báo lấy mẫu QA - {datetime.today().strftime("%d/%m/%Y")}</h2>
-            
-            <div class="summary">
-                <p><strong>Tổng số mẫu cần lấy:</strong> {len(due_samples)}</p>
-                <p><strong>Mẫu Hóa lý:</strong> {len(hoa_ly_samples)}</p>
-                <p><strong>Mẫu Vi sinh:</strong> {len(vi_sinh_samples)}</p>
-            </div>
+            <div class="container">
+                <h2>📋 Thông báo lấy mẫu QA - {datetime.today().strftime("%d/%m/%Y")}</h2>
+                
+                <div class="summary">
+                    <div class="summary-item"><strong>📊 Tổng số mẫu cần lấy:</strong> <span class="status-due">{len(due_samples)}</span></div>
+                    <div class="summary-item"><strong>🧪 Mẫu Hóa lý:</strong> {len(hoa_ly_samples)}</div>
+                    <div class="summary-item"><strong>🦠 Mẫu Vi sinh:</strong> {len(vi_sinh_samples)}</div>
+                    <div class="summary-item"><strong>📅 Thời gian tạo báo cáo:</strong> {datetime.now().strftime("%d/%m/%Y %H:%M:%S")}</div>
+                </div>
         """
 
         # Add tables for each type
         if hoa_ly_samples:
-            html_content += create_email_table("Hóa lý", hoa_ly_samples)
+            html_content += create_email_table("🧪 Hóa lý", hoa_ly_samples)
 
         if vi_sinh_samples:
-            html_content += create_email_table("Vi sinh", vi_sinh_samples)
+            html_content += create_email_table("🦠 Vi sinh", vi_sinh_samples)
 
         html_content += """
-            <div class="footer">
-                <p>Vui lòng thực hiện lấy mẫu và cập nhật ID mẫu vào SharePoint.</p>
-                <p>Báo cáo tổng hợp đã được cập nhật trong file Excel.</p>
-                <p>Email này được tự động tạo bởi hệ thống. Vui lòng không trả lời.</p>
+                <div class="footer">
+                    <h4>📝 Hướng dẫn thực hiện:</h4>
+                    <ol>
+                        <li>Vui lòng thực hiện lấy mẫu theo danh sách trên</li>
+                        <li>Cập nhật Sample ID mới vào SharePoint sau khi lấy mẫu</li>
+                        <li>Kiểm tra và cập nhật lịch sử trong sheet "Lịch sử kiểm mẫu"</li>
+                        <li>Báo cáo tổng hợp đã được tự động cập nhật trong file Excel</li>
+                    </ol>
+                    <p><em>⚠️ Email này được tự động tạo bởi hệ thống QA Sampling. Vui lòng không trả lời email này.</em></p>
+                </div>
             </div>
         </body>
         </html>
@@ -953,20 +1128,20 @@ def send_email_notification(due_samples):
         return False
 
 def create_email_table(check_type, samples):
-    """Create HTML table for email"""
+    """Create HTML table for email with improved formatting"""
     html = f"""
-    <h3>Danh sách mẫu {check_type} cần lấy:</h3>
+    <h3>{check_type} - Danh sách mẫu cần lấy ({len(samples)} mẫu):</h3>
     <table>
         <thead>
             <tr>
-                <th>Khu vực</th>
-                <th>Sản phẩm</th>
-                <th>Line / Xưởng</th>
-                <th>Chỉ tiêu kiểm</th>
-                <th>Tần suất (ngày)</th>
-                <th>Ngày kiểm tra gần nhất</th>
-                <th>Sample ID</th>
-                <th>Kế hoạch lấy mẫu tiếp theo</th>
+                <th style="width: 12%;">Khu vực</th>
+                <th style="width: 20%;">Sản phẩm</th>
+                <th style="width: 12%;">Line/Xưởng</th>
+                <th style="width: 15%;">Chỉ tiêu kiểm tra</th>
+                <th style="width: 8%;">Tần suất (ngày)</th>
+                <th style="width: 12%;">Ngày kiểm tra gần nhất</th>
+                <th style="width: 10%;">Sample ID</th>
+                <th style="width: 11%;">Kế hoạch tiếp theo</th>
             </tr>
         </thead>
         <tbody>
@@ -979,10 +1154,10 @@ def create_email_table(check_type, samples):
                 <td>{sample['san_pham']}</td>
                 <td>{sample['line']}</td>
                 <td>{sample['chi_tieu']}</td>
-                <td>{sample['tan_suat']}</td>
-                <td>{sample['ngay_kiem_tra']}</td>
-                <td>{sample['sample_id']}</td>
-                <td>{sample['ke_hoach']}</td>
+                <td style="text-align: center;">{sample['tan_suat']}</td>
+                <td style="text-align: center;">{sample['ngay_kiem_tra']}</td>
+                <td style="text-align: center;">{sample['sample_id']}</td>
+                <td style="text-align: center;">{sample['ke_hoach']}</td>
             </tr>
         """
 
@@ -1009,11 +1184,23 @@ def run_update():
         all_due_samples = []
         all_collected_samples = []
         updated_sheets = {}
+        existing_history = None
+
+        # Check if there's an existing history sheet
+        history_sheet_names = ['Lịch sử kiểm mẫu', 'Lich su kiem mau', 'Testing History', 'History']
+        for sheet_name in sheets_data:
+            if any(hist_name.lower() in sheet_name.lower() for hist_name in history_sheet_names):
+                existing_history = sheets_data[sheet_name]
+                print(f"Tìm thấy sheet lịch sử: {sheet_name}")
+                break
 
         # Process each sheet that looks like a sampling schedule
         for sheet_name, df in sheets_data.items():
-            # Skip empty sheets or summary sheets
-            if df.empty or 'tổng hợp' in sheet_name.lower() or 'summary' in sheet_name.lower():
+            # Skip empty sheets, summary sheets, or history sheets
+            if (df.empty or 
+                'tổng hợp' in sheet_name.lower() or 
+                'summary' in sheet_name.lower() or
+                any(hist_name.lower() in sheet_name.lower() for hist_name in history_sheet_names)):
                 updated_sheets[sheet_name] = df
                 continue
 
@@ -1040,16 +1227,22 @@ def run_update():
             # Add delay between processing sheets
             time.sleep(2)
 
-        # Create summary report sheet
+        # Create summary report sheet with better formatting
         if all_collected_samples:
             summary_df = create_summary_report(all_collected_samples)
             updated_sheets['Báo cáo tổng hợp'] = summary_df
+
+        # Create or update history report
+        if all_due_samples:  # Only create history for samples that are due
+            history_df = create_history_report(existing_history, all_due_samples)
+            updated_sheets['Lịch sử kiểm mẫu'] = history_df
 
         # Print processing results
         print(f"\n📊 Kết quả xử lý tổng thể:")
         print(f"  - Tổng số mẫu được theo dõi: {len(all_collected_samples)}")
         print(f"  - Mẫu đến hạn cần lấy: {len(all_due_samples)}")
         print(f"  - Sheets đã xử lý: {len(updated_sheets)}")
+        print(f"  - Đã tạo/cập nhật lịch sử kiểm mẫu: {'✅' if all_due_samples else '⏭️'}")
 
         # Show sample of collected data for verification
         if all_collected_samples:
@@ -1084,7 +1277,9 @@ def run_update():
                 backup_filename = f"Sampling_plan_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
                 with pd.ExcelWriter(backup_filename, engine='openpyxl') as writer:
                     for sheet_name, df in updated_sheets.items():
-                        df.to_excel(writer, sheet_name=sheet_name, index=False)
+                        # Apply formatting before saving
+                        df_formatted = processor.format_dataframe_for_excel(df)
+                        df_formatted.to_excel(writer, sheet_name=sheet_name, index=False)
                 print(f"💾 Created local backup: {backup_filename}")
             except Exception as e:
                 print(f"❌ Failed to create local backup: {str(e)}")
@@ -1094,6 +1289,7 @@ def run_update():
         print(f"  - Xử lý dữ liệu: {'✅' if len(all_collected_samples) > 0 else '❌'}")
         print(f"  - Upload SharePoint: {'✅' if upload_success else '❌'}")
         print(f"  - Email thông báo: {'✅' if email_success else '❌'}")
+        print(f"  - Lịch sử kiểm mẫu: {'✅' if all_due_samples else '⏭️ (không có mẫu đến hạn)'}")
 
         # Determine overall success
         # Success if we processed data successfully (upload failure is acceptable due to lock issues)
