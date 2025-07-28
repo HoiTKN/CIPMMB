@@ -340,6 +340,10 @@ class SharePointSamplingProcessor:
                     # Format date columns before saving
                     df_formatted = self.format_dataframe_for_excel(df)
                     df_formatted.to_excel(writer, sheet_name=sheet_name, index=False)
+                    
+                    # Auto-fit column widths for better readability
+                    worksheet = writer.sheets[sheet_name]
+                    self.auto_fit_columns(worksheet, df_formatted)
 
             excel_buffer.seek(0)
             excel_content = excel_buffer.getvalue()
@@ -407,6 +411,33 @@ class SharePointSamplingProcessor:
         except Exception as e:
             self.log(f"❌ Error uploading to SharePoint: {str(e)}")
             return False
+
+    def auto_fit_columns(self, worksheet, dataframe):
+        """Auto-fit column widths based on content"""
+        try:
+            for column in worksheet.columns:
+                max_length = 0
+                column_letter = column[0].column_letter
+                
+                # Check header length
+                if len(dataframe.columns) > 0:
+                    header_length = len(str(dataframe.columns[column[0].column - 1]))
+                    max_length = max(max_length, header_length)
+                
+                # Check data length in first 100 rows (for performance)
+                for cell in list(column)[:101]:  # Include header + 100 data rows
+                    try:
+                        if len(str(cell.value)) > max_length:
+                            max_length = len(str(cell.value))
+                    except:
+                        pass
+                
+                # Set column width with some padding, but cap at reasonable max
+                adjusted_width = min(max_length + 2, 50)  # Max width of 50
+                worksheet.column_dimensions[column_letter].width = max(adjusted_width, 8)  # Min width of 8
+                
+        except Exception as e:
+            self.log(f"Warning: Could not auto-fit columns: {str(e)}")
 
     def format_dataframe_for_excel(self, df):
         """Format dataframe for better Excel display"""
@@ -855,44 +886,56 @@ def create_summary_report(all_samples):
     print(f"Đã tạo báo cáo tổng hợp với {len(summary_df)} mẫu.")
     return summary_df
 
-# NEW FUNCTION: Create testing history report
-def create_history_report(existing_history, new_samples):
-    """Create or update testing history report"""
+# NEW FUNCTION: Create testing history report - Only track samples with new IDs
+def create_history_report(existing_history, all_samples_from_sheets):
+    """Create or update testing history report - only for samples with new Sample IDs"""
     print("Đang tạo/cập nhật lịch sử kiểm mẫu...")
     
     current_date = datetime.now().strftime('%d/%m/%Y')
-    current_time = datetime.now().strftime('%H:%M:%S')
     
-    # Prepare new history entries for samples that are due (being tested)
+    # Get existing Sample IDs from history to avoid duplicates
+    existing_sample_ids = set()
+    if existing_history is not None and not existing_history.empty:
+        # Find Sample ID column in existing history
+        id_columns = ['Sample ID', 'sample_id', 'Sample_ID', 'ID Mẫu']
+        for col in existing_history.columns:
+            if any(id_col.lower() in str(col).lower() for id_col in id_columns):
+                existing_sample_ids = set(existing_history[col].astype(str).str.strip())
+                break
+        print(f"Tìm thấy {len(existing_sample_ids)} Sample ID trong lịch sử hiện có.")
+    
+    # Find samples with new IDs (not in existing history)
     new_history_data = []
     
-    for sample in new_samples:
-        if sample['status'] == 'Đến hạn':
+    for sample in all_samples_from_sheets:
+        sample_id = str(sample.get('sample_id', '')).strip()
+        
+        # Only add samples that have valid ID and are not already in history
+        if (sample_id and 
+            sample_id not in ['N/A', 'nan', 'None', ''] and
+            sample_id not in existing_sample_ids):
+            
             new_history_data.append([
-                current_date,           # Ngày thực hiện
-                current_time,           # Giờ thực hiện  
-                sample['khu_vuc'],      # Khu vực
-                sample['san_pham'],     # Sản phẩm
-                sample['line'],         # Line/Xưởng
-                sample['chi_tieu'],     # Chỉ tiêu kiểm tra
-                sample['loai_kiem_tra'], # Loại kiểm tra (Hóa lý/Vi sinh)
-                sample['sample_id'],    # Sample ID
-                'Đã lấy mẫu',          # Trạng thái
-                '',                     # Ghi chú (để trống cho user điền)
-                sample['ke_hoach']      # Ngày kế hoạch ban đầu
+                current_date,               # Ngày thực hiện
+                sample['khu_vuc'],          # Khu vực
+                sample['san_pham'],         # Sản phẩm
+                sample['line'],             # Line/Xưởng
+                sample['chi_tieu'],         # Chỉ tiêu kiểm tra
+                sample['loai_kiem_tra'],    # Loại kiểm tra (Hóa lý/Vi sinh)
+                sample_id,                  # Sample ID
+                '',                         # Ghi chú (để trống cho user điền)
+                sample['ke_hoach']          # Ngày kế hoạch ban đầu
             ])
     
-    # Define headers for history sheet
+    # Define headers for history sheet (simplified)
     history_headers = [
         'Ngày thực hiện',           # DD/MM/YYYY
-        'Giờ thực hiện',            # HH:MM:SS
         'Khu vực',
         'Sản phẩm', 
         'Line / Xưởng',
         'Chỉ tiêu kiểm tra',
         'Loại kiểm tra',            # Hóa lý hoặc Vi sinh
         'Sample ID',
-        'Trạng thái',               # Đã lấy mẫu, Đang phân tích, Hoàn thành, etc.
         'Ghi chú',                  # Để user thêm thông tin
         'Ngày kế hoạch'             # Ngày ban đầu theo kế hoạch
     ]
@@ -909,6 +952,9 @@ def create_history_report(existing_history, new_samples):
             if col not in existing_history.columns:
                 existing_history[col] = ''
         
+        # Keep only the columns we want
+        existing_history = existing_history[history_headers]
+        
         # Combine old and new history
         combined_history = pd.concat([existing_history, new_history_df], ignore_index=True)
         
@@ -917,10 +963,10 @@ def create_history_report(existing_history, new_samples):
         combined_history = combined_history.sort_values('Ngày thực hiện_sorted', ascending=False, na_position='last')
         combined_history = combined_history.drop('Ngày thực hiện_sorted', axis=1)
         
-        print(f"Đã thêm {len(new_history_data)} bản ghi mới. Tổng cộng: {len(combined_history)} bản ghi.")
+        print(f"Đã thêm {len(new_history_data)} Sample ID mới. Tổng cộng: {len(combined_history)} bản ghi.")
         return combined_history
     else:
-        print(f"Tạo lịch sử mới với {len(new_history_data)} bản ghi.")
+        print(f"Tạo lịch sử mới với {len(new_history_data)} Sample ID.")
         return new_history_df
 
 # Create visualization charts for email
@@ -1232,9 +1278,9 @@ def run_update():
             summary_df = create_summary_report(all_collected_samples)
             updated_sheets['Báo cáo tổng hợp'] = summary_df
 
-        # Create or update history report
-        if all_due_samples:  # Only create history for samples that are due
-            history_df = create_history_report(existing_history, all_due_samples)
+        # Create or update history report - track samples with new IDs
+        if all_collected_samples:  # Track all samples, not just due ones
+            history_df = create_history_report(existing_history, all_collected_samples)
             updated_sheets['Lịch sử kiểm mẫu'] = history_df
 
         # Print processing results
@@ -1242,7 +1288,7 @@ def run_update():
         print(f"  - Tổng số mẫu được theo dõi: {len(all_collected_samples)}")
         print(f"  - Mẫu đến hạn cần lấy: {len(all_due_samples)}")
         print(f"  - Sheets đã xử lý: {len(updated_sheets)}")
-        print(f"  - Đã tạo/cập nhật lịch sử kiểm mẫu: {'✅' if all_due_samples else '⏭️'}")
+        print(f"  - Đã tạo/cập nhật lịch sử kiểm mẫu: {'✅' if all_collected_samples else '⏭️'}")
 
         # Show sample of collected data for verification
         if all_collected_samples:
@@ -1280,6 +1326,11 @@ def run_update():
                         # Apply formatting before saving
                         df_formatted = processor.format_dataframe_for_excel(df)
                         df_formatted.to_excel(writer, sheet_name=sheet_name, index=False)
+                        
+                        # Auto-fit column widths
+                        worksheet = writer.sheets[sheet_name]
+                        processor.auto_fit_columns(worksheet, df_formatted)
+                        
                 print(f"💾 Created local backup: {backup_filename}")
             except Exception as e:
                 print(f"❌ Failed to create local backup: {str(e)}")
@@ -1289,7 +1340,7 @@ def run_update():
         print(f"  - Xử lý dữ liệu: {'✅' if len(all_collected_samples) > 0 else '❌'}")
         print(f"  - Upload SharePoint: {'✅' if upload_success else '❌'}")
         print(f"  - Email thông báo: {'✅' if email_success else '❌'}")
-        print(f"  - Lịch sử kiểm mẫu: {'✅' if all_due_samples else '⏭️ (không có mẫu đến hạn)'}")
+        print(f"  - Lịch sử kiểm mẫu: {'✅' if all_collected_samples else '⏭️ (không có dữ liệu)'}")
 
         # Determine overall success
         # Success if we processed data successfully (upload failure is acceptable due to lock issues)
