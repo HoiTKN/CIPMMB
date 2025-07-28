@@ -891,8 +891,6 @@ def create_history_report(existing_history, all_samples_from_sheets):
     """Create or update testing history report - only for samples with new Sample IDs"""
     print("Đang tạo/cập nhật lịch sử kiểm mẫu...")
     
-    current_date = datetime.now().strftime('%d/%m/%Y')
-    
     # Get existing Sample IDs from history to avoid duplicates
     existing_sample_ids = set()
     if existing_history is not None and not existing_history.empty:
@@ -915,8 +913,11 @@ def create_history_report(existing_history, all_samples_from_sheets):
             sample_id not in ['N/A', 'nan', 'None', ''] and
             sample_id not in existing_sample_ids):
             
+            # Use the actual testing date (ngay_kiem_tra), not current date
+            ngay_thuc_hien = sample['ngay_kiem_tra']  # This is already formatted as DD/MM/YYYY
+            
             new_history_data.append([
-                current_date,               # Ngày thực hiện
+                ngay_thuc_hien,             # Ngày thực hiện = Ngày kiểm tra gần nhất
                 sample['khu_vuc'],          # Khu vực
                 sample['san_pham'],         # Sản phẩm
                 sample['line'],             # Line/Xưởng
@@ -926,6 +927,8 @@ def create_history_report(existing_history, all_samples_from_sheets):
                 '',                         # Ghi chú (để trống cho user điền)
                 sample['ke_hoach']          # Ngày kế hoạch ban đầu
             ])
+            
+            print(f"  Thêm Sample ID {sample_id} - Ngày thực hiện: {ngay_thuc_hien}")
     
     # Define headers for history sheet (simplified)
     history_headers = [
