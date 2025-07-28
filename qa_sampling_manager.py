@@ -25,8 +25,8 @@ SHAREPOINT_CONFIG = {
     'base_url': 'masangroup.sharepoint.com'
 }
 
-# SharePoint File ID from the new URL
-SAMPLING_FILE_ID = '0D5DEB9D-23AE-5C76-0C64-9FAB248215DE'  # Sampling plan NÃM RAU.xlsx
+# SharePoint File ID for "Sampling plan CF.xlsx"
+SAMPLING_FILE_ID = 'FA63D8F5-F5EF-55DC-D9D4-89A9DE4FD714'
 
 class GitHubSecretsUpdater:
     """Helper class to update GitHub Secrets using GitHub API"""
@@ -275,7 +275,7 @@ class SharePointSamplingProcessor:
     def download_excel_file(self):
         """Download Excel file from SharePoint"""
         try:
-            self.log(f"📥 Downloading Sampling plan file from SharePoint...")
+            self.log(f"📥 Downloading Sampling plan CF file from SharePoint...")
 
             # Get file download URL using file ID
             url = f"{self.base_url}/sites/{self.get_site_id()}/drive/items/{SAMPLING_FILE_ID}"
@@ -337,13 +337,7 @@ class SharePointSamplingProcessor:
             excel_buffer = io.BytesIO()
             with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
                 for sheet_name, df in sheets_data.items():
-                    # Format date columns before saving
-                    df_formatted = self.format_dataframe_for_excel(df)
-                    df_formatted.to_excel(writer, sheet_name=sheet_name, index=False)
-                    
-                    # Auto-fit column widths for better readability
-                    worksheet = writer.sheets[sheet_name]
-                    self.auto_fit_columns(worksheet, df_formatted)
+                    df.to_excel(writer, sheet_name=sheet_name, index=False)
 
             excel_buffer.seek(0)
             excel_content = excel_buffer.getvalue()
@@ -412,128 +406,12 @@ class SharePointSamplingProcessor:
             self.log(f"❌ Error uploading to SharePoint: {str(e)}")
             return False
 
-    def auto_fit_columns(self, worksheet, dataframe):
-        """Auto-fit column widths based on content"""
-        try:
-            for column in worksheet.columns:
-                max_length = 0
-                column_letter = column[0].column_letter
-                
-                # Check header length
-                if len(dataframe.columns) > 0:
-                    header_length = len(str(dataframe.columns[column[0].column - 1]))
-                    max_length = max(max_length, header_length)
-                
-                # Check data length in first 100 rows (for performance)
-                for cell in list(column)[:101]:  # Include header + 100 data rows
-                    try:
-                        if len(str(cell.value)) > max_length:
-                            max_length = len(str(cell.value))
-                    except:
-                        pass
-                
-                # Set column width with some padding, but cap at reasonable max
-                adjusted_width = min(max_length + 2, 50)  # Max width of 50
-                worksheet.column_dimensions[column_letter].width = max(adjusted_width, 8)  # Min width of 8
-                
-        except Exception as e:
-            self.log(f"Warning: Could not auto-fit columns: {str(e)}")
-
-    def format_dataframe_for_excel(self, df):
-        """Format dataframe for better Excel display"""
-        df_formatted = df.copy()
-        
-        # Format date columns to DD/MM/YYYY
-        date_columns = ['Ngày kiểm tra gần nhất', 'Kế hoạch lấy mẫu tiếp theo', 'Ngày kiểm tra', 'Kế hoạch lấy mẫu', 'Ngày thực hiện']
-        
-        for col in df_formatted.columns:
-            col_name = str(col).strip()
-            if any(date_keyword in col_name for date_keyword in date_columns):
-                df_formatted[col] = df_formatted[col].apply(self.format_date_for_display)
-                
-        return df_formatted
-
-    def format_date_for_display(self, date_value):
-        """Format date to DD/MM/YYYY string"""
-        import pandas as pd
-        
-        if pd.isna(date_value) or date_value == '' or str(date_value).strip() in ['nan', 'None', '']:
-            return ''
-            
-        # If already a string in correct format, return as is
-        if isinstance(date_value, str) and len(date_value) == 10 and date_value.count('/') == 2:
-            return date_value
-            
-        # Try to parse and format
-        parsed_date = parse_date(date_value)
-        if parsed_date:
-            return parsed_date.strftime('%d/%m/%Y')
-        else:
-            return str(date_value)
-
-    def auto_fit_columns(self, worksheet, dataframe):
-        """Auto-fit column widths based on content"""
-        try:
-            for column in worksheet.columns:
-                max_length = 0
-                column_letter = column[0].column_letter
-                
-                # Check header length
-                if len(dataframe.columns) > 0:
-                    header_length = len(str(dataframe.columns[column[0].column - 1]))
-                    max_length = max(max_length, header_length)
-                
-                # Check data length in first 100 rows (for performance)
-                for cell in list(column)[:101]:  # Include header + 100 data rows
-                    try:
-                        if len(str(cell.value)) > max_length:
-                            max_length = len(str(cell.value))
-                    except:
-                        pass
-                
-                # Set column width with some padding, but cap at reasonable max
-                adjusted_width = min(max_length + 2, 50)  # Max width of 50
-                worksheet.column_dimensions[column_letter].width = max(adjusted_width, 8)  # Min width of 8
-                
-        except Exception as e:
-            self.log(f"Warning: Could not auto-fit columns: {str(e)}")
-
-    def format_dataframe_for_excel(self, df):
-        """Format dataframe for better Excel display"""
-        df_formatted = df.copy()
-        
-        # Format date columns to DD/MM/YYYY
-        date_columns = ['Ngày kiểm tra gần nhất', 'Kế hoạch lấy mẫu tiếp theo', 'Ngày kiểm tra', 'Kế hoạch lấy mẫu', 'Ngày thực hiện', 'Ngày kế hoạch']
-        
-        for col in df_formatted.columns:
-            col_name = str(col).strip()
-            if any(date_keyword in col_name for date_keyword in date_columns):
-                df_formatted[col] = df_formatted[col].apply(self.format_date_for_display)
-                
-        return df_formatted
-
-    def format_date_for_display(self, date_value):
-        """Format date to DD/MM/YYYY string"""
-        if pd.isna(date_value) or date_value == '' or str(date_value).strip() in ['nan', 'None', '']:
-            return ''
-            
-        # If already a string in correct format, return as is
-        if isinstance(date_value, str) and len(date_value) == 10 and date_value.count('/') == 2:
-            return date_value
-            
-        # Try to parse and format
-        parsed_date = parse_date(date_value)
-        if parsed_date:
-            return parsed_date.strftime('%d/%m/%Y')
-        else:
-            return str(date_value)
-
     def upload_backup_file(self, excel_content):
         """Upload to a backup file when original is locked"""
         try:
             # Generate backup filename with timestamp
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            backup_filename = f"Sampling_plan_NÃM_RAU_backup_{timestamp}.xlsx"
+            backup_filename = f"Sampling_plan_CF_backup_{timestamp}.xlsx"
 
             self.log(f"🔄 Uploading to backup file: {backup_filename}")
 
@@ -579,7 +457,7 @@ class SharePointSamplingProcessor:
 def parse_date(date_str):
     """Try to parse date with multiple formats and handle Excel date formats"""
     from datetime import datetime, timedelta  # Import at the top to avoid UnboundLocalError
-    
+
     if not date_str or str(date_str).strip() in ['nan', 'None', '', 'NaT']:
         return None
 
@@ -605,7 +483,6 @@ def parse_date(date_str):
             # Excel date serial numbers are typically > 1 and < 50000 for reasonable dates
             if 1 < excel_date < 50000:
                 # Excel epoch is 1900-01-01 (with some quirks)
-                from datetime import datetime, timedelta
                 excel_epoch = datetime(1900, 1, 1)
                 # Excel incorrectly treats 1900 as a leap year, so subtract 2 days
                 return excel_epoch + timedelta(days=excel_date - 2)
@@ -852,7 +729,7 @@ def update_sampling_schedule(df, check_type="Hóa lý"):
             next_sampling_date = ngay_kiem_tra_date + timedelta(days=tan_suat)
             next_sampling_str = next_sampling_date.strftime('%d/%m/%Y')
 
-            # Update the plan column with consistent DD/MM/YYYY format
+            # Update the plan column
             if col_mapping.get('ke_hoach'):
                 updated_df.at[idx, col_mapping['ke_hoach']] = next_sampling_str
 
@@ -867,7 +744,7 @@ def update_sampling_schedule(df, check_type="Hóa lý"):
                 'line': line or 'N/A',
                 'chi_tieu': chi_tieu or 'N/A',
                 'tan_suat': tan_suat_str,
-                'ngay_kiem_tra': ngay_kiem_tra_date.strftime('%d/%m/%Y'),  # Format consistently
+                'ngay_kiem_tra': ngay_kiem_tra,
                 'sample_id': sample_id or 'N/A',
                 'ke_hoach': next_sampling_str,
                 'loai_kiem_tra': check_type,
@@ -901,9 +778,9 @@ def update_sampling_schedule(df, check_type="Hóa lý"):
 
     return due_samples, all_samples, updated_df
 
-# Function to create summary report with better formatting
+# Function to create summary report
 def create_summary_report(all_samples):
-    """Create summary report DataFrame with improved formatting"""
+    """Create summary report DataFrame"""
     print("Đang tạo báo cáo tổng hợp...")
 
     if not all_samples:
@@ -920,160 +797,23 @@ def create_summary_report(all_samples):
             sample['chi_tieu'],
             sample['tan_suat'],
             sample['sample_id'],
-            sample['ngay_kiem_tra'],  # Already formatted as DD/MM/YYYY
-            sample['ke_hoach'],       # Already formatted as DD/MM/YYYY
+            sample['ngay_kiem_tra'],
+            sample['ke_hoach'],
             sample['loai_kiem_tra'],
             sample['status']
         ])
 
-    # Define headers with proper Vietnamese formatting
-    headers = [
-        'Khu vực', 
-        'Sản phẩm', 
-        'Line / Xưởng', 
-        'Chỉ tiêu kiểm tra', 
-        'Tần suất (ngày)', 
-        'Sample ID', 
-        'Ngày kiểm tra gần nhất',  # DD/MM/YYYY
-        'Kế hoạch lấy mẫu tiếp theo',  # DD/MM/YYYY
-        'Loại kiểm tra', 
-        'Trạng thái'
-    ]
+    # Define headers
+    headers = ['Khu vực', 'Sản phẩm', 'Line / Xưởng', 'Chỉ tiêu kiểm', 
+               'Tần suất (ngày)', 'Sample ID', 'Ngày kiểm tra', 
+               'Kế hoạch lấy mẫu tiếp theo', 'Loại kiểm tra', 'Trạng thái']
 
     summary_df = pd.DataFrame(summary_data, columns=headers)
 
     print(f"Đã tạo báo cáo tổng hợp với {len(summary_df)} mẫu.")
     return summary_df
 
-# NEW FUNCTION: Create testing history report - Only track samples with new IDs
-def create_history_report(existing_history, all_samples_from_sheets):
-    """Create or update testing history report - only for samples with new Sample IDs"""
-    print("Đang tạo/cập nhật lịch sử kiểm mẫu...")
-    
-    # Get existing Sample IDs from history to avoid duplicates
-    existing_sample_ids = set()
-    if existing_history is not None and not existing_history.empty:
-        # Find Sample ID column in existing history
-        id_columns = ['Sample ID', 'sample_id', 'Sample_ID', 'ID Mẫu']
-        for col in existing_history.columns:
-            if any(id_col.lower() in str(col).lower() for id_col in id_columns):
-                existing_sample_ids = set(existing_history[col].astype(str).str.strip())
-                break
-        print(f"Tìm thấy {len(existing_sample_ids)} Sample ID trong lịch sử hiện có.")
-    
-    # Find samples with new IDs (not in existing history)
-    new_history_data = []
-    
-    for sample in all_samples_from_sheets:
-        sample_id = str(sample.get('sample_id', '')).strip()
-        
-        # Only add samples that have valid ID and are not already in history
-        if (sample_id and 
-            sample_id not in ['N/A', 'nan', 'None', ''] and
-            sample_id not in existing_sample_ids):
-            
-            # Use the actual testing date (ngay_kiem_tra), not current date
-            ngay_thuc_hien = sample['ngay_kiem_tra']  # This is already formatted as DD/MM/YYYY
-            
-            new_history_data.append([
-                ngay_thuc_hien,             # Ngày thực hiện = Ngày kiểm tra gần nhất
-                sample['khu_vuc'],          # Khu vực
-                sample['san_pham'],         # Sản phẩm
-                sample['line'],             # Line/Xưởng
-                sample['chi_tieu'],         # Chỉ tiêu kiểm tra
-                sample['loai_kiem_tra'],    # Loại kiểm tra (Hóa lý/Vi sinh)
-                sample_id,                  # Sample ID
-                '',                         # Ghi chú (để trống cho user điền)
-                sample['ke_hoach']          # Ngày kế hoạch ban đầu
-            ])
-            
-            print(f"  Thêm Sample ID {sample_id} - Ngày thực hiện: {ngay_thuc_hien}")
-    
-    # Define headers for history sheet (simplified)
-    history_headers = [
-        'Ngày thực hiện',           # DD/MM/YYYY
-        'Khu vực',
-        'Sản phẩm', 
-        'Line / Xưởng',
-        'Chỉ tiêu kiểm tra',
-        'Loại kiểm tra',            # Hóa lý hoặc Vi sinh
-        'Sample ID',
-        'Ghi chú',                  # Để user thêm thông tin
-        'Ngày kế hoạch'             # Ngày ban đầu theo kế hoạch
-    ]
-    
-    # Create new history DataFrame
-    new_history_df = pd.DataFrame(new_history_data, columns=history_headers)
-    
-    # If there's existing history, combine them
-    if existing_history is not None and not existing_history.empty:
-        print(f"Tìm thấy lịch sử hiện có với {len(existing_history)} bản ghi.")
-        
-        # Ensure existing history has the same columns
-        for col in history_headers:
-            if col not in existing_history.columns:
-                existing_history[col] = ''
-        
-        # Keep only the columns we want
-        existing_history = existing_history[history_headers]
-        
-        # Combine old and new history
-        combined_history = pd.concat([existing_history, new_history_df], ignore_index=True)
-        
-        # Sort by date (most recent first)
-        combined_history['Ngày thực hiện_sorted'] = pd.to_datetime(combined_history['Ngày thực hiện'], format='%d/%m/%Y', errors='coerce')
-        combined_history = combined_history.sort_values('Ngày thực hiện_sorted', ascending=False, na_position='last')
-        combined_history = combined_history.drop('Ngày thực hiện_sorted', axis=1)
-        
-        print(f"Đã thêm {len(new_history_data)} Sample ID mới. Tổng cộng: {len(combined_history)} bản ghi.")
-        return combined_history
-    else:
-        print(f"Tạo lịch sử mới với {len(new_history_data)} Sample ID.")
-        return new_history_df
-
-# Function to create summary report with better formatting
-def create_summary_report(all_samples):
-    """Create summary report DataFrame with improved formatting"""
-    print("Đang tạo báo cáo tổng hợp...")
-    
-    if not all_samples:
-        print("Không có mẫu nào để tạo báo cáo.")
-        return pd.DataFrame()
-    
-    # Create summary DataFrame
-    summary_data = []
-    for sample in all_samples:
-        summary_data.append([
-            sample['khu_vuc'],
-            sample['san_pham'],
-            sample['line'],
-            sample['chi_tieu'],
-            sample['tan_suat'],
-            sample['sample_id'],
-            sample['ngay_kiem_tra'],  # Already formatted as DD/MM/YYYY
-            sample['ke_hoach'],       # Already formatted as DD/MM/YYYY
-            sample['loai_kiem_tra'],
-            sample['status']
-        ])
-    
-    # Define headers with proper Vietnamese formatting
-    headers = [
-        'Khu vực', 
-        'Sản phẩm', 
-        'Line / Xưởng', 
-        'Chỉ tiêu kiểm tra', 
-        'Tần suất (ngày)', 
-        'Sample ID', 
-        'Ngày kiểm tra gần nhất',  # DD/MM/YYYY
-        'Kế hoạch lấy mẫu tiếp theo',  # DD/MM/YYYY
-        'Loại kiểm tra', 
-        'Trạng thái'
-    ]
-    
-    summary_df = pd.DataFrame(summary_data, columns=headers)
-    
-    print(f"Đã tạo báo cáo tổng hợp với {len(summary_df)} mẫu.")
-    return summary_df
+# Create visualization charts for email
 def create_charts(due_samples):
     try:
         if not due_samples:
@@ -1113,8 +853,7 @@ def create_charts(due_samples):
         print(f"Lỗi khi tạo biểu đồ: {str(e)}")
         return None
 
-# Create visualization charts for email
-def create_charts(due_samples):
+# Send email notification for due samples
 def send_email_notification(due_samples):
     if not due_samples:
         print("Không có mẫu đến hạn, không gửi email.")
@@ -1133,117 +872,52 @@ def send_email_notification(due_samples):
 
         # Recipients
         recipients = ["ktcnnemmb@msc.masangroup.com"]
+        recipients = ["qatpmbmi@msc.masangroup.com"]
         msg['To'] = ", ".join(recipients)
 
         # Group samples by type for better organization in email
         hoa_ly_samples = [s for s in due_samples if s['loai_kiem_tra'] == 'Hóa lý']
         vi_sinh_samples = [s for s in due_samples if s['loai_kiem_tra'] == 'Vi sinh']
 
-        # HTML content with better formatting
+        # HTML content
         html_content = f"""
         <html>
         <head>
             <meta charset="UTF-8">
             <style>
-                body {{ 
-                    font-family: Arial, sans-serif; 
-                    margin: 20px;
-                    background-color: #f5f5f5;
-                }}
-                .container {{
-                    background-color: white;
-                    padding: 20px;
-                    border-radius: 8px;
-                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-                }}
-                table {{ 
-                    border-collapse: collapse; 
-                    width: 100%; 
-                    margin-top: 15px;
-                    background-color: white;
-                }}
-                th, td {{ 
-                    border: 1px solid #ddd; 
-                    padding: 8px; 
-                    text-align: left;
-                    font-size: 12px;
-                }}
-                th {{ 
-                    background-color: #4CAF50; 
-                    color: white;
-                    font-weight: bold;
-                }}
-                .due {{ 
-                    background-color: #fff3cd;
-                    border-left: 4px solid #ffc107;
-                }}
-                h2 {{ 
-                    color: #2c3e50; 
-                    border-bottom: 2px solid #3498db;
-                    padding-bottom: 10px;
-                }}
-                h3 {{ 
-                    color: #34495e; 
-                    margin-top: 25px;
-                    background-color: #ecf0f1;
-                    padding: 10px;
-                    border-radius: 4px;
-                }}
-                .summary {{ 
-                    margin: 20px 0;
-                    background-color: #e8f4fd;
-                    padding: 15px;
-                    border-radius: 4px;
-                    border-left: 4px solid #3498db;
-                }}
-                .summary-item {{
-                    margin: 5px 0;
-                    font-size: 14px;
-                }}
-                .footer {{ 
-                    margin-top: 30px; 
-                    font-size: 0.9em; 
-                    color: #666;
-                    background-color: #f8f9fa;
-                    padding: 15px;
-                    border-radius: 4px;
-                }}
-                .status-due {{
-                    color: #dc3545;
-                    font-weight: bold;
-                }}
+                body {{ font-family: Arial, sans-serif; }}
+                table {{ border-collapse: collapse; width: 100%; margin-top: 20px; }}
+                th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+                th {{ background-color: #f2f2f2; color: #333; }}
+                .due {{ background-color: #ffcccc; }}
+                h2 {{ color: #003366; }}
+                h3 {{ color: #004d99; margin-top: 25px; }}
+                .summary {{ margin: 20px 0; }}
+                .footer {{ margin-top: 30px; font-size: 0.9em; color: #666; }}
             </style>
         </head>
         <body>
-            <div class="container">
-                <h2>📋 Thông báo lấy mẫu QA - {datetime.today().strftime("%d/%m/%Y")}</h2>
-                
-                <div class="summary">
-                    <div class="summary-item"><strong>📊 Tổng số mẫu cần lấy:</strong> <span class="status-due">{len(due_samples)}</span></div>
-                    <div class="summary-item"><strong>🧪 Mẫu Hóa lý:</strong> {len(hoa_ly_samples)}</div>
-                    <div class="summary-item"><strong>🦠 Mẫu Vi sinh:</strong> {len(vi_sinh_samples)}</div>
-                    <div class="summary-item"><strong>📅 Thời gian tạo báo cáo:</strong> {datetime.now().strftime("%d/%m/%Y %H:%M:%S")}</div>
-                </div>
+            <h2>Thông báo lấy mẫu QA - {datetime.today().strftime("%d/%m/%Y")}</h2>
+            
+            <div class="summary">
+                <p><strong>Tổng số mẫu cần lấy:</strong> {len(due_samples)}</p>
+                <p><strong>Mẫu Hóa lý:</strong> {len(hoa_ly_samples)}</p>
+                <p><strong>Mẫu Vi sinh:</strong> {len(vi_sinh_samples)}</p>
+            </div>
         """
 
         # Add tables for each type
         if hoa_ly_samples:
-            html_content += create_email_table("🧪 Hóa lý", hoa_ly_samples)
+            html_content += create_email_table("Hóa lý", hoa_ly_samples)
 
         if vi_sinh_samples:
-            html_content += create_email_table("🦠 Vi sinh", vi_sinh_samples)
+            html_content += create_email_table("Vi sinh", vi_sinh_samples)
 
         html_content += """
-                <div class="footer">
-                    <h4>📝 Hướng dẫn thực hiện:</h4>
-                    <ol>
-                        <li>Vui lòng thực hiện lấy mẫu theo danh sách trên</li>
-                        <li>Cập nhật Sample ID mới vào SharePoint sau khi lấy mẫu</li>
-                        <li>Kiểm tra và cập nhật lịch sử trong sheet "Lịch sử kiểm mẫu"</li>
-                        <li>Báo cáo tổng hợp đã được tự động cập nhật trong file Excel</li>
-                    </ol>
-                    <p><em>⚠️ Email này được tự động tạo bởi hệ thống QA Sampling. Vui lòng không trả lời email này.</em></p>
-                </div>
+            <div class="footer">
+                <p>Vui lòng thực hiện lấy mẫu và cập nhật ID mẫu vào SharePoint.</p>
+                <p>Báo cáo tổng hợp đã được cập nhật trong file Excel.</p>
+                <p>Email này được tự động tạo bởi hệ thống. Vui lòng không trả lời.</p>
             </div>
         </body>
         </html>
@@ -1279,20 +953,20 @@ def send_email_notification(due_samples):
         return False
 
 def create_email_table(check_type, samples):
-    """Create HTML table for email with improved formatting"""
+    """Create HTML table for email"""
     html = f"""
-    <h3>{check_type} - Danh sách mẫu cần lấy ({len(samples)} mẫu):</h3>
+    <h3>Danh sách mẫu {check_type} cần lấy:</h3>
     <table>
         <thead>
             <tr>
-                <th style="width: 12%;">Khu vực</th>
-                <th style="width: 20%;">Sản phẩm</th>
-                <th style="width: 12%;">Line/Xưởng</th>
-                <th style="width: 15%;">Chỉ tiêu kiểm tra</th>
-                <th style="width: 8%;">Tần suất (ngày)</th>
-                <th style="width: 12%;">Ngày kiểm tra gần nhất</th>
-                <th style="width: 10%;">Sample ID</th>
-                <th style="width: 11%;">Kế hoạch tiếp theo</th>
+                <th>Khu vực</th>
+                <th>Sản phẩm</th>
+                <th>Line / Xưởng</th>
+                <th>Chỉ tiêu kiểm</th>
+                <th>Tần suất (ngày)</th>
+                <th>Ngày kiểm tra gần nhất</th>
+                <th>Sample ID</th>
+                <th>Kế hoạch lấy mẫu tiếp theo</th>
             </tr>
         </thead>
         <tbody>
@@ -1305,10 +979,10 @@ def create_email_table(check_type, samples):
                 <td>{sample['san_pham']}</td>
                 <td>{sample['line']}</td>
                 <td>{sample['chi_tieu']}</td>
-                <td style="text-align: center;">{sample['tan_suat']}</td>
-                <td style="text-align: center;">{sample['ngay_kiem_tra']}</td>
-                <td style="text-align: center;">{sample['sample_id']}</td>
-                <td style="text-align: center;">{sample['ke_hoach']}</td>
+                <td>{sample['tan_suat']}</td>
+                <td>{sample['ngay_kiem_tra']}</td>
+                <td>{sample['sample_id']}</td>
+                <td>{sample['ke_hoach']}</td>
             </tr>
         """
 
@@ -1335,23 +1009,11 @@ def run_update():
         all_due_samples = []
         all_collected_samples = []
         updated_sheets = {}
-        existing_history = None
-
-        # Check if there's an existing history sheet
-        history_sheet_names = ['Lịch sử kiểm mẫu', 'Lich su kiem mau', 'Testing History', 'History']
-        for sheet_name in sheets_data:
-            if any(hist_name.lower() in sheet_name.lower() for hist_name in history_sheet_names):
-                existing_history = sheets_data[sheet_name]
-                print(f"Tìm thấy sheet lịch sử: {sheet_name}")
-                break
 
         # Process each sheet that looks like a sampling schedule
         for sheet_name, df in sheets_data.items():
-            # Skip empty sheets, summary sheets, or history sheets
-            if (df.empty or 
-                'tổng hợp' in sheet_name.lower() or 
-                'summary' in sheet_name.lower() or
-                any(hist_name.lower() in sheet_name.lower() for hist_name in history_sheet_names)):
+            # Skip empty sheets or summary sheets
+            if df.empty or 'tổng hợp' in sheet_name.lower() or 'summary' in sheet_name.lower():
                 updated_sheets[sheet_name] = df
                 continue
 
@@ -1378,23 +1040,16 @@ def run_update():
             # Add delay between processing sheets
             time.sleep(2)
 
-        # Create summary report sheet with better formatting
+        # Create summary report sheet
         if all_collected_samples:
             summary_df = create_summary_report(all_collected_samples)
             updated_sheets['Báo cáo tổng hợp'] = summary_df
-
-        # Create or update history report - track samples with new IDs
-        if all_collected_samples:  # Track all samples, not just due ones
-            history_df = create_history_report(existing_history, all_collected_samples)
-            updated_sheets['Lịch sử kiểm mẫu'] = history_df
 
         # Print processing results
         print(f"\n📊 Kết quả xử lý tổng thể:")
         print(f"  - Tổng số mẫu được theo dõi: {len(all_collected_samples)}")
         print(f"  - Mẫu đến hạn cần lấy: {len(all_due_samples)}")
         print(f"  - Sheets đã xử lý: {len(updated_sheets)}")
-        print(f"  - Đã tạo/cập nhật lịch sử kiểm mẫu: {'✅' if all_collected_samples else '⏭️'}")
-        print(f"  - Đã tạo/cập nhật lịch sử kiểm mẫu: {'✅' if all_collected_samples else '⏭️'}")
 
         # Show sample of collected data for verification
         if all_collected_samples:
@@ -1415,48 +1070,7 @@ def run_update():
         else:
             print(f"\n⚠️ No data processed, skipping upload")
 
-        # Create visualization charts for email
-def create_charts(due_samples):
-    try:
-        if not due_samples:
-            return None
-            
-        # Create a DataFrame from the samples
-        df = pd.DataFrame(due_samples)
-        
-        # Create figure with two subplots
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
-        
-        # Plot 1: Group samples by area
-        area_counts = df['khu_vuc'].value_counts()
-        area_counts.plot(kind='bar', ax=ax1, color='skyblue')
-        ax1.set_xlabel('Khu vực')
-        ax1.set_ylabel('Số lượng mẫu')
-        ax1.set_title('Số lượng mẫu theo khu vực')
-        ax1.tick_params(axis='x', rotation=45)
-        
-        # Plot 2: Group samples by test type
-        type_counts = df['loai_kiem_tra'].value_counts()
-        type_counts.plot(kind='pie', ax=ax2, autopct='%1.1f%%', startangle=90, colors=['#ff9999','#66b3ff'])
-        ax2.set_title('Phân bố loại kiểm tra')
-        ax2.set_ylabel('')
-        
-        plt.tight_layout()
-        
-        # Save chart to buffer
-        img_buffer = io.BytesIO()
-        plt.savefig(img_buffer, format='png', dpi=100)
-        img_buffer.seek(0)
-        
-        plt.close()  # Close the plot to avoid warnings
-        return img_buffer
-    
-    except Exception as e:
-        print(f"Lỗi khi tạo biểu đồ: {str(e)}")
-        return None
-
-# Send email notification for due samples with improved formatting
-def send_email_notification(due_samples): regardless of upload success
+        # Send email notification for due samples regardless of upload success
         email_success = True
         if all_due_samples:
             print(f"\n📧 Sending email notification for {len(all_due_samples)} due samples...")
@@ -1467,17 +1081,10 @@ def send_email_notification(due_samples): regardless of upload success
         # Create local backup if upload failed but we have data
         if not upload_success and len(all_collected_samples) > 0:
             try:
-                backup_filename = f"Sampling_plan_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+                backup_filename = f"Sampling_plan_CF_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
                 with pd.ExcelWriter(backup_filename, engine='openpyxl') as writer:
                     for sheet_name, df in updated_sheets.items():
-                        # Apply formatting before saving
-                        df_formatted = processor.format_dataframe_for_excel(df)
-                        df_formatted.to_excel(writer, sheet_name=sheet_name, index=False)
-                        
-                        # Auto-fit column widths
-                        worksheet = writer.sheets[sheet_name]
-                        processor.auto_fit_columns(worksheet, df_formatted)
-                        
+                        df.to_excel(writer, sheet_name=sheet_name, index=False)
                 print(f"💾 Created local backup: {backup_filename}")
             except Exception as e:
                 print(f"❌ Failed to create local backup: {str(e)}")
@@ -1487,8 +1094,6 @@ def send_email_notification(due_samples): regardless of upload success
         print(f"  - Xử lý dữ liệu: {'✅' if len(all_collected_samples) > 0 else '❌'}")
         print(f"  - Upload SharePoint: {'✅' if upload_success else '❌'}")
         print(f"  - Email thông báo: {'✅' if email_success else '❌'}")
-        print(f"  - Lịch sử kiểm mẫu: {'✅' if all_collected_samples else '⏭️ (không có dữ liệu)'}")
-        print(f"  - Lịch sử kiểm mẫu: {'✅' if all_collected_samples else '⏭️ (không có dữ liệu)'}")
 
         # Determine overall success
         # Success if we processed data successfully (upload failure is acceptable due to lock issues)
