@@ -403,6 +403,59 @@ def authenticate_google():
         print(f"Google Sheets authentication error: {str(e)}")
         sys.exit(1)
 
+def extract_phone_number(text):
+    """Extract Vietnamese phone number from complaint content"""
+    if not isinstance(text, str):
+        return None
+    
+    # Clean the text and normalize
+    text = text.strip()
+    
+    # Vietnamese phone number patterns
+    # Pattern 1: 10-11 digits starting with 0, may have spaces, dashes, or dots
+    phone_patterns = [
+        r'(?:^|\s|-)(\d{4}[\s\-\.]?\d{3}[\s\-\.]?\d{3})', # 0xxx xxx xxx format
+        r'(?:^|\s|-)(\d{3}[\s\-\.]?\d{3}[\s\-\.]?\d{4})', # 0xx xxx xxxx format  
+        r'(?:^|\s|-)(0\d{9,10})',  # Simple 10-11 digit format starting with 0
+        r'(?:^|\s|-)(0\d{8,9})',   # 9-10 digit format starting with 0
+    ]
+    
+    # Try each pattern
+    for pattern in phone_patterns:
+        matches = re.findall(pattern, text)
+        for match in matches:
+            # Clean the match (remove spaces, dashes, dots)
+            clean_number = re.sub(r'[\s\-\.]', '', match)
+            
+            # Validate Vietnamese phone number
+            if (clean_number.startswith('0') and 
+                len(clean_number) >= 9 and 
+                len(clean_number) <= 11 and
+                clean_number.isdigit()):
+                
+                # Additional validation for Vietnamese phone prefixes
+                # Vietnamese mobile: 09x, 08x, 07x, 05x, 03x
+                # Vietnamese landline: 02x
+                if (clean_number.startswith(('090', '091', '092', '093', '094', '095', '096', '097', '098', '099',
+                                            '070', '076', '077', '078', '079',
+                                            '081', '082', '083', '084', '085', '088',
+                                            '056', '058', '059',
+                                            '032', '033', '034', '035', '036', '037', '038', '039',
+                                            '020', '021', '022', '024', '025', '026', '027', '028', '029')) or
+                    (clean_number.startswith('0') and len(clean_number) >= 10)):
+                    return clean_number
+    
+    # If no standard pattern found, try to find any sequence of 10-11 digits starting with 0
+    # This is more aggressive pattern for edge cases
+    fallback_pattern = r'0\d{9,10}'
+    fallback_matches = re.findall(fallback_pattern, text)
+    
+    for match in fallback_matches:
+        if len(match) >= 10 and len(match) <= 11:
+            return match
+    
+    return None
+
 def extract_short_product_name(full_name):
     """Extract a shorter version of the product name"""
     if pd.isna(full_name) or full_name == '':
@@ -1133,6 +1186,14 @@ def main():
         axis=1
     )
 
+    # NEW: Extract phone number from complaint content
+    print("📱 Extracting phone numbers...")
+    knkh_df['SDT người KN'] = knkh_df['Nội dung phản hồi'].apply(extract_phone_number)
+    
+    # Count how many phone numbers were extracted
+    phone_extracted_count = knkh_df['SDT người KN'].notna().sum()
+    print(f"✅ Extracted {phone_extracted_count} phone numbers from {len(knkh_df)} records")
+
     # Standardize dates first for filtering
     knkh_df['Ngày SX_std'] = knkh_df['Ngày SX'].apply(standardize_date)
     aql_df['Ngày SX_std'] = aql_df['Ngày SX'].apply(standardize_date)
@@ -1252,13 +1313,14 @@ def main():
     # Extract short product names
     filtered_knkh_df['Tên sản phẩm ngắn'] = filtered_knkh_df['Tên sản phẩm'].apply(extract_short_product_name)
 
+    # UPDATED: Include SDT người KN in the final dataframe
     final_df = filtered_knkh_df[[
         'Mã ticket', 'Ngày tiếp nhận_formatted', 'Tỉnh', 'Ngày SX_formatted', 'Sản phẩm/Dịch vụ',
         'Số lượng (ly/hộp/chai/gói/hủ)', 'Nội dung phản hồi', 'Item', 'Tên sản phẩm', 'Tên sản phẩm ngắn',
         'SL pack/ cây lỗi', 'Tên lỗi', 'Line_extracted', 'Máy_extracted', 'Giờ_extracted',
         'QA_matched', 'Tên Trưởng ca_matched', 'Shift', 
         'Tháng sản xuất', 'Năm sản xuất', 'Tuần nhận khiếu nại', 'Tháng nhận khiếu nại', 'Năm nhận khiếu nại',
-        'Bộ phận chịu trách nhiệm', 'debug_info'
+        'Bộ phận chịu trách nhiệm', 'SDT người KN', 'debug_info'
     ]].copy()
 
     # Rename columns for clarity
@@ -1276,6 +1338,7 @@ def main():
     final_df = final_df.sort_values(by='Mã ticket', ascending=False)
 
     print(f"\n📊 Final dataset prepared: {len(final_df)} records")
+    print(f"📱 Phone numbers extracted: {final_df['SDT người KN'].notna().sum()} records")
 
     # ========================================================================
     # OUTPUT TO SHAREPOINT
@@ -1295,6 +1358,7 @@ def main():
             print(f"  - Total records processed: {len(final_df)}")
             print(f"  - Records with QA matched: {final_df['QA'].notna().sum()}")
             print(f"  - Records with Leader matched: {final_df['Tên Trưởng ca'].notna().sum()}")
+            print(f"  - Records with Phone numbers extracted: {final_df['SDT người KN'].notna().sum()}")
         else:
             print("❌ Failed to upload data to SharePoint")
             
@@ -1305,7 +1369,7 @@ def main():
                 final_df.to_excel(writer, sheet_name='Data_KNKH', index=False)
                 
                 # Create debug sheet
-                debug_df = final_df[['Mã ticket', 'Ngày SX', 'Item', 'Line', 'Giờ', 'QA', 'Tên Trưởng ca', 'debug_info']]
+                debug_df = final_df[['Mã ticket', 'Ngày SX', 'Item', 'Line', 'Giờ', 'QA', 'Tên Trưởng ca', 'SDT người KN', 'debug_info']]
                 debug_df.head(500).to_excel(writer, sheet_name='Debug_Info', index=False)
             
             print(f"Data saved locally to {local_filename}")
@@ -1318,6 +1382,7 @@ def main():
 
     print("\n" + "="*80)
     print("✅ HYBRID INTEGRATION COMPLETED SUCCESSFULLY!")
+    print("✅ PHONE NUMBER EXTRACTION FEATURE ADDED!")
     print("="*80)
 
 if __name__ == "__main__":
