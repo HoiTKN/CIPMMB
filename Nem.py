@@ -4,16 +4,11 @@ import io
 import requests
 import pandas as pd
 import matplotlib.pyplot as plt
-import smtplib
 import msal
 import base64
 import traceback
 import time
 from datetime import datetime, timedelta
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from email.mime.base import MIMEBase
-from email import encoders
 
 # SharePoint Configuration
 SHAREPOINT_CONFIG = {
@@ -27,6 +22,9 @@ SHAREPOINT_CONFIG = {
 
 # SharePoint File ID from the new URL
 SAMPLING_FILE_ID = '0D5DEB9D-23AE-5C76-0C64-9FAB248215DE'  # Sampling plan NÃM RAU.xlsx
+
+# Global processor variable
+global_processor = None
 
 class GitHubSecretsUpdater:
     """Helper class to update GitHub Secrets using GitHub API"""
@@ -340,7 +338,7 @@ class SharePointSamplingProcessor:
                     # Format date columns before saving
                     df_formatted = self.format_dataframe_for_excel(df)
                     df_formatted.to_excel(writer, sheet_name=sheet_name, index=False)
-                    
+
                     # Auto-fit column widths for better readability
                     worksheet = writer.sheets[sheet_name]
                     self.auto_fit_columns(worksheet, df_formatted)
@@ -418,12 +416,12 @@ class SharePointSamplingProcessor:
             for column in worksheet.columns:
                 max_length = 0
                 column_letter = column[0].column_letter
-                
+
                 # Check header length
                 if len(dataframe.columns) > 0:
                     header_length = len(str(dataframe.columns[column[0].column - 1]))
                     max_length = max(max_length, header_length)
-                
+
                 # Check data length in first 100 rows (for performance)
                 for cell in list(column)[:101]:  # Include header + 100 data rows
                     try:
@@ -431,37 +429,37 @@ class SharePointSamplingProcessor:
                             max_length = len(str(cell.value))
                     except:
                         pass
-                
+
                 # Set column width with some padding, but cap at reasonable max
                 adjusted_width = min(max_length + 2, 50)  # Max width of 50
                 worksheet.column_dimensions[column_letter].width = max(adjusted_width, 8)  # Min width of 8
-                
+
         except Exception as e:
             self.log(f"Warning: Could not auto-fit columns: {str(e)}")
 
     def format_dataframe_for_excel(self, df):
         """Format dataframe for better Excel display"""
         df_formatted = df.copy()
-        
+
         # Format date columns to DD/MM/YYYY
         date_columns = ['Ngày kiểm tra gần nhất', 'Kế hoạch lấy mẫu tiếp theo', 'Ngày kiểm tra', 'Kế hoạch lấy mẫu', 'Ngày thực hiện']
-        
+
         for col in df_formatted.columns:
             col_name = str(col).strip()
             if any(date_keyword in col_name for date_keyword in date_columns):
                 df_formatted[col] = df_formatted[col].apply(self.format_date_for_display)
-                
+
         return df_formatted
 
     def format_date_for_display(self, date_value):
         """Format date to DD/MM/YYYY string"""
         if pd.isna(date_value) or date_value == '' or str(date_value).strip() in ['nan', 'None', '']:
             return ''
-            
+
         # If already a string in correct format, return as is
         if isinstance(date_value, str) and len(date_value) == 10 and date_value.count('/') == 2:
             return date_value
-            
+
         # Try to parse and format
         parsed_date = parse_date(date_value)
         if parsed_date:
@@ -520,7 +518,7 @@ class SharePointSamplingProcessor:
 def parse_date(date_str):
     """Try to parse date with multiple formats and handle Excel date formats"""
     from datetime import datetime, timedelta  # Import at the top to avoid UnboundLocalError
-    
+
     if not date_str or str(date_str).strip() in ['nan', 'None', '', 'NaT']:
         return None
 
@@ -869,15 +867,15 @@ def create_summary_report(all_samples):
 
     # Define headers with proper Vietnamese formatting
     headers = [
-        'Khu vực', 
-        'Sản phẩm', 
-        'Line / Xưởng', 
-        'Chỉ tiêu kiểm tra', 
-        'Tần suất (ngày)', 
-        'Sample ID', 
+        'Khu vực',
+        'Sản phẩm',
+        'Line / Xưởng',
+        'Chỉ tiêu kiểm tra',
+        'Tần suất (ngày)',
+        'Sample ID',
         'Ngày kiểm tra gần nhất',  # DD/MM/YYYY
         'Kế hoạch lấy mẫu tiếp theo',  # DD/MM/YYYY
-        'Loại kiểm tra', 
+        'Loại kiểm tra',
         'Trạng thái'
     ]
 
@@ -890,7 +888,7 @@ def create_summary_report(all_samples):
 def create_history_report(existing_history, all_samples_from_sheets):
     """Create or update testing history report - only for samples with new Sample IDs"""
     print("Đang tạo/cập nhật lịch sử kiểm mẫu...")
-    
+
     # Get existing Sample IDs from history to avoid duplicates
     existing_sample_ids = set()
     if existing_history is not None and not existing_history.empty:
@@ -901,21 +899,21 @@ def create_history_report(existing_history, all_samples_from_sheets):
                 existing_sample_ids = set(existing_history[col].astype(str).str.strip())
                 break
         print(f"Tìm thấy {len(existing_sample_ids)} Sample ID trong lịch sử hiện có.")
-    
+
     # Find samples with new IDs (not in existing history)
     new_history_data = []
-    
+
     for sample in all_samples_from_sheets:
         sample_id = str(sample.get('sample_id', '')).strip()
-        
+
         # Only add samples that have valid ID and are not already in history
-        if (sample_id and 
+        if (sample_id and
             sample_id not in ['N/A', 'nan', 'None', ''] and
             sample_id not in existing_sample_ids):
-            
+
             # Use the actual testing date (ngay_kiem_tra), not current date
             ngay_thuc_hien = sample['ngay_kiem_tra']  # This is already formatted as DD/MM/YYYY
-            
+
             new_history_data.append([
                 ngay_thuc_hien,             # Ngày thực hiện = Ngày kiểm tra gần nhất
                 sample['khu_vuc'],          # Khu vực
@@ -927,14 +925,14 @@ def create_history_report(existing_history, all_samples_from_sheets):
                 '',                         # Ghi chú (để trống cho user điền)
                 sample['ke_hoach']          # Ngày kế hoạch ban đầu
             ])
-            
+
             print(f"  Thêm Sample ID {sample_id} - Ngày thực hiện: {ngay_thuc_hien}")
-    
+
     # Define headers for history sheet (simplified)
     history_headers = [
         'Ngày thực hiện',           # DD/MM/YYYY
         'Khu vực',
-        'Sản phẩm', 
+        'Sản phẩm',
         'Line / Xưởng',
         'Chỉ tiêu kiểm tra',
         'Loại kiểm tra',            # Hóa lý hoặc Vi sinh
@@ -942,30 +940,30 @@ def create_history_report(existing_history, all_samples_from_sheets):
         'Ghi chú',                  # Để user thêm thông tin
         'Ngày kế hoạch'             # Ngày ban đầu theo kế hoạch
     ]
-    
+
     # Create new history DataFrame
     new_history_df = pd.DataFrame(new_history_data, columns=history_headers)
-    
+
     # If there's existing history, combine them
     if existing_history is not None and not existing_history.empty:
         print(f"Tìm thấy lịch sử hiện có với {len(existing_history)} bản ghi.")
-        
+
         # Ensure existing history has the same columns
         for col in history_headers:
             if col not in existing_history.columns:
                 existing_history[col] = ''
-        
+
         # Keep only the columns we want
         existing_history = existing_history[history_headers]
-        
+
         # Combine old and new history
         combined_history = pd.concat([existing_history, new_history_df], ignore_index=True)
-        
+
         # Sort by date (most recent first)
         combined_history['Ngày thực hiện_sorted'] = pd.to_datetime(combined_history['Ngày thực hiện'], format='%d/%m/%Y', errors='coerce')
         combined_history = combined_history.sort_values('Ngày thực hiện_sorted', ascending=False, na_position='last')
         combined_history = combined_history.drop('Ngày thực hiện_sorted', axis=1)
-        
+
         print(f"Đã thêm {len(new_history_data)} Sample ID mới. Tổng cộng: {len(combined_history)} bản ghi.")
         return combined_history
     else:
@@ -1012,8 +1010,11 @@ def create_charts(due_samples):
         print(f"Lỗi khi tạo biểu đồ: {str(e)}")
         return None
 
-# Send email notification for due samples
+# Send email notification for due samples using Microsoft Graph API
 def send_email_notification(due_samples):
+    """Send email notification using Microsoft Graph API (Outlook)"""
+    global global_processor
+
     if not due_samples:
         print("Không có mẫu đến hạn, không gửi email.")
         return True
@@ -1021,106 +1022,138 @@ def send_email_notification(due_samples):
     print(f"Đang gửi email thông báo cho {len(due_samples)} mẫu đến hạn...")
 
     try:
+        if not global_processor or not global_processor.access_token:
+            print("❌ No valid access token for Graph API")
+            return False
+
         # Create charts
         chart_buffer = create_charts(due_samples)
-
-        # Create email
-        msg = MIMEMultipart()
-        msg['Subject'] = f'Thông báo lấy mẫu QA - {datetime.today().strftime("%d/%m/%Y")}'
-        msg['From'] = 'hoitkn@msc.masangroup.com'
-
-        # Recipients
-        recipients = ["ktcnnemmb@msc.masangroup.com"]
-        msg['To'] = ", ".join(recipients)
 
         # Group samples by type for better organization in email
         hoa_ly_samples = [s for s in due_samples if s['loai_kiem_tra'] == 'Hóa lý']
         vi_sinh_samples = [s for s in due_samples if s['loai_kiem_tra'] == 'Vi sinh']
 
-        # HTML content with better formatting
+        # Create HTML content with improved styling
         html_content = f"""
         <html>
         <head>
             <meta charset="UTF-8">
             <style>
                 body {{ 
-                    font-family: Arial, sans-serif; 
-                    margin: 20px;
-                    background-color: #f5f5f5;
+                    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+                    line-height: 1.6;
+                    color: #333;
+                    background-color: #f8f9fa;
                 }}
                 .container {{
+                    max-width: 1200px;
+                    margin: 0 auto;
                     background-color: white;
                     padding: 20px;
                     border-radius: 8px;
-                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+                }}
+                .header {{
+                    background: linear-gradient(135deg, #366092, #4a7bb7);
+                    color: white;
+                    padding: 20px;
+                    border-radius: 8px 8px 0 0;
+                    margin: -20px -20px 20px -20px;
+                    text-align: center;
+                }}
+                .header h1 {{
+                    margin: 0;
+                    font-size: 24px;
+                    font-weight: bold;
+                }}
+                .summary {{
+                    background-color: #f8f9fa;
+                    padding: 20px;
+                    border-radius: 8px;
+                    margin: 20px 0;
+                    border-left: 4px solid #366092;
+                }}
+                .summary h3 {{
+                    color: #366092;
+                    margin-top: 0;
+                    font-size: 18px;
+                }}
+                .kpi {{
+                    display: inline-block;
+                    background: white;
+                    padding: 15px;
+                    margin: 10px;
+                    border-radius: 8px;
+                    text-align: center;
+                    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+                    min-width: 150px;
+                }}
+                .kpi-value {{
+                    font-size: 24px;
+                    font-weight: bold;
+                    color: #C00000;
+                }}
+                .kpi-label {{
+                    font-size: 12px;
+                    color: #666;
+                    margin-top: 5px;
                 }}
                 table {{ 
                     border-collapse: collapse; 
                     width: 100%; 
-                    margin-top: 15px;
-                    background-color: white;
+                    margin-top: 20px;
+                    font-size: 11px;
                 }}
                 th, td {{ 
                     border: 1px solid #ddd; 
-                    padding: 8px; 
-                    text-align: left;
-                    font-size: 12px;
+                    padding: 12px 8px; 
+                    text-align: left; 
+                    vertical-align: top;
                 }}
                 th {{ 
-                    background-color: #4CAF50; 
+                    background: linear-gradient(135deg, #366092, #4a7bb7);
                     color: white;
                     font-weight: bold;
+                    text-align: center;
+                    font-size: 10px;
                 }}
                 .due {{ 
                     background-color: #fff3cd;
                     border-left: 4px solid #ffc107;
                 }}
-                h2 {{ 
-                    color: #2c3e50; 
-                    border-bottom: 2px solid #3498db;
-                    padding-bottom: 10px;
-                }}
-                h3 {{ 
-                    color: #34495e; 
-                    margin-top: 25px;
-                    background-color: #ecf0f1;
-                    padding: 10px;
-                    border-radius: 4px;
-                }}
-                .summary {{ 
-                    margin: 20px 0;
-                    background-color: #e8f4fd;
-                    padding: 15px;
-                    border-radius: 4px;
-                    border-left: 4px solid #3498db;
-                }}
-                .summary-item {{
-                    margin: 5px 0;
-                    font-size: 14px;
-                }}
                 .footer {{ 
                     margin-top: 30px; 
-                    font-size: 0.9em; 
-                    color: #666;
-                    background-color: #f8f9fa;
-                    padding: 15px;
-                    border-radius: 4px;
-                }}
-                .status-due {{
-                    color: #dc3545;
-                    font-weight: bold;
+                    padding-top: 20px;
+                    border-top: 1px solid #e0e0e0;
+                    font-size: 12px; 
+                    color: #666; 
+                    text-align: center;
                 }}
             </style>
         </head>
         <body>
             <div class="container">
-                <h2>📋 Thông báo lấy mẫu QA - {datetime.today().strftime("%d/%m/%Y")}</h2>
-                
+                <div class="header">
+                    <h1>📋 BÁO CÁO LẤY MẪU QA</h1>
+                    <p style="margin: 10px 0 0 0; font-size: 16px;">Sampling plan NÃM RAU - {datetime.today().strftime("%d/%m/%Y")}</p>
+                </div>
+
                 <div class="summary">
-                    <div class="summary-item"><strong>📊 Tổng số mẫu cần lấy:</strong> <span class="status-due">{len(due_samples)}</span></div>
-                    <div class="summary-item"><strong>🧪 Mẫu Hóa lý:</strong> {len(hoa_ly_samples)}</div>
-                    <div class="summary-item"><strong>🦠 Mẫu Vi sinh:</strong> {len(vi_sinh_samples)}</div>
-                    <div class="summary-item"><strong>📅 Thời gian tạo báo cáo:</strong> {datetime.now().strftime("%d/%m/%Y %H:%M:%S")}</div>
+                    <h3>📊 TỔNG QUAN TÌNH TRẠNG</h3>
+                    <div style="text-align: center;">
+                        <div class="kpi">
+                            <div class="kpi-value">{len(due_samples)}</div>
+                            <div class="kpi-label">Tổng số mẫu cần lấy</div>
+                        </div>
+                        <div class="kpi">
+                            <div class="kpi-value" style="color: #2e7d32;">{len(hoa_ly_samples)}</div>
+                            <div class="kpi-label">Mẫu Hóa lý</div>
+                        </div>
+                        <div class="kpi">
+                            <div class="kpi-value" style="color: #f57c00;">{len(vi_sinh_samples)}</div>
+                            <div class="kpi-label">Mẫu Vi sinh</div>
+                        </div>
+                    </div>
                 </div>
         """
 
@@ -1131,7 +1164,7 @@ def send_email_notification(due_samples):
         if vi_sinh_samples:
             html_content += create_email_table("🦠 Vi sinh", vi_sinh_samples)
 
-        html_content += """
+        html_content += f"""
                 <div class="footer">
                     <h4>📝 Hướng dẫn thực hiện:</h4>
                     <ol>
@@ -1141,39 +1174,91 @@ def send_email_notification(due_samples):
                         <li>Báo cáo tổng hợp đã được tự động cập nhật trong file Excel</li>
                     </ol>
                     <p><em>⚠️ Email này được tự động tạo bởi hệ thống QA Sampling. Vui lòng không trả lời email này.</em></p>
+                    <p>🕒 Thời gian tạo: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}</p>
                 </div>
             </div>
         </body>
         </html>
         """
 
-        # Attach HTML
-        msg.attach(MIMEText(html_content, "html", "utf-8"))
+        # Prepare email data for Graph API
+        email_data = {
+            "message": {
+                "subject": f"📋 Báo cáo lấy mẫu QA - Sampling plan NÃM RAU - {datetime.today().strftime('%d/%m/%Y')}",
+                "body": {
+                    "contentType": "HTML",
+                    "content": html_content
+                },
+                "toRecipients": []
+            }
+        }
 
-        # Attach chart if available
+        # Add recipients
+        recipients = ["ktcnnemmb@msc.masangroup.com"]
+        for recipient in recipients:
+            email_data["message"]["toRecipients"].append({
+                "emailAddress": {
+                    "address": recipient
+                }
+            })
+
+        # Prepare attachments if available
+        attachments = []
+
         if chart_buffer:
-            part = MIMEBase('application', 'octet-stream')
-            part.set_payload(chart_buffer.read())
-            encoders.encode_base64(part)
-            part.add_header('Content-Disposition', 'attachment; filename="sampling_status.png"')
-            msg.attach(part)
+            chart_buffer.seek(0)
+            chart_img_data = chart_buffer.read()
+            chart_img_b64 = base64.b64encode(chart_img_data).decode('utf-8')
 
-        # Send email
-        with smtplib.SMTP('smtp.gmail.com', 587) as server:
-            server.starttls()
-            email_password = os.environ.get('EMAIL_PASSWORD')
-            if not email_password:
-                print("Cảnh báo: Không tìm thấy mật khẩu email trong biến môi trường.")
-                return False
+            attachments.append({
+                "@odata.type": "#microsoft.graph.fileAttachment",
+                "name": f"sampling_status_chart_{datetime.now().strftime('%Y%m%d')}.png",
+                "contentType": "image/png",
+                "contentBytes": chart_img_b64
+            })
 
-            server.login("hoitkn@msc.masangroup.com", email_password)
-            server.send_message(msg)
+        if attachments:
+            email_data["message"]["attachments"] = attachments
 
-        print(f"Email đã được gửi đến {len(recipients)} người nhận.")
-        return True
+        # Send email via Graph API
+        graph_url = "https://graph.microsoft.com/v1.0/me/sendMail"
+        headers = {
+            'Authorization': f'Bearer {global_processor.access_token}',
+            'Content-Type': 'application/json'
+        }
+
+        print(f"📤 Sending email via Graph API to {len(recipients)} recipients...")
+
+        response = requests.post(graph_url, headers=headers, json=email_data, timeout=60)
+
+        if response.status_code == 202:
+            print("✅ Email sent successfully via Graph API")
+            print(f"✅ Email đã được gửi đến {len(recipients)} người nhận.")
+            return True
+        elif response.status_code == 401:
+            print("❌ Graph API Authentication Error - Token may have expired")
+            print("🔄 Attempting to refresh token...")
+            if global_processor.refresh_access_token():
+                print("✅ Token refreshed, retrying email send...")
+                headers['Authorization'] = f'Bearer {global_processor.access_token}'
+                response = requests.post(graph_url, headers=headers, json=email_data, timeout=60)
+                if response.status_code == 202:
+                    print("✅ Email sent successfully after token refresh")
+                    return True
+            print("❌ Failed to send email even after token refresh")
+            return False
+        elif response.status_code == 403:
+            print("❌ Graph API Permission Error")
+            print("💡 Please ensure Mail.Send permission is granted in Azure App Registration")
+            return False
+        else:
+            print(f"❌ Graph API Error: {response.status_code}")
+            print(f"❌ Response: {response.text[:500]}")
+            return False
 
     except Exception as e:
-        print(f"Lỗi khi gửi email: {str(e)}")
+        print(f"❌ Error sending email via Graph API: {str(e)}")
+        print(f"❌ Traceback: {traceback.format_exc()}")
         return False
 
 def create_email_table(check_type, samples):
@@ -1218,14 +1303,15 @@ def create_email_table(check_type, samples):
 
 # Main function to run everything
 def run_update():
+    global global_processor
     print("Bắt đầu cập nhật lịch lấy mẫu QA từ SharePoint...")
 
     try:
         # Initialize SharePoint processor
-        processor = SharePointSamplingProcessor()
+        global_processor = SharePointSamplingProcessor()
 
         # Download Excel file from SharePoint
-        sheets_data = processor.download_excel_file()
+        sheets_data = global_processor.download_excel_file()
         if not sheets_data:
             print("❌ Failed to download sampling plan file")
             return False
@@ -1246,8 +1332,8 @@ def run_update():
         # Process each sheet that looks like a sampling schedule
         for sheet_name, df in sheets_data.items():
             # Skip empty sheets, summary sheets, or history sheets
-            if (df.empty or 
-                'tổng hợp' in sheet_name.lower() or 
+            if (df.empty or
+                'tổng hợp' in sheet_name.lower() or
                 'summary' in sheet_name.lower() or
                 any(hist_name.lower() in sheet_name.lower() for hist_name in history_sheet_names)):
                 updated_sheets[sheet_name] = df
@@ -1305,7 +1391,7 @@ def run_update():
             print(f"\n📤 Attempting to upload updated file...")
             try:
                 # Set a shorter timeout for upload attempts
-                upload_success = processor.upload_excel_file(updated_sheets)
+                upload_success = global_processor.upload_excel_file(updated_sheets)
             except Exception as e:
                 print(f"⚠️ Upload failed with error: {str(e)}")
                 upload_success = False
@@ -1326,14 +1412,14 @@ def run_update():
                 backup_filename = f"Sampling_plan_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
                 with pd.ExcelWriter(backup_filename, engine='openpyxl') as writer:
                     for sheet_name, df in updated_sheets.items():
-                        # Apply formatting before saving
-                        df_formatted = processor.format_dataframe_for_excel(df)
+                        # Format date columns before saving
+                        df_formatted = global_processor.format_dataframe_for_excel(df)
                         df_formatted.to_excel(writer, sheet_name=sheet_name, index=False)
-                        
+
                         # Auto-fit column widths
                         worksheet = writer.sheets[sheet_name]
-                        processor.auto_fit_columns(worksheet, df_formatted)
-                        
+                        global_processor.auto_fit_columns(worksheet, df_formatted)
+
                 print(f"💾 Created local backup: {backup_filename}")
             except Exception as e:
                 print(f"❌ Failed to create local backup: {str(e)}")
