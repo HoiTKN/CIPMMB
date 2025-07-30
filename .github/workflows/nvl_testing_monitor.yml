@@ -14,15 +14,15 @@ jobs:
     
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
       
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: '3.9'
         
     - name: Cache pip dependencies
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: ~/.cache/pip
         key: ${{ runner.os }}-pip-nvl-${{ hashFiles('**/requirements.txt') }}
@@ -89,7 +89,7 @@ jobs:
         
     - name: Upload debug artifacts on failure
       if: failure()
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: nvl-testing-debug-logs-${{ github.run_number }}
         path: |
@@ -98,6 +98,7 @@ jobs:
           *.json
           token.json
         retention-days: 7
+        include-hidden-files: false
         
     - name: Clean up temporary files
       if: always()
