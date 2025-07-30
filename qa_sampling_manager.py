@@ -4,16 +4,11 @@ import io
 import requests
 import pandas as pd
 import matplotlib.pyplot as plt
-import smtplib
 import msal
 import base64
 import traceback
 import time
 from datetime import datetime, timedelta
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from email.mime.base import MIMEBase
-from email import encoders
 
 # SharePoint Configuration
 SHAREPOINT_CONFIG = {
@@ -27,6 +22,9 @@ SHAREPOINT_CONFIG = {
 
 # SharePoint File ID for "Sampling plan CF.xlsx"
 SAMPLING_FILE_ID = 'FA63D8F5-F5EF-55DC-D9D4-89A9DE4FD714'
+
+# Global processor variable
+global_processor = None
 
 class GitHubSecretsUpdater:
     """Helper class to update GitHub Secrets using GitHub API"""
@@ -804,8 +802,8 @@ def create_summary_report(all_samples):
         ])
 
     # Define headers
-    headers = ['Khu vực', 'Sản phẩm', 'Line / Xưởng', 'Chỉ tiêu kiểm', 
-               'Tần suất (ngày)', 'Sample ID', 'Ngày kiểm tra', 
+    headers = ['Khu vực', 'Sản phẩm', 'Line / Xưởng', 'Chỉ tiêu kiểm',
+               'Tần suất (ngày)', 'Sample ID', 'Ngày kiểm tra',
                'Kế hoạch lấy mẫu tiếp theo', 'Loại kiểm tra', 'Trạng thái']
 
     summary_df = pd.DataFrame(summary_data, columns=headers)
@@ -853,8 +851,11 @@ def create_charts(due_samples):
         print(f"Lỗi khi tạo biểu đồ: {str(e)}")
         return None
 
-# Send email notification for due samples
+# Send email notification for due samples using Microsoft Graph API
 def send_email_notification(due_samples):
+    """Send email notification using Microsoft Graph API (Outlook)"""
+    global global_processor
+
     if not due_samples:
         print("Không có mẫu đến hạn, không gửi email.")
         return True
@@ -862,111 +863,259 @@ def send_email_notification(due_samples):
     print(f"Đang gửi email thông báo cho {len(due_samples)} mẫu đến hạn...")
 
     try:
+        if not global_processor or not global_processor.access_token:
+            print("❌ No valid access token for Graph API")
+            return False
+
         # Create charts
         chart_buffer = create_charts(due_samples)
-
-        # Create email
-        msg = MIMEMultipart()
-        msg['Subject'] = f'Thông báo lấy mẫu QA - {datetime.today().strftime("%d/%m/%Y")}'
-        msg['From'] = 'hoitkn@msc.masangroup.com'
-
-        # Recipients
-        recipients = ["ktcnnemmb@msc.masangroup.com"]
-        recipients = ["qatpmbmi@msc.masangroup.com"]
-        msg['To'] = ", ".join(recipients)
 
         # Group samples by type for better organization in email
         hoa_ly_samples = [s for s in due_samples if s['loai_kiem_tra'] == 'Hóa lý']
         vi_sinh_samples = [s for s in due_samples if s['loai_kiem_tra'] == 'Vi sinh']
 
-        # HTML content
+        # Create HTML content with improved styling
         html_content = f"""
         <html>
         <head>
             <meta charset="UTF-8">
             <style>
-                body {{ font-family: Arial, sans-serif; }}
-                table {{ border-collapse: collapse; width: 100%; margin-top: 20px; }}
-                th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
-                th {{ background-color: #f2f2f2; color: #333; }}
-                .due {{ background-color: #ffcccc; }}
-                h2 {{ color: #003366; }}
-                h3 {{ color: #004d99; margin-top: 25px; }}
-                .summary {{ margin: 20px 0; }}
-                .footer {{ margin-top: 30px; font-size: 0.9em; color: #666; }}
+                body {{ 
+                    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+                    line-height: 1.6;
+                    color: #333;
+                    background-color: #f8f9fa;
+                }}
+                .container {{
+                    max-width: 1200px;
+                    margin: 0 auto;
+                    background-color: white;
+                    padding: 20px;
+                    border-radius: 8px;
+                    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+                }}
+                .header {{
+                    background: linear-gradient(135deg, #366092, #4a7bb7);
+                    color: white;
+                    padding: 20px;
+                    border-radius: 8px 8px 0 0;
+                    margin: -20px -20px 20px -20px;
+                    text-align: center;
+                }}
+                .header h1 {{
+                    margin: 0;
+                    font-size: 24px;
+                    font-weight: bold;
+                }}
+                .summary {{
+                    background-color: #f8f9fa;
+                    padding: 20px;
+                    border-radius: 8px;
+                    margin: 20px 0;
+                    border-left: 4px solid #366092;
+                }}
+                .summary h3 {{
+                    color: #366092;
+                    margin-top: 0;
+                    font-size: 18px;
+                }}
+                .kpi {{
+                    display: inline-block;
+                    background: white;
+                    padding: 15px;
+                    margin: 10px;
+                    border-radius: 8px;
+                    text-align: center;
+                    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+                    min-width: 150px;
+                }}
+                .kpi-value {{
+                    font-size: 24px;
+                    font-weight: bold;
+                    color: #C00000;
+                }}
+                .kpi-label {{
+                    font-size: 12px;
+                    color: #666;
+                    margin-top: 5px;
+                }}
+                table {{ 
+                    border-collapse: collapse; 
+                    width: 100%; 
+                    margin-top: 20px;
+                    font-size: 11px;
+                }}
+                th, td {{ 
+                    border: 1px solid #ddd; 
+                    padding: 12px 8px; 
+                    text-align: left; 
+                    vertical-align: top;
+                }}
+                th {{ 
+                    background: linear-gradient(135deg, #366092, #4a7bb7);
+                    color: white;
+                    font-weight: bold;
+                    text-align: center;
+                    font-size: 10px;
+                }}
+                .due {{ 
+                    background-color: #fff3cd;
+                    border-left: 4px solid #ffc107;
+                }}
+                .footer {{ 
+                    margin-top: 30px; 
+                    padding-top: 20px;
+                    border-top: 1px solid #e0e0e0;
+                    font-size: 12px; 
+                    color: #666; 
+                    text-align: center;
+                }}
             </style>
         </head>
         <body>
-            <h2>Thông báo lấy mẫu QA - {datetime.today().strftime("%d/%m/%Y")}</h2>
-            
-            <div class="summary">
-                <p><strong>Tổng số mẫu cần lấy:</strong> {len(due_samples)}</p>
-                <p><strong>Mẫu Hóa lý:</strong> {len(hoa_ly_samples)}</p>
-                <p><strong>Mẫu Vi sinh:</strong> {len(vi_sinh_samples)}</p>
-            </div>
+            <div class="container">
+                <div class="header">
+                    <h1>📋 BÁO CÁO LẤY MẪU QA</h1>
+                    <p style="margin: 10px 0 0 0; font-size: 16px;">Sampling plan CF - {datetime.today().strftime("%d/%m/%Y")}</p>
+                </div>
+
+                <div class="summary">
+                    <h3>📊 TỔNG QUAN TÌNH TRẠNG</h3>
+                    <div style="text-align: center;">
+                        <div class="kpi">
+                            <div class="kpi-value">{len(due_samples)}</div>
+                            <div class="kpi-label">Tổng số mẫu cần lấy</div>
+                        </div>
+                        <div class="kpi">
+                            <div class="kpi-value" style="color: #2e7d32;">{len(hoa_ly_samples)}</div>
+                            <div class="kpi-label">Mẫu Hóa lý</div>
+                        </div>
+                        <div class="kpi">
+                            <div class="kpi-value" style="color: #f57c00;">{len(vi_sinh_samples)}</div>
+                            <div class="kpi-label">Mẫu Vi sinh</div>
+                        </div>
+                    </div>
+                </div>
         """
 
         # Add tables for each type
         if hoa_ly_samples:
-            html_content += create_email_table("Hóa lý", hoa_ly_samples)
+            html_content += create_email_table("🧪 Hóa lý", hoa_ly_samples)
 
         if vi_sinh_samples:
-            html_content += create_email_table("Vi sinh", vi_sinh_samples)
+            html_content += create_email_table("🦠 Vi sinh", vi_sinh_samples)
 
-        html_content += """
-            <div class="footer">
-                <p>Vui lòng thực hiện lấy mẫu và cập nhật ID mẫu vào SharePoint.</p>
-                <p>Báo cáo tổng hợp đã được cập nhật trong file Excel.</p>
-                <p>Email này được tự động tạo bởi hệ thống. Vui lòng không trả lời.</p>
+        html_content += f"""
+                <div class="footer">
+                    <h4>📝 Hướng dẫn thực hiện:</h4>
+                    <ol>
+                        <li>Vui lòng thực hiện lấy mẫu theo danh sách trên</li>
+                        <li>Cập nhật Sample ID mới vào SharePoint sau khi lấy mẫu</li>
+                        <li>Báo cáo tổng hợp đã được tự động cập nhật trong file Excel</li>
+                    </ol>
+                    <p><em>⚠️ Email này được tự động tạo bởi hệ thống QA Sampling. Vui lòng không trả lời email này.</em></p>
+                    <p>🕒 Thời gian tạo: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}</p>
+                </div>
             </div>
         </body>
         </html>
         """
 
-        # Attach HTML
-        msg.attach(MIMEText(html_content, "html", "utf-8"))
+        # Prepare email data for Graph API
+        email_data = {
+            "message": {
+                "subject": f"📋 Báo cáo lấy mẫu QA - Sampling plan CF - {datetime.today().strftime('%d/%m/%Y')}",
+                "body": {
+                    "contentType": "HTML",
+                    "content": html_content
+                },
+                "toRecipients": []
+            }
+        }
 
-        # Attach chart if available
+        # Add recipients
+        recipients = ["qatpmbmi@msc.masangroup.com"]
+        for recipient in recipients:
+            email_data["message"]["toRecipients"].append({
+                "emailAddress": {
+                    "address": recipient
+                }
+            })
+
+        # Prepare attachments if available
+        attachments = []
+
         if chart_buffer:
-            part = MIMEBase('application', 'octet-stream')
-            part.set_payload(chart_buffer.read())
-            encoders.encode_base64(part)
-            part.add_header('Content-Disposition', 'attachment; filename="sampling_status.png"')
-            msg.attach(part)
+            chart_buffer.seek(0)
+            chart_img_data = chart_buffer.read()
+            chart_img_b64 = base64.b64encode(chart_img_data).decode('utf-8')
 
-        # Send email
-        with smtplib.SMTP('smtp.gmail.com', 587) as server:
-            server.starttls()
-            email_password = os.environ.get('EMAIL_PASSWORD')
-            if not email_password:
-                print("Cảnh báo: Không tìm thấy mật khẩu email trong biến môi trường.")
-                return False
+            attachments.append({
+                "@odata.type": "#microsoft.graph.fileAttachment",
+                "name": f"sampling_status_chart_{datetime.now().strftime('%Y%m%d')}.png",
+                "contentType": "image/png",
+                "contentBytes": chart_img_b64
+            })
 
-            server.login("hoitkn@msc.masangroup.com", email_password)
-            server.send_message(msg)
+        if attachments:
+            email_data["message"]["attachments"] = attachments
 
-        print(f"Email đã được gửi đến {len(recipients)} người nhận.")
-        return True
+        # Send email via Graph API
+        graph_url = "https://graph.microsoft.com/v1.0/me/sendMail"
+        headers = {
+            'Authorization': f'Bearer {global_processor.access_token}',
+            'Content-Type': 'application/json'
+        }
+
+        print(f"📤 Sending email via Graph API to {len(recipients)} recipients...")
+
+        response = requests.post(graph_url, headers=headers, json=email_data, timeout=60)
+
+        if response.status_code == 202:
+            print("✅ Email sent successfully via Graph API")
+            print(f"✅ Email đã được gửi đến {len(recipients)} người nhận.")
+            return True
+        elif response.status_code == 401:
+            print("❌ Graph API Authentication Error - Token may have expired")
+            print("🔄 Attempting to refresh token...")
+            if global_processor.refresh_access_token():
+                print("✅ Token refreshed, retrying email send...")
+                headers['Authorization'] = f'Bearer {global_processor.access_token}'
+                response = requests.post(graph_url, headers=headers, json=email_data, timeout=60)
+                if response.status_code == 202:
+                    print("✅ Email sent successfully after token refresh")
+                    return True
+            print("❌ Failed to send email even after token refresh")
+            return False
+        elif response.status_code == 403:
+            print("❌ Graph API Permission Error")
+            print("💡 Please ensure Mail.Send permission is granted in Azure App Registration")
+            return False
+        else:
+            print(f"❌ Graph API Error: {response.status_code}")
+            print(f"❌ Response: {response.text[:500]}")
+            return False
 
     except Exception as e:
-        print(f"Lỗi khi gửi email: {str(e)}")
+        print(f"❌ Error sending email via Graph API: {str(e)}")
+        print(f"❌ Traceback: {traceback.format_exc()}")
         return False
 
 def create_email_table(check_type, samples):
     """Create HTML table for email"""
     html = f"""
-    <h3>Danh sách mẫu {check_type} cần lấy:</h3>
+    <h3>{check_type} - Danh sách mẫu cần lấy ({len(samples)} mẫu):</h3>
     <table>
         <thead>
             <tr>
-                <th>Khu vực</th>
-                <th>Sản phẩm</th>
-                <th>Line / Xưởng</th>
-                <th>Chỉ tiêu kiểm</th>
-                <th>Tần suất (ngày)</th>
-                <th>Ngày kiểm tra gần nhất</th>
-                <th>Sample ID</th>
-                <th>Kế hoạch lấy mẫu tiếp theo</th>
+                <th style="width: 12%;">Khu vực</th>
+                <th style="width: 20%;">Sản phẩm</th>
+                <th style="width: 12%;">Line/Xưởng</th>
+                <th style="width: 15%;">Chỉ tiêu kiểm tra</th>
+                <th style="width: 8%;">Tần suất (ngày)</th>
+                <th style="width: 12%;">Ngày kiểm tra gần nhất</th>
+                <th style="width: 10%;">Sample ID</th>
+                <th style="width: 11%;">Kế hoạch tiếp theo</th>
             </tr>
         </thead>
         <tbody>
@@ -979,10 +1128,10 @@ def create_email_table(check_type, samples):
                 <td>{sample['san_pham']}</td>
                 <td>{sample['line']}</td>
                 <td>{sample['chi_tieu']}</td>
-                <td>{sample['tan_suat']}</td>
-                <td>{sample['ngay_kiem_tra']}</td>
-                <td>{sample['sample_id']}</td>
-                <td>{sample['ke_hoach']}</td>
+                <td style="text-align: center;">{sample['tan_suat']}</td>
+                <td style="text-align: center;">{sample['ngay_kiem_tra']}</td>
+                <td style="text-align: center;">{sample['sample_id']}</td>
+                <td style="text-align: center;">{sample['ke_hoach']}</td>
             </tr>
         """
 
@@ -994,14 +1143,15 @@ def create_email_table(check_type, samples):
 
 # Main function to run everything
 def run_update():
+    global global_processor
     print("Bắt đầu cập nhật lịch lấy mẫu QA từ SharePoint...")
 
     try:
         # Initialize SharePoint processor
-        processor = SharePointSamplingProcessor()
+        global_processor = SharePointSamplingProcessor()
 
         # Download Excel file from SharePoint
-        sheets_data = processor.download_excel_file()
+        sheets_data = global_processor.download_excel_file()
         if not sheets_data:
             print("❌ Failed to download sampling plan file")
             return False
@@ -1063,7 +1213,7 @@ def run_update():
             print(f"\n📤 Attempting to upload updated file...")
             try:
                 # Set a shorter timeout for upload attempts
-                upload_success = processor.upload_excel_file(updated_sheets)
+                upload_success = global_processor.upload_excel_file(updated_sheets)
             except Exception as e:
                 print(f"⚠️ Upload failed with error: {str(e)}")
                 upload_success = False
