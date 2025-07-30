@@ -1,20 +1,30 @@
 import gspread
 import os
 import json
+import requests
+import msal
+import base64
+import traceback
 from google.auth.transport.requests import Request
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.oauth2.credentials import Credentials
 from datetime import datetime, timedelta
 import pandas as pd
 import io
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from email.mime.base import MIMEBase
-from email import encoders
 import sys
 
-# 1. Authentication setup - reusing from main.py
+# SharePoint Configuration for Graph API
+SHAREPOINT_CONFIG = {
+    'tenant_id': '81060475-7e7f-4ede-8d8d-bf61f53ca528',
+    'client_id': '076541aa-c734-405e-8518-ed52b67f8cbd',
+    'authority': 'https://login.microsoftonline.com/81060475-7e7f-4ede-8d8d-bf61f53ca528',
+    'scopes': ['https://graph.microsoft.com/Sites.ReadWrite.All'],
+}
+
+# Global processor variable for Graph API
+global_processor = None
+
+# Google Sheets authentication setup
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive"
@@ -22,6 +32,132 @@ SCOPES = [
 
 # Detect if running in GitHub Actions or similar CI environment
 IN_CI_ENVIRONMENT = os.environ.get('CI') or os.environ.get('GITHUB_ACTIONS')
+
+class GraphAPIProcessor:
+    """Microsoft Graph API processor for sending emails"""
+    
+    def __init__(self):
+        self.access_token = None
+        self.refresh_token = None
+        self.base_url = "https://graph.microsoft.com/v1.0"
+        self.msal_app = None
+
+        # Initialize MSAL app
+        self.msal_app = msal.PublicClientApplication(
+            SHAREPOINT_CONFIG['client_id'],
+            authority=SHAREPOINT_CONFIG['authority']
+        )
+
+        # Authenticate on initialization
+        if not self.authenticate():
+            print("⚠️ Graph API authentication failed - will fallback to no email")
+
+    def log(self, message):
+        """Log with timestamp"""
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        print(f"[{timestamp}] {message}")
+        sys.stdout.flush()
+
+    def authenticate(self):
+        """Authenticate using delegation flow with pre-generated tokens"""
+        try:
+            self.log("🔐 Authenticating with Microsoft Graph API...")
+
+            # Get tokens from environment variables
+            access_token = os.environ.get('SHAREPOINT_ACCESS_TOKEN')
+            refresh_token = os.environ.get('SHAREPOINT_REFRESH_TOKEN')
+
+            if not access_token and not refresh_token:
+                self.log("❌ No Graph API tokens found in environment variables")
+                return False
+
+            self.access_token = access_token
+            self.refresh_token = refresh_token
+
+            if access_token:
+                self.log(f"✅ Found access token: {access_token[:30]}...")
+
+                # Test token validity
+                if self.test_token_validity():
+                    self.log("✅ Graph API access token is valid")
+                    return True
+                else:
+                    self.log("⚠️ Graph API access token expired, attempting refresh...")
+
+            # Try to refresh token
+            if refresh_token:
+                if self.refresh_access_token():
+                    self.log("✅ Graph API token refreshed successfully")
+                    return True
+                else:
+                    self.log("❌ Graph API token refresh failed")
+                    return False
+            else:
+                self.log("❌ No Graph API refresh token available")
+                return False
+
+        except Exception as e:
+            self.log(f"❌ Graph API authentication error: {str(e)}")
+            return False
+
+    def test_token_validity(self):
+        """Test if current access token is valid"""
+        try:
+            headers = self.get_headers()
+            response = requests.get(f"{self.base_url}/me", headers=headers, timeout=30)
+
+            if response.status_code == 200:
+                user_info = response.json()
+                self.log(f"✅ Authenticated to Graph API as: {user_info.get('displayName', 'Unknown')}")
+                return True
+            elif response.status_code == 401:
+                return False
+            else:
+                self.log(f"Warning: Unexpected response code: {response.status_code}")
+                return False
+
+        except Exception as e:
+            self.log(f"Error testing Graph API token validity: {str(e)}")
+            return False
+
+    def refresh_access_token(self):
+        """Refresh access token using refresh token with MSAL"""
+        try:
+            if not self.refresh_token:
+                self.log("❌ No refresh token available")
+                return False
+
+            self.log("🔄 Attempting to refresh Graph API token using MSAL...")
+
+            # Use MSAL to refresh token
+            result = self.msal_app.acquire_token_by_refresh_token(
+                self.refresh_token,
+                scopes=SHAREPOINT_CONFIG['scopes']
+            )
+
+            if result and "access_token" in result:
+                self.access_token = result['access_token']
+                if 'refresh_token' in result:
+                    self.refresh_token = result['refresh_token']
+                    self.log("✅ Got new refresh token")
+
+                self.log("✅ Graph API token refreshed successfully")
+                return True
+            else:
+                error = result.get('error_description', 'Unknown error') if result else 'No result'
+                self.log(f"❌ Graph API token refresh failed: {error}")
+                return False
+
+        except Exception as e:
+            self.log(f"❌ Error refreshing Graph API token: {str(e)}")
+            return False
+
+    def get_headers(self):
+        """Get headers for API requests"""
+        return {
+            'Authorization': f'Bearer {self.access_token}',
+            'Content-Type': 'application/json'
+        }
 
 # Authentication logic with CI environment detection
 def authenticate():
@@ -122,7 +258,7 @@ def parse_date(date_str):
     print(f"Could not parse date: {date_str}")
     return None
 
-# 2. Function to update periodic testing dates
+# Function to update periodic testing dates
 def update_periodic_testing_dates():
     print("Updating raw material periodic testing dates...")
     
@@ -305,12 +441,10 @@ def update_periodic_testing_dates():
         
     except Exception as e:
         print(f"Error updating periodic testing dates: {str(e)}")
-        import traceback
         traceback.print_exc()
         return None
 
 # Simplified Excel report creation
-# Modified create_excel_file function
 def create_excel_file(report_data):
     print("Creating Excel file...")
     
@@ -463,13 +597,15 @@ def create_excel_file(report_data):
         
     except Exception as e:
         print(f"Error creating Excel file: {str(e)}")
-        import traceback
         traceback.print_exc()
         return None
 
-# 4. Function to send email report
+# Function to send email report using Microsoft Graph API
 def send_email_report(report_data):
-    print("Preparing to send email report...")
+    """Send email report using Microsoft Graph API (Outlook)"""
+    global global_processor
+    
+    print("Preparing to send email report via Microsoft Graph API...")
     
     # If no data requires attention, exit early
     if not report_data or (
@@ -481,6 +617,10 @@ def send_email_report(report_data):
         return False
     
     try:
+        if not global_processor or not global_processor.access_token:
+            print("❌ No valid access token for Graph API")
+            return False
+
         expired_rows = report_data['expired']
         expiring_soon_rows = report_data['expiring_soon']
         missing_test_date_rows = report_data['missing_test_date']
@@ -491,49 +631,153 @@ def send_email_report(report_data):
             print("Failed to create Excel file")
             return False
         
-        # Create email
-        msg = MIMEMultipart()
-        msg['Subject'] = f'Báo cáo kiểm định kỳ NVL - {datetime.today().strftime("%d/%m/%Y")}'
-        msg['From'] = 'hoitkn@msc.masangroup.com'
-        
-        recipients = ["hoitkn@msc.masangroup.com", "qanvlmb@msc.masangroup.com", "qakstlmb@msc.masangroup.com", "thangtv@msc.masangroup.com"]
-        msg['To'] = ", ".join(recipients)
-        
-        # HTML content
+        # Create HTML content with improved styling
         html_content = f"""
         <html>
         <head>
             <meta charset="UTF-8">
             <style>
-                body {{ font-family: Arial, sans-serif; }}
-                table {{ border-collapse: collapse; width: 100%; margin-top: 20px; }}
-                th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
-                th {{ background-color: #f2f2f2; color: #333; }}
-                .expired {{ background-color: #ffcccc; }}
-                .expiring-soon {{ background-color: #ffeb99; }}
-                .missing-data {{ background-color: #cce0ff; }}
-                h2 {{ color: #003366; }}
-                h3 {{ color: #004d99; margin-top: 25px; }}
-                .summary {{ margin: 20px 0; }}
-                .footer {{ margin-top: 30px; font-size: 0.9em; color: #666; }}
-                .important {{ font-weight: bold; color: red; }}
+                body {{ 
+                    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+                    line-height: 1.6;
+                    color: #333;
+                    background-color: #f8f9fa;
+                }}
+                .container {{
+                    max-width: 1200px;
+                    margin: 0 auto;
+                    background-color: white;
+                    padding: 20px;
+                    border-radius: 8px;
+                    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+                }}
+                .header {{
+                    background: linear-gradient(135deg, #366092, #4a7bb7);
+                    color: white;
+                    padding: 20px;
+                    border-radius: 8px 8px 0 0;
+                    margin: -20px -20px 20px -20px;
+                    text-align: center;
+                }}
+                .header h1 {{
+                    margin: 0;
+                    font-size: 24px;
+                    font-weight: bold;
+                }}
+                .summary {{
+                    background-color: #f8f9fa;
+                    padding: 20px;
+                    border-radius: 8px;
+                    margin: 20px 0;
+                    border-left: 4px solid #366092;
+                }}
+                .summary h3 {{
+                    color: #366092;
+                    margin-top: 0;
+                    font-size: 18px;
+                }}
+                .kpi {{
+                    display: inline-block;
+                    background: white;
+                    padding: 15px;
+                    margin: 10px;
+                    border-radius: 8px;
+                    text-align: center;
+                    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+                    min-width: 150px;
+                }}
+                .kpi-value {{
+                    font-size: 24px;
+                    font-weight: bold;
+                    color: #C00000;
+                }}
+                .kpi-label {{
+                    font-size: 12px;
+                    color: #666;
+                    margin-top: 5px;
+                }}
+                table {{ 
+                    border-collapse: collapse; 
+                    width: 100%; 
+                    margin-top: 20px;
+                    font-size: 11px;
+                }}
+                th, td {{ 
+                    border: 1px solid #ddd; 
+                    padding: 12px 8px; 
+                    text-align: left; 
+                    vertical-align: top;
+                }}
+                th {{ 
+                    background: linear-gradient(135deg, #366092, #4a7bb7);
+                    color: white;
+                    font-weight: bold;
+                    text-align: center;
+                    font-size: 10px;
+                }}
+                .expired {{ 
+                    background-color: #ffcccc;
+                    border-left: 4px solid #C00000;
+                }}
+                .expiring-soon {{ 
+                    background-color: #ffeb99;
+                    border-left: 4px solid #FFA500;
+                }}
+                .missing-data {{ 
+                    background-color: #cce0ff;
+                    border-left: 4px solid #0066CC;
+                }}
+                .footer {{ 
+                    margin-top: 30px; 
+                    padding-top: 20px;
+                    border-top: 1px solid #e0e0e0;
+                    font-size: 12px; 
+                    color: #666; 
+                    text-align: center;
+                }}
+                .important {{
+                    font-weight: bold;
+                    color: #C00000;
+                    background-color: #ffebee;
+                    padding: 10px;
+                    border-radius: 4px;
+                    margin: 15px 0;
+                }}
             </style>
         </head>
         <body>
-            <h2>Báo cáo kiểm định kỳ NVL - {datetime.today().strftime("%d/%m/%Y")}</h2>
-            
-            <div class="summary">
-                <p><strong>Số lượng NVL đã hết hạn kiểm định kỳ:</strong> {len(expired_rows)}</p>
-                <p><strong>Số lượng NVL sắp hết hạn kiểm định kỳ (trong 7 ngày):</strong> {len(expiring_soon_rows)}</p>
-                <p><strong>Số lượng NVL thiếu ngày kiểm định kỳ:</strong> {len(missing_test_date_rows)}</p>
-                <p class="important">📊 Một file Excel đã được đính kèm với báo cáo này để tiện lọc và xử lý dữ liệu.</p>
-            </div>
+            <div class="container">
+                <div class="header">
+                    <h1>📋 BÁO CÁO KIỂM ĐỊNH KỲ NVL</h1>
+                    <p style="margin: 10px 0 0 0; font-size: 16px;">{datetime.today().strftime("%d/%m/%Y")}</p>
+                </div>
+
+                <div class="summary">
+                    <h3>📊 TỔNG QUAN TÌNH TRẠNG</h3>
+                    <div style="text-align: center;">
+                        <div class="kpi">
+                            <div class="kpi-value" style="color: #C00000;">{len(expired_rows)}</div>
+                            <div class="kpi-label">NVL đã hết hạn KĐK</div>
+                        </div>
+                        <div class="kpi">
+                            <div class="kpi-value" style="color: #FFA500;">{len(expiring_soon_rows)}</div>
+                            <div class="kpi-label">NVL sắp hết hạn KĐK<br>(trong 7 ngày)</div>
+                        </div>
+                        <div class="kpi">
+                            <div class="kpi-value" style="color: #0066CC;">{len(missing_test_date_rows)}</div>
+                            <div class="kpi-label">NVL thiếu ngày KĐK</div>
+                        </div>
+                    </div>
+                    <div class="important">
+                        📊 Một file Excel đã được đính kèm với báo cáo này để tiện lọc và xử lý dữ liệu.
+                    </div>
+                </div>
         """
         
         # Add expired materials section if any
         if expired_rows:
             html_content += """
-            <h3>Danh sách NVL đã hết hạn kiểm định kỳ:</h3>
+            <h3 style="color: #C00000;">🔴 DANH SÁCH NVL ĐÃ HẾT HẠN KIỂM ĐỊNH KỲ:</h3>
             <table>
                 <thead>
                     <tr>
@@ -580,7 +824,7 @@ def send_email_report(report_data):
         # Add expiring soon materials section if any
         if expiring_soon_rows:
             html_content += """
-            <h3>Danh sách NVL sắp hết hạn kiểm định kỳ (trong 7 ngày):</h3>
+            <h3 style="color: #FFA500;">🟡 DANH SÁCH NVL SẮP HẾT HẠN KIỂM ĐỊNH KỲ (TRONG 7 NGÀY):</h3>
             <table>
                 <thead>
                     <tr>
@@ -627,7 +871,7 @@ def send_email_report(report_data):
         # Add missing test date materials section if any
         if missing_test_date_rows:
             html_content += """
-            <h3>Danh sách NVL chưa có ngày kiểm định kỳ:</h3>
+            <h3 style="color: #0066CC;">🔵 DANH SÁCH NVL CHƯA CÓ NGÀY KIỂM ĐỊNH KỲ:</h3>
             <table>
                 <thead>
                     <tr>
@@ -663,82 +907,122 @@ def send_email_report(report_data):
             """
         
         # Add footer
-        html_content += """
-            <div class="footer">
-                <p>Vui lòng xem Google Sheets để biết chi tiết và cập nhật.</p>
-                <p>Email này được tự động tạo bởi hệ thống. Vui lòng không trả lời.</p>
+        html_content += f"""
+                <div class="footer">
+                    <h4>📝 Hướng dẫn xử lý:</h4>
+                    <ol>
+                        <li><strong>🔴 NVL đã hết hạn:</strong> Cần thực hiện kiểm định kỳ ngay lập tức</li>
+                        <li><strong>🟡 NVL sắp hết hạn:</strong> Lên kế hoạch kiểm định trong 7 ngày tới</li>
+                        <li><strong>🔵 NVL thiếu thông tin:</strong> Cập nhật ngày kiểm định kỳ vào Google Sheets</li>
+                        <li>Vui lòng truy cập Google Sheets để cập nhật thông tin chi tiết</li>
+                    </ol>
+                    <p><em>⚠️ Email này được tự động tạo bởi hệ thống kiểm định kỳ NVL. Vui lòng không trả lời email này.</em></p>
+                    <p>🕒 Thời gian tạo: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}</p>
+                </div>
             </div>
         </body>
         </html>
         """
-        
-        # Attach HTML
-        msg.attach(MIMEText(html_content, "html", "utf-8"))
-        
-        # Attach Excel file
+
+        # Prepare email data for Graph API
+        email_data = {
+            "message": {
+                "subject": f"📋 Báo cáo kiểm định kỳ NVL - {datetime.today().strftime('%d/%m/%Y')}",
+                "body": {
+                    "contentType": "HTML",
+                    "content": html_content
+                },
+                "toRecipients": []
+            }
+        }
+
+        # Add recipients
+        recipients = ["hoitkn@msc.masangroup.com", "qanvlmb@msc.masangroup.com", "qakstlmb@msc.masangroup.com", "thangtv@msc.masangroup.com"]
+        for recipient in recipients:
+            email_data["message"]["toRecipients"].append({
+                "emailAddress": {
+                    "address": recipient
+                }
+            })
+
+        # Prepare Excel attachment
+        attachments = []
         try:
             with open(excel_path, 'rb') as f:
-                # Add file as application/octet-stream
-                part = MIMEBase('application', 'vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-                part.set_payload(f.read())
-                
-                # Encode file in ASCII characters to send by email    
-                encoders.encode_base64(part)
-                
-                # Add header as key/value pair to attachment part
-                part.add_header(
-                    'Content-Disposition',
-                    f'attachment; filename="{os.path.basename(excel_path)}"',
-                )
-                
-                # Add attachment to message
-                msg.attach(part)
-                print(f"Excel file attached successfully: {excel_path}")
+                excel_data = f.read()
+                excel_b64 = base64.b64encode(excel_data).decode('utf-8')
+
+                attachments.append({
+                    "@odata.type": "#microsoft.graph.fileAttachment",
+                    "name": f"{os.path.basename(excel_path)}",
+                    "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    "contentBytes": excel_b64
+                })
+                print(f"Excel file prepared for attachment: {excel_path}")
         except Exception as e:
-            print(f"Error attaching Excel file: {str(e)}")
-            import traceback
-            traceback.print_exc()
-        
-        # Send email
-        try:
-            with smtplib.SMTP('smtp.gmail.com', 587) as server:
-                server.starttls()
-                email_password = os.environ.get('EMAIL_PASSWORD')
-                if not email_password:
-                    print("WARNING: EMAIL_PASSWORD environment variable not set!")
-                    return False
-                
-                # Login and send email
-                server.login("hoitkn@msc.masangroup.com", email_password)
-                server.send_message(msg)
-                
-                print("Email report sent successfully with Excel attachment!")
-                
-                # Clean up the local Excel file after sending
-                try:
-                    os.remove(excel_path)
-                    print(f"Temporary Excel file removed: {excel_path}")
-                except Exception as cleanup_e:
-                    print(f"Warning: Could not remove temporary Excel file: {str(cleanup_e)}")
-                    
-                return True
-        except Exception as e:
-            print(f"Error sending email: {str(e)}")
-            import traceback
-            traceback.print_exc()
-            return False
+            print(f"Error preparing Excel attachment: {str(e)}")
+
+        if attachments:
+            email_data["message"]["attachments"] = attachments
+
+        # Send email via Graph API
+        graph_url = "https://graph.microsoft.com/v1.0/me/sendMail"
+        headers = {
+            'Authorization': f'Bearer {global_processor.access_token}',
+            'Content-Type': 'application/json'
+        }
+
+        print(f"📤 Sending email via Graph API to {len(recipients)} recipients...")
+
+        response = requests.post(graph_url, headers=headers, json=email_data, timeout=60)
+
+        if response.status_code == 202:
+            print("✅ Email sent successfully via Graph API")
+            print(f"✅ Email đã được gửi đến {len(recipients)} người nhận.")
             
+            # Clean up the local Excel file after sending
+            try:
+                os.remove(excel_path)
+                print(f"Temporary Excel file removed: {excel_path}")
+            except Exception as cleanup_e:
+                print(f"Warning: Could not remove temporary Excel file: {str(cleanup_e)}")
+            
+            return True
+        elif response.status_code == 401:
+            print("❌ Graph API Authentication Error - Token may have expired")
+            print("🔄 Attempting to refresh token...")
+            if global_processor.refresh_access_token():
+                print("✅ Token refreshed, retrying email send...")
+                headers['Authorization'] = f'Bearer {global_processor.access_token}'
+                response = requests.post(graph_url, headers=headers, json=email_data, timeout=60)
+                if response.status_code == 202:
+                    print("✅ Email sent successfully after token refresh")
+                    return True
+            print("❌ Failed to send email even after token refresh")
+            return False
+        elif response.status_code == 403:
+            print("❌ Graph API Permission Error")
+            print("💡 Please ensure Mail.Send permission is granted in Azure App Registration")
+            return False
+        else:
+            print(f"❌ Graph API Error: {response.status_code}")
+            print(f"❌ Response: {response.text[:500]}")
+            return False
+
     except Exception as e:
-        print(f"Error sending email report: {str(e)}")
-        import traceback
+        print(f"❌ Error sending email report via Graph API: {str(e)}")
         traceback.print_exc()
         return False
 
-# 5. Main function to run everything
+# Main function to run everything
 def run_periodic_testing_monitor():
+    global global_processor
     print("Starting raw material periodic testing monitoring...")
     
     try:
+        # Initialize Graph API processor for email
+        global_processor = GraphAPIProcessor()
+        
         # Update periodic testing dates and get report data
         report_data = update_periodic_testing_dates()
         
@@ -750,7 +1034,6 @@ def run_periodic_testing_monitor():
         return True
     except Exception as e:
         print(f"Error in periodic testing monitoring: {str(e)}")
-        import traceback
         traceback.print_exc()
         return False
 
@@ -760,5 +1043,4 @@ if __name__ == "__main__":
         run_periodic_testing_monitor()
     except Exception as e:
         print(f"Error running periodic testing monitor: {str(e)}")
-        import traceback
         traceback.print_exc()
