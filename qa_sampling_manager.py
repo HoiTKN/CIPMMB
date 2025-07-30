@@ -335,7 +335,13 @@ class SharePointSamplingProcessor:
             excel_buffer = io.BytesIO()
             with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
                 for sheet_name, df in sheets_data.items():
-                    df.to_excel(writer, sheet_name=sheet_name, index=False)
+                    # Format date columns before saving
+                    df_formatted = self.format_dataframe_for_excel(df)
+                    df_formatted.to_excel(writer, sheet_name=sheet_name, index=False)
+
+                    # Auto-fit column widths for better readability
+                    worksheet = writer.sheets[sheet_name]
+                    self.auto_fit_columns(worksheet, df_formatted)
 
             excel_buffer.seek(0)
             excel_content = excel_buffer.getvalue()
@@ -403,6 +409,63 @@ class SharePointSamplingProcessor:
         except Exception as e:
             self.log(f"❌ Error uploading to SharePoint: {str(e)}")
             return False
+
+    def auto_fit_columns(self, worksheet, dataframe):
+        """Auto-fit column widths based on content"""
+        try:
+            for column in worksheet.columns:
+                max_length = 0
+                column_letter = column[0].column_letter
+
+                # Check header length
+                if len(dataframe.columns) > 0:
+                    header_length = len(str(dataframe.columns[column[0].column - 1]))
+                    max_length = max(max_length, header_length)
+
+                # Check data length in first 100 rows (for performance)
+                for cell in list(column)[:101]:  # Include header + 100 data rows
+                    try:
+                        if len(str(cell.value)) > max_length:
+                            max_length = len(str(cell.value))
+                    except:
+                        pass
+
+                # Set column width with some padding, but cap at reasonable max
+                adjusted_width = min(max_length + 2, 50)  # Max width of 50
+                worksheet.column_dimensions[column_letter].width = max(adjusted_width, 8)  # Min width of 8
+
+        except Exception as e:
+            self.log(f"Warning: Could not auto-fit columns: {str(e)}")
+
+    def format_dataframe_for_excel(self, df):
+        """Format dataframe for better Excel display"""
+        df_formatted = df.copy()
+
+        # Format date columns to DD/MM/YYYY
+        date_columns = ['Ngày kiểm tra gần nhất', 'Kế hoạch lấy mẫu tiếp theo', 'Ngày kiểm tra', 'Kế hoạch lấy mẫu', 'Ngày thực hiện']
+
+        for col in df_formatted.columns:
+            col_name = str(col).strip()
+            if any(date_keyword in col_name for date_keyword in date_columns):
+                df_formatted[col] = df_formatted[col].apply(self.format_date_for_display)
+
+        return df_formatted
+
+    def format_date_for_display(self, date_value):
+        """Format date to DD/MM/YYYY string"""
+        if pd.isna(date_value) or date_value == '' or str(date_value).strip() in ['nan', 'None', '']:
+            return ''
+
+        # If already a string in correct format, return as is
+        if isinstance(date_value, str) and len(date_value) == 10 and date_value.count('/') == 2:
+            return date_value
+
+        # Try to parse and format
+        parsed_date = parse_date(date_value)
+        if parsed_date:
+            return parsed_date.strftime('%d/%m/%Y')
+        else:
+            return str(date_value)
 
     def upload_backup_file(self, excel_content):
         """Upload to a backup file when original is locked"""
@@ -529,7 +592,7 @@ def parse_date(date_str):
     print(f"Warning: Could not parse date: '{date_str}'")
     return None
 
-# Function to update sampling schedule and find due samples
+# Function to update sampling schedule and find due samples - FIXED VERSION
 def update_sampling_schedule(df, check_type="Hóa lý"):
     print(f"Đang cập nhật lịch lấy mẫu {check_type}...")
 
@@ -545,16 +608,6 @@ def update_sampling_schedule(df, check_type="Hóa lý"):
     print(f"Available columns:")
     for i, col in enumerate(df.columns):
         print(f"  [{i}] '{col}' (type: {type(col)})")
-
-    # Print first few non-empty rows to understand data structure
-    print(f"Sample data (first 5 rows):")
-    for idx in range(min(5, len(df))):
-        row = df.iloc[idx]
-        print(f"  Row {idx}:")
-        for i, col in enumerate(df.columns):
-            value = row[col]
-            print(f"    [{i}] {col}: '{value}' (type: {type(value).__name__})")
-        print()
 
     # Expected columns mapping with more comprehensive detection
     col_mapping = {}
@@ -607,24 +660,12 @@ def update_sampling_schedule(df, check_type="Hóa lý"):
 
     print(f"\nFinal detected columns: {col_mapping}")
 
-    # Force manual column mapping if automatic detection fails
-    if 'san_pham' not in col_mapping:
-        print("\n⚠️ 'Sản phẩm' column not detected automatically, trying manual mapping...")
-        columns_list = list(df.columns)
-        for i, col in enumerate(columns_list):
-            print(f"  Column {i}: '{col}'")
-            if i == 1:  # Based on image, "Sản phẩm" is column B (index 1)
-                col_mapping['san_pham'] = col
-                print(f"  -> Force mapped column {i} as 'san_pham'")
-                break
-
-    # Add missing critical mappings by position if still missing
-    if len(col_mapping) < 3:  # We need at least khu_vuc, san_pham, and one date/frequency
-        print("\n⚠️ Critical columns missing, attempting position-based mapping...")
+    # Force manual column mapping if automatic detection fails (Based on CF file structure)
+    if len(col_mapping) < 5:  # CF file should have at least 5 key columns
+        print("\n⚠️ Using position-based mapping for CF file structure...")
         columns_list = list(df.columns)
 
-        # Based on the images provided:
-        # A: Khu vực, B: Sản phẩm, C: Line/Xưởng, D: Chỉ tiêu kiểm, E: Tần suất, F: Ngày kiểm tra, G: Sample ID, H: Kế hoạch
+        # CF file structure: A:Khu vực, B:Sản phẩm, C:Line/Xưởng, D:Chỉ tiêu kiểm, E:Tần suất, F:Ngày kiểm tra, G:Sample ID, H:Kế hoạch
         position_mapping = {
             0: 'khu_vuc',     # A: Khu vực
             1: 'san_pham',    # B: Sản phẩm
@@ -637,7 +678,7 @@ def update_sampling_schedule(df, check_type="Hóa lý"):
         }
 
         for pos, field in position_mapping.items():
-            if pos < len(columns_list) and field not in col_mapping:
+            if pos < len(columns_list):
                 col_mapping[field] = columns_list[pos]
                 print(f"  Position {pos} -> {field}: '{columns_list[pos]}'")
 
@@ -723,11 +764,11 @@ def update_sampling_schedule(df, check_type="Hóa lý"):
                     print(f"  Skipping row {idx}: Cannot parse date: '{ngay_kiem_tra}'")
                 continue
 
-            # Calculate next sampling date
+            # 🔧 FIX: Calculate next sampling date properly
             next_sampling_date = ngay_kiem_tra_date + timedelta(days=tan_suat)
             next_sampling_str = next_sampling_date.strftime('%d/%m/%Y')
 
-            # Update the plan column
+            # 🔧 FIX: Update the plan column with calculated date
             if col_mapping.get('ke_hoach'):
                 updated_df.at[idx, col_mapping['ke_hoach']] = next_sampling_str
 
@@ -742,9 +783,9 @@ def update_sampling_schedule(df, check_type="Hóa lý"):
                 'line': line or 'N/A',
                 'chi_tieu': chi_tieu or 'N/A',
                 'tan_suat': tan_suat_str,
-                'ngay_kiem_tra': ngay_kiem_tra,
+                'ngay_kiem_tra': ngay_kiem_tra_date.strftime('%d/%m/%Y'),  # Format consistently
                 'sample_id': sample_id or 'N/A',
-                'ke_hoach': next_sampling_str,
+                'ke_hoach': next_sampling_str,  # Use calculated date
                 'loai_kiem_tra': check_type,
                 'row_index': idx,
                 'status': status
@@ -760,7 +801,7 @@ def update_sampling_schedule(df, check_type="Hóa lý"):
             processed_count += 1
 
             if idx < 3:
-                print(f"  ✅ Successfully processed row {idx}")
+                print(f"  ✅ Successfully processed row {idx} - Next due: {next_sampling_str}")
 
         except Exception as e:
             print(f"Lỗi xử lý hàng {idx}: {str(e)}")
@@ -778,7 +819,7 @@ def update_sampling_schedule(df, check_type="Hóa lý"):
 
 # Function to create summary report
 def create_summary_report(all_samples):
-    """Create summary report DataFrame"""
+    """Create summary report DataFrame with improved formatting"""
     print("Đang tạo báo cáo tổng hợp...")
 
     if not all_samples:
@@ -795,21 +836,131 @@ def create_summary_report(all_samples):
             sample['chi_tieu'],
             sample['tan_suat'],
             sample['sample_id'],
-            sample['ngay_kiem_tra'],
-            sample['ke_hoach'],
+            sample['ngay_kiem_tra'],  # Already formatted as DD/MM/YYYY
+            sample['ke_hoach'],       # Already formatted as DD/MM/YYYY
             sample['loai_kiem_tra'],
             sample['status']
         ])
 
-    # Define headers
-    headers = ['Khu vực', 'Sản phẩm', 'Line / Xưởng', 'Chỉ tiêu kiểm',
-               'Tần suất (ngày)', 'Sample ID', 'Ngày kiểm tra',
-               'Kế hoạch lấy mẫu tiếp theo', 'Loại kiểm tra', 'Trạng thái']
+    # Define headers with proper Vietnamese formatting
+    headers = [
+        'Khu vực',
+        'Sản phẩm',
+        'Line / Xưởng',
+        'Chỉ tiêu kiểm tra',
+        'Tần suất (ngày)',
+        'Sample ID',
+        'Ngày kiểm tra gần nhất',  # DD/MM/YYYY
+        'Kế hoạch lấy mẫu tiếp theo',  # DD/MM/YYYY
+        'Loại kiểm tra',
+        'Trạng thái'
+    ]
 
     summary_df = pd.DataFrame(summary_data, columns=headers)
 
     print(f"Đã tạo báo cáo tổng hợp với {len(summary_df)} mẫu.")
     return summary_df
+
+# 🔧 NEW FUNCTION: Create testing history report - FIXED for CF file only
+def create_history_report_cf(existing_history, all_samples_from_cf):
+    """Create or update testing history report - FIXED for CF samples only"""
+    print("Đang tạo/cập nhật lịch sử kiểm mẫu CF...")
+
+    # Get existing Sample IDs from CF history to avoid duplicates
+    existing_sample_ids = set()
+    if existing_history is not None and not existing_history.empty:
+        # Find Sample ID column in existing history
+        id_columns = ['Sample ID', 'sample_id', 'Sample_ID', 'ID Mẫu']
+        for col in existing_history.columns:
+            if any(id_col.lower() in str(col).lower() for id_col in id_columns):
+                existing_sample_ids = set(existing_history[col].astype(str).str.strip())
+                break
+        print(f"Tìm thấy {len(existing_sample_ids)} Sample ID trong lịch sử CF hiện có.")
+
+    # 🔧 FIX: Only process CF samples (filter out other products like "Nêm Rau")
+    cf_samples = []
+    for sample in all_samples_from_cf:
+        # Only include samples from CF file (check khu_vuc starts with known CF areas)
+        khu_vuc = str(sample.get('khu_vuc', '')).strip()
+        san_pham = str(sample.get('san_pham', '')).strip()
+        
+        # 🔧 FIX: Filter CF-specific samples based on known patterns
+        if (khu_vuc.lower() in ['thành phẩm', 'thanh pham'] or 
+            'cf' in san_pham.lower() or 
+            any(keyword in san_pham.upper() for keyword in ['KKM', 'OMC', 'TMB'])):
+            cf_samples.append(sample)
+
+    print(f"Filtered {len(cf_samples)} CF samples from {len(all_samples_from_cf)} total samples.")
+
+    # Find samples with new IDs (not in existing history)
+    new_history_data = []
+
+    for sample in cf_samples:
+        sample_id = str(sample.get('sample_id', '')).strip()
+
+        # Only add samples that have valid ID and are not already in history
+        if (sample_id and
+            sample_id not in ['N/A', 'nan', 'None', ''] and
+            sample_id not in existing_sample_ids):
+
+            # Use the actual testing date (ngay_kiem_tra), not current date
+            ngay_thuc_hien = sample['ngay_kiem_tra']  # This is already formatted as DD/MM/YYYY
+
+            new_history_data.append([
+                ngay_thuc_hien,             # Ngày thực hiện = Ngày kiểm tra gần nhất
+                sample['khu_vuc'],          # Khu vực
+                sample['san_pham'],         # Sản phẩm
+                sample['line'],             # Line/Xưởng
+                sample['chi_tieu'],         # Chỉ tiêu kiểm tra
+                sample['loai_kiem_tra'],    # Loại kiểm tra (Hóa lý/Vi sinh)
+                sample_id,                  # Sample ID
+                '',                         # Ghi chú (để trống cho user điền)
+                sample['ke_hoach']          # Ngày kế hoạch ban đầu
+            ])
+
+            print(f"  Thêm CF Sample ID {sample_id} - Ngày thực hiện: {ngay_thuc_hien}")
+
+    # Define headers for CF history sheet
+    history_headers = [
+        'Ngày thực hiện',           # DD/MM/YYYY
+        'Khu vực',
+        'Sản phẩm',
+        'Line / Xưởng',
+        'Chỉ tiêu kiểm tra',
+        'Loại kiểm tra',            # Hóa lý hoặc Vi sinh
+        'Sample ID',
+        'Ghi chú',                  # Để user thêm thông tin
+        'Ngày kế hoạch'             # Ngày ban đầu theo kế hoạch
+    ]
+
+    # Create new history DataFrame
+    new_history_df = pd.DataFrame(new_history_data, columns=history_headers)
+
+    # If there's existing CF history, combine them
+    if existing_history is not None and not existing_history.empty:
+        print(f"Tìm thấy lịch sử CF hiện có với {len(existing_history)} bản ghi.")
+
+        # Ensure existing history has the same columns
+        for col in history_headers:
+            if col not in existing_history.columns:
+                existing_history[col] = ''
+
+        # Keep only the columns we want
+        existing_history = existing_history[history_headers]
+
+        # Combine old and new history
+        combined_history = pd.concat([existing_history, new_history_df], ignore_index=True)
+
+        # Sort by date (most recent first)
+        combined_history['Ngày thực hiện_sorted'] = pd.to_datetime(combined_history['Ngày thực hiện'], format='%d/%m/%Y', errors='coerce')
+        combined_history = combined_history.sort_values('Ngày thực hiện_sorted', ascending=False, na_position='last')
+        combined_history = combined_history.drop('Ngày thực hiện_sorted', axis=1)
+
+        print(f"Đã thêm {len(new_history_data)} CF Sample ID mới. Tổng cộng: {len(combined_history)} bản ghi.")
+        return combined_history
+    else:
+        print(f"Tạo lịch sử CF mới với {len(new_history_data)} Sample ID.")
+        return new_history_df
 
 # Create visualization charts for email
 def create_charts(due_samples):
@@ -1011,6 +1162,7 @@ def send_email_notification(due_samples):
                     <ol>
                         <li>Vui lòng thực hiện lấy mẫu theo danh sách trên</li>
                         <li>Cập nhật Sample ID mới vào SharePoint sau khi lấy mẫu</li>
+                        <li>Kiểm tra và cập nhật lịch sử trong sheet "Lịch sử kiểm mẫu"</li>
                         <li>Báo cáo tổng hợp đã được tự động cập nhật trong file Excel</li>
                     </ol>
                     <p><em>⚠️ Email này được tự động tạo bởi hệ thống QA Sampling. Vui lòng không trả lời email này.</em></p>
@@ -1052,7 +1204,7 @@ def send_email_notification(due_samples):
 
             attachments.append({
                 "@odata.type": "#microsoft.graph.fileAttachment",
-                "name": f"sampling_status_chart_{datetime.now().strftime('%Y%m%d')}.png",
+                "name": f"sampling_status_chart_CF_{datetime.now().strftime('%Y%m%d')}.png",
                 "contentType": "image/png",
                 "contentBytes": chart_img_b64
             })
@@ -1102,7 +1254,7 @@ def send_email_notification(due_samples):
         return False
 
 def create_email_table(check_type, samples):
-    """Create HTML table for email"""
+    """Create HTML table for email with improved formatting"""
     html = f"""
     <h3>{check_type} - Danh sách mẫu cần lấy ({len(samples)} mẫu):</h3>
     <table>
@@ -1141,7 +1293,7 @@ def create_email_table(check_type, samples):
     """
     return html
 
-# Main function to run everything
+# Main function to run everything - FIXED VERSION
 def run_update():
     global global_processor
     print("Bắt đầu cập nhật lịch lấy mẫu QA từ SharePoint...")
@@ -1159,15 +1311,27 @@ def run_update():
         all_due_samples = []
         all_collected_samples = []
         updated_sheets = {}
+        existing_history = None
 
-        # Process each sheet that looks like a sampling schedule
+        # Check if there's an existing CF history sheet
+        history_sheet_names = ['Lịch sử kiểm mẫu', 'Lich su kiem mau', 'Testing History', 'History']
+        for sheet_name in sheets_data:
+            if any(hist_name.lower() in sheet_name.lower() for hist_name in history_sheet_names):
+                existing_history = sheets_data[sheet_name]
+                print(f"Tìm thấy sheet lịch sử CF: {sheet_name}")
+                break
+
+        # Process each sheet that looks like CF sampling schedule
         for sheet_name, df in sheets_data.items():
-            # Skip empty sheets or summary sheets
-            if df.empty or 'tổng hợp' in sheet_name.lower() or 'summary' in sheet_name.lower():
+            # Skip empty sheets, summary sheets, or history sheets
+            if (df.empty or
+                'tổng hợp' in sheet_name.lower() or
+                'summary' in sheet_name.lower() or
+                any(hist_name.lower() in sheet_name.lower() for hist_name in history_sheet_names)):
                 updated_sheets[sheet_name] = df
                 continue
 
-            print(f"\nProcessing sheet: {sheet_name}")
+            print(f"\nProcessing CF sheet: {sheet_name}")
             print("=" * 50)
 
             # Determine check type based on sheet name
@@ -1177,7 +1341,7 @@ def run_update():
             elif 'hóa' in sheet_name.lower() or 'hoa' in sheet_name.lower() or 'chemical' in sheet_name.lower():
                 check_type = "Hóa lý"
 
-            # Update sampling schedule for this sheet
+            # Update sampling schedule for this CF sheet
             due_samples, all_samples, updated_df = update_sampling_schedule(df, check_type)
 
             # Collect results
@@ -1190,27 +1354,33 @@ def run_update():
             # Add delay between processing sheets
             time.sleep(2)
 
-        # Create summary report sheet
+        # Create summary report sheet with better formatting
         if all_collected_samples:
             summary_df = create_summary_report(all_collected_samples)
             updated_sheets['Báo cáo tổng hợp'] = summary_df
 
+        # 🔧 FIX: Create or update CF history report - using fixed CF logic
+        if all_collected_samples:  # Track all CF samples, not just due ones
+            history_df = create_history_report_cf(existing_history, all_collected_samples)
+            updated_sheets['Lịch sử kiểm mẫu'] = history_df
+
         # Print processing results
-        print(f"\n📊 Kết quả xử lý tổng thể:")
-        print(f"  - Tổng số mẫu được theo dõi: {len(all_collected_samples)}")
-        print(f"  - Mẫu đến hạn cần lấy: {len(all_due_samples)}")
+        print(f"\n📊 Kết quả xử lý tổng thể (CF):")
+        print(f"  - Tổng số mẫu CF được theo dõi: {len(all_collected_samples)}")
+        print(f"  - Mẫu CF đến hạn cần lấy: {len(all_due_samples)}")
         print(f"  - Sheets đã xử lý: {len(updated_sheets)}")
+        print(f"  - Đã tạo/cập nhật lịch sử kiểm mẫu CF: {'✅' if all_collected_samples else '⏭️'}")
 
         # Show sample of collected data for verification
         if all_collected_samples:
-            print(f"\n📋 Mẫu dữ liệu đã xử lý (5 mẫu đầu):")
+            print(f"\n📋 Mẫu dữ liệu CF đã xử lý (5 mẫu đầu):")
             for i, sample in enumerate(all_collected_samples[:5]):
-                print(f"  {i+1}. {sample['loai_kiem_tra']} - {sample['san_pham']} (Line: {sample['line']}) - Status: {sample['status']}")
+                print(f"  {i+1}. {sample['loai_kiem_tra']} - {sample['san_pham']} (Line: {sample['line']}) - Status: {sample['status']} - Next: {sample['ke_hoach']}")
 
         # Try to upload updated file back to SharePoint (with timeout to avoid hanging)
         upload_success = False
         if len(all_collected_samples) > 0:  # Only upload if we have data
-            print(f"\n📤 Attempting to upload updated file...")
+            print(f"\n📤 Attempting to upload updated CF file...")
             try:
                 # Set a shorter timeout for upload attempts
                 upload_success = global_processor.upload_excel_file(updated_sheets)
@@ -1218,15 +1388,15 @@ def run_update():
                 print(f"⚠️ Upload failed with error: {str(e)}")
                 upload_success = False
         else:
-            print(f"\n⚠️ No data processed, skipping upload")
+            print(f"\n⚠️ No CF data processed, skipping upload")
 
         # Send email notification for due samples regardless of upload success
         email_success = True
         if all_due_samples:
-            print(f"\n📧 Sending email notification for {len(all_due_samples)} due samples...")
+            print(f"\n📧 Sending email notification for {len(all_due_samples)} due CF samples...")
             email_success = send_email_notification(all_due_samples)
         else:
-            print(f"\n📧 No due samples found, no email notification needed")
+            print(f"\n📧 No due CF samples found, no email notification needed")
 
         # Create local backup if upload failed but we have data
         if not upload_success and len(all_collected_samples) > 0:
@@ -1234,7 +1404,14 @@ def run_update():
                 backup_filename = f"Sampling_plan_CF_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
                 with pd.ExcelWriter(backup_filename, engine='openpyxl') as writer:
                     for sheet_name, df in updated_sheets.items():
-                        df.to_excel(writer, sheet_name=sheet_name, index=False)
+                        # Format date columns before saving
+                        df_formatted = global_processor.format_dataframe_for_excel(df)
+                        df_formatted.to_excel(writer, sheet_name=sheet_name, index=False)
+
+                        # Auto-fit column widths
+                        worksheet = writer.sheets[sheet_name]
+                        global_processor.auto_fit_columns(worksheet, df_formatted)
+
                 print(f"💾 Created local backup: {backup_filename}")
             except Exception as e:
                 print(f"❌ Failed to create local backup: {str(e)}")
@@ -1244,19 +1421,20 @@ def run_update():
         print(f"  - Xử lý dữ liệu: {'✅' if len(all_collected_samples) > 0 else '❌'}")
         print(f"  - Upload SharePoint: {'✅' if upload_success else '❌'}")
         print(f"  - Email thông báo: {'✅' if email_success else '❌'}")
+        print(f"  - Lịch sử kiểm mẫu CF: {'✅' if all_collected_samples else '⏭️ (không có dữ liệu)'}")
 
         # Determine overall success
         # Success if we processed data successfully (upload failure is acceptable due to lock issues)
         if len(all_collected_samples) > 0:
             if upload_success:
-                print("✅ Hoàn thành cập nhật thành công!")
+                print("✅ Hoàn thành cập nhật CF thành công!")
             else:
-                print("⚠️ Hoàn thành xử lý với cảnh báo - File không thể upload do bị lock hoặc lỗi khác")
+                print("⚠️ Hoàn thành xử lý CF với cảnh báo - File không thể upload do bị lock hoặc lỗi khác")
                 print("💡 Dữ liệu đã được xử lý và email thông báo đã gửi")
                 print("💡 Vui lòng kiểm tra file trên SharePoint và đóng nếu đang mở, sau đó chạy lại workflow")
             return True
         else:
-            print("❌ Không có dữ liệu được xử lý thành công")
+            print("❌ Không có dữ liệu CF được xử lý thành công")
             print("💡 Vui lòng kiểm tra cấu trúc file Excel và đảm bảo có dữ liệu hợp lệ")
             return False
 
@@ -1269,7 +1447,7 @@ def run_update():
 if __name__ == "__main__":
     success = run_update()
     if success:
-        print("✅ QA Sampling automation completed successfully!")
+        print("✅ QA Sampling CF automation completed successfully!")
     else:
-        print("❌ QA Sampling automation failed!")
+        print("❌ QA Sampling CF automation failed!")
         sys.exit(1)
