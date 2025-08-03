@@ -13,7 +13,7 @@ import traceback
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 
-# Define the scopes for Google Sheets
+# Define the scopes for Google Sheets (kept for potential future use)
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive"
@@ -32,6 +32,7 @@ SHAREPOINT_CONFIG = {
 # SharePoint File IDs (extracted from URLs)
 SHAREPOINT_FILE_IDS = {
     'sample_id': '8220CAEA-0CD9-585B-D483-DE0A82A98564',  # Sample ID.xlsx
+    'knkh_data': '69AE13C5-76D7-4061-90E2-CE48F965C33A',  # BÁO CÁO KNKH 2025.xlsx (NEW)
     'data_knkh_output': '3E86CA4D-3F41-5C10-666B-5A51F8D9C911'  # Data KNKH.xlsx output
 }
 
@@ -370,38 +371,43 @@ class SharePointProcessor:
             return False
 
 def authenticate_google():
-    """Authentication using OAuth token for Google Sheets"""
+    """Authentication using OAuth token for Google Sheets (DEPRECATED - kept for reference)"""
     try:
-        print("Starting OAuth authentication process for Google Sheets...")
-        creds = None
-
-        # Check if token.json exists first
-        if os.path.exists('token.json'):
-            print("Loading credentials from existing token.json file")
-            creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-        # Otherwise create it from the environment variable
-        elif os.environ.get('GOOGLE_TOKEN_JSON'):
-            print("Creating token.json from GOOGLE_TOKEN_JSON environment variable")
-            with open('token.json', 'w') as f:
-                f.write(os.environ.get('GOOGLE_TOKEN_JSON'))
-            creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-        else:
-            print("Error: No token.json file or GOOGLE_TOKEN_JSON environment variable found")
-            sys.exit(1)
-
-        # Refresh token if expired
-        if creds and creds.expired and creds.refresh_token:
-            print("Token expired, refreshing...")
-            creds.refresh(Request())
-            with open('token.json', 'w') as token:
-                token.write(creds.to_json())
-
-        # Return authorized client
-        return gspread.authorize(creds)
+        print("⚠️ WARNING: Google Sheets authentication is deprecated in this version")
+        print("⚠️ All data sources now use SharePoint")
+        return None
+        
+        # Original code kept for reference but not used
+        # print("Starting OAuth authentication process for Google Sheets...")
+        # creds = None
+        # 
+        # # Check if token.json exists first
+        # if os.path.exists('token.json'):
+        #     print("Loading credentials from existing token.json file")
+        #     creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+        # # Otherwise create it from the environment variable
+        # elif os.environ.get('GOOGLE_TOKEN_JSON'):
+        #     print("Creating token.json from GOOGLE_TOKEN_JSON environment variable")
+        #     with open('token.json', 'w') as f:
+        #         f.write(os.environ.get('GOOGLE_TOKEN_JSON'))
+        #     creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+        # else:
+        #     print("Error: No token.json file or GOOGLE_TOKEN_JSON environment variable found")
+        #     sys.exit(1)
+        # 
+        # # Refresh token if expired
+        # if creds and creds.expired and creds.refresh_token:
+        #     print("Token expired, refreshing...")
+        #     creds.refresh(Request())
+        #     with open('token.json', 'w') as token:
+        #         token.write(creds.to_json())
+        # 
+        # # Return authorized client
+        # return gspread.authorize(creds)
 
     except Exception as e:
         print(f"Google Sheets authentication error: {str(e)}")
-        sys.exit(1)
+        return None
 
 def extract_phone_number(text):
     """Extract Vietnamese phone number from complaint content"""
@@ -1083,7 +1089,7 @@ def find_qa_and_leader(row, aql_data, leader_mapping=None):
 
 def main():
     print("="*80)
-    print("🔄 HYBRID GOOGLE SHEETS + SHAREPOINT INTEGRATION")
+    print("🔄 FULL SHAREPOINT INTEGRATION - UPDATED VERSION")
     print("="*80)
 
     # Initialize SharePoint processor
@@ -1095,23 +1101,14 @@ def main():
         print(f"❌ SharePoint initialization failed: {str(e)}")
         sys.exit(1)
 
-    # Authenticate and connect to Google Sheets
-    print("\n🔗 Connecting to Google Sheets...")
-    try:
-        gc = authenticate_google()
-        print("✅ Google Sheets connection established")
-    except Exception as e:
-        print(f"❌ Google Sheets initialization failed: {str(e)}")
-        sys.exit(1)
-
     # ========================================================================
     # DATA SOURCES:
     # 1. AQL Data - FROM SHAREPOINT (Sample ID.xlsx)
-    # 2. KNKH Data - FROM GOOGLE SHEETS (existing)
+    # 2. KNKH Data - FROM SHAREPOINT (BÁO CÁO KNKH 2025.xlsx) ⭐ UPDATED
     # 3. Output - TO SHAREPOINT (Data KNKH.xlsx)
     # ========================================================================
 
-    print("\n📥 Loading data from multiple sources...")
+    print("\n📥 Loading data from SharePoint sources...")
 
     # 1. Get AQL data from SharePoint
     print("📋 Loading AQL data from SharePoint...")
@@ -1138,32 +1135,30 @@ def main():
         print(f"❌ Error loading AQL data from SharePoint: {str(e)}")
         sys.exit(1)
 
-    # 2. Get KNKH data from Google Sheets (unchanged)
-    print("📋 Loading KNKH data from Google Sheets...")
+    # 2. Get KNKH data from SharePoint ⭐ UPDATED FROM GOOGLE SHEETS
+    print("📋 Loading KNKH data from SharePoint...")
     try:
-        knkh_sheet = gc.open_by_url('https://docs.google.com/spreadsheets/d/1Z5mtkH-Yb4jg-2N_Fqr3i44Ta_YTFYHBoxw1YhB4RrQ/edit')
-        knkh_worksheet = knkh_sheet.worksheet('MMB')
+        knkh_sheets_data = sp_processor.download_excel_file_by_id(
+            SHAREPOINT_FILE_IDS['knkh_data'], 
+            "BÁO CÁO KNKH 2025.xlsx (KNKH Data)"
+        )
 
-        try:
-            knkh_data = knkh_worksheet.get_all_records()
-            knkh_df = pd.DataFrame(knkh_data)
-        except Exception as e:
-            print(f"Error with KNKH get_all_records(), trying alternative method: {e}")
-            # Use get_all_values() as fallback
-            knkh_values = knkh_worksheet.get_all_values()
-            if len(knkh_values) > 1:
-                headers = knkh_values[0]
-                data = knkh_values[1:]
-                knkh_df = pd.DataFrame(data, columns=headers)
-            else:
-                print("No data found in MMB worksheet")
-                sys.exit(1)
+        if not knkh_sheets_data:
+            print("❌ Failed to download KNKH data from SharePoint")
+            sys.exit(1)
+
+        # Extract MMB sheet (this contains the KNKH data)
+        knkh_df = knkh_sheets_data.get('MMB', pd.DataFrame())
+        if knkh_df.empty:
+            print("❌ MMB sheet not found or empty in KNKH data")
+            print(f"Available sheets: {list(knkh_sheets_data.keys())}")
+            sys.exit(1)
 
         print(f"✅ KNKH data loaded: {len(knkh_df)} records")
         print(f"KNKH columns: {list(knkh_df.columns)}")
 
     except Exception as e:
-        print(f"❌ Error loading KNKH data from Google Sheets: {str(e)}")
+        print(f"❌ Error loading KNKH data from SharePoint: {str(e)}")
         sys.exit(1)
 
     # ========================================================================
@@ -1364,7 +1359,7 @@ def main():
             
             # Fallback: save locally
             print("💾 Saving data locally as backup...")
-            local_filename = "Data_KNKH_hybrid_backup.xlsx"
+            local_filename = "Data_KNKH_full_sharepoint_backup.xlsx"
             with pd.ExcelWriter(local_filename, engine='openpyxl') as writer:
                 final_df.to_excel(writer, sheet_name='Data_KNKH', index=False)
                 
@@ -1381,8 +1376,9 @@ def main():
         sys.exit(1)
 
     print("\n" + "="*80)
-    print("✅ HYBRID INTEGRATION COMPLETED SUCCESSFULLY!")
-    print("✅ PHONE NUMBER EXTRACTION FEATURE ADDED!")
+    print("✅ FULL SHAREPOINT INTEGRATION COMPLETED SUCCESSFULLY!")
+    print("✅ PHONE NUMBER EXTRACTION FEATURE INCLUDED!")
+    print("✅ ALL DATA SOURCES NOW USE SHAREPOINT!")
     print("="*80)
 
 if __name__ == "__main__":
