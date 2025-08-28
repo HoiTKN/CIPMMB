@@ -1147,18 +1147,36 @@ def main():
             print("❌ Failed to download KNKH data from SharePoint")
             sys.exit(1)
 
-        # Extract Data sheet (this contains the KNKH data)
-        knkh_df = knkh_sheets_data.get('Data', pd.DataFrame())
-        if knkh_df.empty:
-            print("❌ 'Data' sheet not found or empty in KNKH data")
+        # Find the Data sheet (handle variations like "Data", "Data ", etc.)
+        knkh_df = None
+        data_sheet_name = None
+        
+        # First try exact match
+        if 'Data' in knkh_sheets_data:
+            knkh_df = knkh_sheets_data['Data']
+            data_sheet_name = 'Data'
+        else:
+            # Look for sheets with "Data" in the name (case insensitive, handle spaces)
+            for sheet_name in knkh_sheets_data.keys():
+                if 'data' in sheet_name.lower().strip():
+                    knkh_df = knkh_sheets_data[sheet_name]
+                    data_sheet_name = sheet_name
+                    print(f"✅ Found data sheet: '{sheet_name}' (with {len(knkh_df)} rows)")
+                    break
+        
+        # If still not found, try other possible sheet names
+        if knkh_df is None or knkh_df.empty:
+            print("❌ 'Data' sheet not found, trying alternatives...")
             print(f"Available sheets: {list(knkh_sheets_data.keys())}")
-            # Try other possible sheet names as fallback
-            possible_sheet_names = ['Sheet1', 'BÁO CÁO KNKH', 'MMB']
+            
+            possible_sheet_names = ['Sheet1', 'BÁO CÁO KNKH', 'MMB', 'Chi tiết4', 'Trang_tính1']
             for sheet_name in possible_sheet_names:
                 if sheet_name in knkh_sheets_data:
-                    knkh_df = knkh_sheets_data[sheet_name]
-                    if not knkh_df.empty:
-                        print(f"✅ Using fallback sheet '{sheet_name}' for KNKH data")
+                    temp_df = knkh_sheets_data[sheet_name]
+                    if not temp_df.empty and len(temp_df) > 100:  # Use sheet with substantial data
+                        knkh_df = temp_df
+                        data_sheet_name = sheet_name
+                        print(f"✅ Using fallback sheet '{sheet_name}' with {len(knkh_df)} rows")
                         break
 
         if knkh_df is None or knkh_df.empty:
