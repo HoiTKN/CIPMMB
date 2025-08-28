@@ -1148,7 +1148,7 @@ def main():
             sys.exit(1)
 
         # Try different possible sheet names
-        possible_sheet_names = ['MMB', 'Sheet1', 'BÁO CÁO KNKH', 'Data', list(knkh_sheets_data.keys())[0] if knkh_sheets_data else None]
+        possible_sheet_names = ['Data', list(knkh_sheets_data.keys())[0] if knkh_sheets_data else None]
         knkh_df = None
         
         for sheet_name in possible_sheet_names:
