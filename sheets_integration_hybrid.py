@@ -1147,16 +1147,19 @@ def main():
             print("❌ Failed to download KNKH data from SharePoint")
             sys.exit(1)
 
-        # Try different possible sheet names
-        possible_sheet_names = ['Data', list(knkh_sheets_data.keys())[0] if knkh_sheets_data else None]
-        knkh_df = None
-        
-        for sheet_name in possible_sheet_names:
-            if sheet_name and sheet_name in knkh_sheets_data:
-                knkh_df = knkh_sheets_data[sheet_name]
-                if not knkh_df.empty:
-                    print(f"✅ Using sheet '{sheet_name}' for KNKH data")
-                    break
+        # Extract Data sheet (this contains the KNKH data)
+        knkh_df = knkh_sheets_data.get('Data', pd.DataFrame())
+        if knkh_df.empty:
+            print("❌ 'Data' sheet not found or empty in KNKH data")
+            print(f"Available sheets: {list(knkh_sheets_data.keys())}")
+            # Try other possible sheet names as fallback
+            possible_sheet_names = ['Sheet1', 'BÁO CÁO KNKH', 'MMB']
+            for sheet_name in possible_sheet_names:
+                if sheet_name in knkh_sheets_data:
+                    knkh_df = knkh_sheets_data[sheet_name]
+                    if not knkh_df.empty:
+                        print(f"✅ Using fallback sheet '{sheet_name}' for KNKH data")
+                        break
 
         if knkh_df is None or knkh_df.empty:
             print("❌ No valid KNKH data found in any sheet")
@@ -1176,16 +1179,30 @@ def main():
 
     print("\n🏭 Applying MMB factory filter...")
     
-    # Check if 'Nhà máy sản xuất' column exists
+    # Check column I specifically for 'Nhà máy sản xuất'
     factory_column = None
-    for col in knkh_df.columns:
-        if 'nhà máy sản xuất' in col.lower() or 'nha may san xuat' in col.lower():
-            factory_column = col
-            break
     
-    if factory_column:
-        print(f"✅ Found factory column: '{factory_column}'")
+    # First check if we can access by column position (column I = index 8)
+    if len(knkh_df.columns) > 8:
+        # Check if column I (index 8) contains factory information
+        col_i = knkh_df.columns[8]
+        print(f"Column I (index 8): '{col_i}'")
         
+        # Check if this column contains MMB values
+        if knkh_df[col_i].astype(str).str.contains('MMB', na=False).any():
+            factory_column = col_i
+            print(f"✅ Found MMB values in column I: '{factory_column}'")
+    
+    # If column I doesn't work, search by name
+    if not factory_column:
+        for col in knkh_df.columns:
+            col_lower = col.lower()
+            if 'nhà máy sản xuất' in col_lower or 'nha may san xuat' in col_lower or 'factory' in col_lower:
+                factory_column = col
+                print(f"✅ Found factory column by name: '{factory_column}'")
+                break
+    
+    if factory_column:        
         # Show unique values in factory column for debugging
         unique_factories = knkh_df[factory_column].value_counts()
         print(f"Factory distribution before filtering:")
@@ -1194,7 +1211,8 @@ def main():
         
         # Filter for MMB only
         original_count = len(knkh_df)
-        knkh_df = knkh_df[knkh_df[factory_column] == 'MMB']
+        # Use case-insensitive matching for MMB
+        knkh_df = knkh_df[knkh_df[factory_column].astype(str).str.upper().str.contains('MMB', na=False)]
         filtered_count = len(knkh_df)
         
         print(f"✅ Factory filter applied:")
@@ -1208,8 +1226,11 @@ def main():
             sys.exit(1)
             
     else:
-        print("⚠️ Factory column 'Nhà máy sản xuất' not found in data")
+        print("⚠️ Factory column not found in data")
         print("Available columns:", list(knkh_df.columns))
+        print("Column positions and names:")
+        for i, col in enumerate(knkh_df.columns):
+            print(f"  Column {chr(65+i)} (index {i}): '{col}'")
         print("Proceeding without factory filter...")
 
     # ========================================================================
@@ -1348,42 +1369,112 @@ def main():
     knkh_df['Tháng nhận khiếu nại'] = knkh_df['Ngày tiếp nhận_std'].apply(extract_month)
     knkh_df['Năm nhận khiếu nại'] = knkh_df['Ngày tiếp nhận_std'].apply(extract_year)
 
-    # Filter to only include rows where "Bộ phận chịu trách nhiệm" is "Nhà máy"
+    # Filter to only include rows where "Bộ phận chịu trách nhiệm" is "Nhà máy" (if exists)
     print(f"Total rows before filtering by 'Bộ phận chịu trách nhiệm': {len(knkh_df)}")
     
     responsible_dept_column = None
     for col in knkh_df.columns:
-        if 'bộ phận chịu trách nhiệm' in col.lower() or 'bo phan chiu trach nhiem' in col.lower():
+        col_lower = col.lower()
+        if 'bộ phận chịu trách nhiệm' in col_lower or 'bo phan chiu trach nhiem' in col_lower or 'responsible' in col_lower:
             responsible_dept_column = col
             break
     
     if responsible_dept_column:
-        knkh_df = knkh_df[knkh_df[responsible_dept_column] == 'Nhà máy']
-        print(f"Rows after filtering for '{responsible_dept_column}' = 'Nhà máy': {len(knkh_df)}")
+        # Show unique values for debugging
+        dept_values = knkh_df[responsible_dept_column].value_counts()
+        print(f"Responsible department distribution:")
+        for dept, count in dept_values.items():
+            print(f"  '{dept}': {count} records")
+            
+        # Filter for factory only
+        before_filter = len(knkh_df)
+        knkh_df = knkh_df[knkh_df[responsible_dept_column].astype(str).str.contains('Nhà máy|nha may|Factory', case=False, na=False)]
+        after_filter = len(knkh_df)
+        print(f"Rows after filtering for factory responsibility: {after_filter} (filtered out: {before_filter - after_filter})")
     else:
         print("⚠️ 'Bộ phận chịu trách nhiệm' column not found, skipping this filter")
-        print("Available columns:", list(knkh_df.columns))
+        print("Available columns with sample data:")
+        for col in knkh_df.columns:
+            sample_values = knkh_df[col].dropna().head(3).tolist()
+            print(f"  '{col}': {sample_values}")
 
     # Create the final output dataframe
     filtered_knkh_df = knkh_df.copy()
 
     # Extract short product names
-    filtered_knkh_df['Tên sản phẩm ngắn'] = filtered_knkh_df['Tên sản phẩm'].apply(extract_short_product_name)
+    if 'Tên sản phẩm' in filtered_knkh_df.columns:
+        filtered_knkh_df['Tên sản phẩm ngắn'] = filtered_knkh_df['Tên sản phẩm'].apply(extract_short_product_name)
+    else:
+        # Try to find product name column
+        product_col = None
+        for col in filtered_knkh_df.columns:
+            if 'sản phẩm' in col.lower() or 'san pham' in col.lower() or 'product' in col.lower():
+                product_col = col
+                break
+        if product_col:
+            filtered_knkh_df['Tên sản phẩm ngắn'] = filtered_knkh_df[product_col].apply(extract_short_product_name)
+        else:
+            filtered_knkh_df['Tên sản phẩm ngắn'] = ''
 
-    # UPDATED: Include SDT người KN in the final dataframe
-    final_df = filtered_knkh_df[[
-        'Mã ticket', 'Ngày tiếp nhận_formatted', 'Tỉnh', 'Ngày SX_formatted', 'Sản phẩm/Dịch vụ',
-        'Số lượng (ly/hộp/chai/gói/hủ)', 'Nội dung phản hồi', 'Item', 'Tên sản phẩm', 'Tên sản phẩm ngắn',
-        'SL pack/ cây lỗi', 'Tên lỗi', 'Line_extracted', 'Máy_extracted', 'Giờ_extracted',
-        'QA_matched', 'Tên Trưởng ca_matched', 'Shift', 
-        'Tháng sản xuất', 'Năm sản xuất', 'Tuần nhận khiếu nại', 'Tháng nhận khiếu nại', 'Năm nhận khiếu nại',
-        responsible_dept_column if responsible_dept_column else 'Bộ phận chịu trách nhiệm', 'SDT người KN', 'debug_info'
-    ]].copy()
-
-    # Rename columns for clarity
-    rename_dict = {
+    # Build final dataframe with available columns
+    available_columns = []
+    column_mapping = {
+        'Mã ticket': ['Mã ticket', 'Ma ticket', 'Ticket', 'ID'],
+        'Ngày tiếp nhận_formatted': ['Ngày tiếp nhận_formatted'],
+        'Tỉnh': ['Tỉnh', 'Tinh', 'Province'],
+        'Ngày SX_formatted': ['Ngày SX_formatted'],
+        'Sản phẩm/Dịch vụ': ['Sản phẩm/Dịch vụ', 'San pham/Dich vu', 'Product'],
+        'Số lượng (ly/hộp/chai/gói/hủ)': ['Số lượng (ly/hộp/chai/gói/hủ)', 'So luong', 'Quantity'],
+        'Nội dung phản hồi': ['Nội dung phản hồi', 'Noi dung phan hoi', 'Content'],
+        'Item': ['Item'],
+        'Tên sản phẩm': ['Tên sản phẩm', 'Ten san pham', 'Product Name'],
+        'Tên sản phẩm ngắn': ['Tên sản phẩm ngắn'],
+        'SL pack/ cây lỗi': ['SL pack/ cây lỗi', 'SL pack/cay loi', 'Defect Quantity'],
+        'Tên lỗi': ['Tên lỗi', 'Ten loi', 'Defect Name'],
+        'Line_extracted': ['Line_extracted'],
+        'Máy_extracted': ['Máy_extracted'],
+        'Giờ_extracted': ['Giờ_extracted'],
+        'QA_matched': ['QA_matched'],
+        'Tên Trưởng ca_matched': ['Tên Trưởng ca_matched'],
+        'Shift': ['Shift'],
+        'Tháng sản xuất': ['Tháng sản xuất'],
+        'Năm sản xuất': ['Năm sản xuất'],
+        'Tuần nhận khiếu nại': ['Tuần nhận khiếu nại'],
+        'Tháng nhận khiếu nại': ['Tháng nhận khiếu nại'],
+        'Năm nhận khiếu nại': ['Năm nhận khiếu nại'],
+        'Bộ phận chịu trách nhiệm': [responsible_dept_column] if responsible_dept_column else ['Bộ phận chịu trách nhiệm'],
+        'SDT người KN': ['SDT người KN'],
+        'debug_info': ['debug_info']
+    }
+    
+    # Find actual column names that exist
+    final_columns = []
+    for desired_col, possible_names in column_mapping.items():
+        found_col = None
+        for possible_name in possible_names:
+            if possible_name in filtered_knkh_df.columns:
+                found_col = possible_name
+                break
+        if found_col:
+            final_columns.append(found_col)
+            available_columns.append(desired_col)
+        else:
+            print(f"⚠️ Column not found: {desired_col}")
+    
+    # Create final dataframe with available columns
+    final_df = filtered_knkh_df[final_columns].copy()
+    
+    # Create rename mapping
+    rename_dict = {}
+    for i, final_col in enumerate(final_columns):
+        desired_name = available_columns[i]
+        if final_col != desired_name:
+            rename_dict[final_col] = desired_name
+    
+    # Add standard renames
+    standard_renames = {
         'Line_extracted': 'Line',
-        'Máy_extracted': 'Máy',
+        'Máy_extracted': 'Máy', 
         'Giờ_extracted': 'Giờ',
         'QA_matched': 'QA',
         'Tên Trưởng ca_matched': 'Tên Trưởng ca',
@@ -1391,9 +1482,9 @@ def main():
         'Ngày SX_formatted': 'Ngày SX'
     }
     
-    # Add responsible department column rename if found
-    if responsible_dept_column and responsible_dept_column != 'Bộ phận chịu trách nhiệm':
-        rename_dict[responsible_dept_column] = 'Bộ phận chịu trách nhiệm'
+    for old_name, new_name in standard_renames.items():
+        if old_name in final_df.columns:
+            rename_dict[old_name] = new_name
     
     final_df.rename(columns=rename_dict, inplace=True)
 
