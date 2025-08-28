@@ -29,10 +29,10 @@ SHAREPOINT_CONFIG = {
     'base_url': 'masangroup.sharepoint.com'
 }
 
-# SharePoint File IDs (extracted from URLs)
+# SharePoint File IDs (updated with new KNKH source)
 SHAREPOINT_FILE_IDS = {
     'sample_id': '8220CAEA-0CD9-585B-D483-DE0A82A98564',  # Sample ID.xlsx
-    'knkh_data': '69AE13C5-76D7-4061-90E2-CE48F965C33A',  # BÁO CÁO KNKH 2025.xlsx (NEW)
+    'knkh_data': '9939814E-64FC-433F-A856-AC08047851B4',  # BÁO CÁO KNKH.xlsx (NEW SOURCE)
     'data_knkh_output': '3E86CA4D-3F41-5C10-666B-5A51F8D9C911'  # Data KNKH.xlsx output
 }
 
@@ -1089,7 +1089,7 @@ def find_qa_and_leader(row, aql_data, leader_mapping=None):
 
 def main():
     print("="*80)
-    print("🔄 FULL SHAREPOINT INTEGRATION - UPDATED VERSION")
+    print("🔄 FULL SHAREPOINT INTEGRATION - UPDATED WITH MMB FILTER")
     print("="*80)
 
     # Initialize SharePoint processor
@@ -1104,7 +1104,7 @@ def main():
     # ========================================================================
     # DATA SOURCES:
     # 1. AQL Data - FROM SHAREPOINT (Sample ID.xlsx)
-    # 2. KNKH Data - FROM SHAREPOINT (BÁO CÁO KNKH 2025.xlsx) ⭐ UPDATED
+    # 2. KNKH Data - FROM SHAREPOINT (BÁO CÁO KNKH.xlsx) ⭐ UPDATED SOURCE
     # 3. Output - TO SHAREPOINT (Data KNKH.xlsx)
     # ========================================================================
 
@@ -1135,22 +1135,31 @@ def main():
         print(f"❌ Error loading AQL data from SharePoint: {str(e)}")
         sys.exit(1)
 
-    # 2. Get KNKH data from SharePoint ⭐ UPDATED FROM GOOGLE SHEETS
-    print("📋 Loading KNKH data from SharePoint...")
+    # 2. Get KNKH data from SharePoint ⭐ NEW SOURCE
+    print("📋 Loading KNKH data from NEW SharePoint source...")
     try:
         knkh_sheets_data = sp_processor.download_excel_file_by_id(
             SHAREPOINT_FILE_IDS['knkh_data'], 
-            "BÁO CÁO KNKH 2025.xlsx (KNKH Data)"
+            "BÁO CÁO KNKH.xlsx (NEW KNKH Data Source)"
         )
 
         if not knkh_sheets_data:
             print("❌ Failed to download KNKH data from SharePoint")
             sys.exit(1)
 
-        # Extract MMB sheet (this contains the KNKH data)
-        knkh_df = knkh_sheets_data.get('MMB', pd.DataFrame())
-        if knkh_df.empty:
-            print("❌ MMB sheet not found or empty in KNKH data")
+        # Try different possible sheet names
+        possible_sheet_names = ['MMB', 'Sheet1', 'BÁO CÁO KNKH', 'Data', list(knkh_sheets_data.keys())[0] if knkh_sheets_data else None]
+        knkh_df = None
+        
+        for sheet_name in possible_sheet_names:
+            if sheet_name and sheet_name in knkh_sheets_data:
+                knkh_df = knkh_sheets_data[sheet_name]
+                if not knkh_df.empty:
+                    print(f"✅ Using sheet '{sheet_name}' for KNKH data")
+                    break
+
+        if knkh_df is None or knkh_df.empty:
+            print("❌ No valid KNKH data found in any sheet")
             print(f"Available sheets: {list(knkh_sheets_data.keys())}")
             sys.exit(1)
 
@@ -1160,6 +1169,48 @@ def main():
     except Exception as e:
         print(f"❌ Error loading KNKH data from SharePoint: {str(e)}")
         sys.exit(1)
+
+    # ========================================================================
+    # NEW: ADD MMB FILTER CONDITION ⭐
+    # ========================================================================
+
+    print("\n🏭 Applying MMB factory filter...")
+    
+    # Check if 'Nhà máy sản xuất' column exists
+    factory_column = None
+    for col in knkh_df.columns:
+        if 'nhà máy sản xuất' in col.lower() or 'nha may san xuat' in col.lower():
+            factory_column = col
+            break
+    
+    if factory_column:
+        print(f"✅ Found factory column: '{factory_column}'")
+        
+        # Show unique values in factory column for debugging
+        unique_factories = knkh_df[factory_column].value_counts()
+        print(f"Factory distribution before filtering:")
+        for factory, count in unique_factories.items():
+            print(f"  '{factory}': {count} records")
+        
+        # Filter for MMB only
+        original_count = len(knkh_df)
+        knkh_df = knkh_df[knkh_df[factory_column] == 'MMB']
+        filtered_count = len(knkh_df)
+        
+        print(f"✅ Factory filter applied:")
+        print(f"  Original records: {original_count}")
+        print(f"  MMB records: {filtered_count}")
+        print(f"  Filtered out: {original_count - filtered_count}")
+        
+        if filtered_count == 0:
+            print("❌ No records found for MMB factory. Please check the data.")
+            print("Available factory values:", unique_factories.index.tolist())
+            sys.exit(1)
+            
+    else:
+        print("⚠️ Factory column 'Nhà máy sản xuất' not found in data")
+        print("Available columns:", list(knkh_df.columns))
+        print("Proceeding without factory filter...")
 
     # ========================================================================
     # DATA PROCESSING (same as original logic)
@@ -1299,8 +1350,19 @@ def main():
 
     # Filter to only include rows where "Bộ phận chịu trách nhiệm" is "Nhà máy"
     print(f"Total rows before filtering by 'Bộ phận chịu trách nhiệm': {len(knkh_df)}")
-    knkh_df = knkh_df[knkh_df['Bộ phận chịu trách nhiệm'] == 'Nhà máy']
-    print(f"Rows after filtering for 'Bộ phận chịu trách nhiệm' = 'Nhà máy': {len(knkh_df)}")
+    
+    responsible_dept_column = None
+    for col in knkh_df.columns:
+        if 'bộ phận chịu trách nhiệm' in col.lower() or 'bo phan chiu trach nhiem' in col.lower():
+            responsible_dept_column = col
+            break
+    
+    if responsible_dept_column:
+        knkh_df = knkh_df[knkh_df[responsible_dept_column] == 'Nhà máy']
+        print(f"Rows after filtering for '{responsible_dept_column}' = 'Nhà máy': {len(knkh_df)}")
+    else:
+        print("⚠️ 'Bộ phận chịu trách nhiệm' column not found, skipping this filter")
+        print("Available columns:", list(knkh_df.columns))
 
     # Create the final output dataframe
     filtered_knkh_df = knkh_df.copy()
@@ -1315,11 +1377,11 @@ def main():
         'SL pack/ cây lỗi', 'Tên lỗi', 'Line_extracted', 'Máy_extracted', 'Giờ_extracted',
         'QA_matched', 'Tên Trưởng ca_matched', 'Shift', 
         'Tháng sản xuất', 'Năm sản xuất', 'Tuần nhận khiếu nại', 'Tháng nhận khiếu nại', 'Năm nhận khiếu nại',
-        'Bộ phận chịu trách nhiệm', 'SDT người KN', 'debug_info'
+        responsible_dept_column if responsible_dept_column else 'Bộ phận chịu trách nhiệm', 'SDT người KN', 'debug_info'
     ]].copy()
 
     # Rename columns for clarity
-    final_df.rename(columns={
+    rename_dict = {
         'Line_extracted': 'Line',
         'Máy_extracted': 'Máy',
         'Giờ_extracted': 'Giờ',
@@ -1327,13 +1389,20 @@ def main():
         'Tên Trưởng ca_matched': 'Tên Trưởng ca',
         'Ngày tiếp nhận_formatted': 'Ngày tiếp nhận',
         'Ngày SX_formatted': 'Ngày SX'
-    }, inplace=True)
+    }
+    
+    # Add responsible department column rename if found
+    if responsible_dept_column and responsible_dept_column != 'Bộ phận chịu trách nhiệm':
+        rename_dict[responsible_dept_column] = 'Bộ phận chịu trách nhiệm'
+    
+    final_df.rename(columns=rename_dict, inplace=True)
 
     # Sort by Mã ticket from largest to smallest
     final_df = final_df.sort_values(by='Mã ticket', ascending=False)
 
     print(f"\n📊 Final dataset prepared: {len(final_df)} records")
     print(f"📱 Phone numbers extracted: {final_df['SDT người KN'].notna().sum()} records")
+    print(f"🏭 All records are from MMB factory")
 
     # ========================================================================
     # OUTPUT TO SHAREPOINT
@@ -1354,12 +1423,13 @@ def main():
             print(f"  - Records with QA matched: {final_df['QA'].notna().sum()}")
             print(f"  - Records with Leader matched: {final_df['Tên Trưởng ca'].notna().sum()}")
             print(f"  - Records with Phone numbers extracted: {final_df['SDT người KN'].notna().sum()}")
+            print(f"  - All records are from MMB factory")
         else:
             print("❌ Failed to upload data to SharePoint")
             
             # Fallback: save locally
             print("💾 Saving data locally as backup...")
-            local_filename = "Data_KNKH_full_sharepoint_backup.xlsx"
+            local_filename = "Data_KNKH_full_sharepoint_mmb_backup.xlsx"
             with pd.ExcelWriter(local_filename, engine='openpyxl') as writer:
                 final_df.to_excel(writer, sheet_name='Data_KNKH', index=False)
                 
@@ -1377,6 +1447,8 @@ def main():
 
     print("\n" + "="*80)
     print("✅ FULL SHAREPOINT INTEGRATION COMPLETED SUCCESSFULLY!")
+    print("✅ NEW KNKH DATA SOURCE INTEGRATED!")
+    print("✅ MMB FACTORY FILTER APPLIED!")
     print("✅ PHONE NUMBER EXTRACTION FEATURE INCLUDED!")
     print("✅ ALL DATA SOURCES NOW USE SHAREPOINT!")
     print("="*80)
