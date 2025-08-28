@@ -1186,6 +1186,9 @@ def main():
 
         print(f"✅ KNKH data loaded: {len(knkh_df)} records")
         print(f"KNKH columns: {list(knkh_df.columns)}")
+        
+        # Make a copy to avoid SettingWithCopyWarning
+        knkh_df = knkh_df.copy()
 
     except Exception as e:
         print(f"❌ Error loading KNKH data from SharePoint: {str(e)}")
@@ -1506,6 +1509,10 @@ def main():
     
     final_df.rename(columns=rename_dict, inplace=True)
 
+    # Convert 'Mã ticket' to numeric before sorting to avoid type comparison errors
+    if 'Mã ticket' in final_df.columns:
+        final_df['Mã ticket'] = pd.to_numeric(final_df['Mã ticket'], errors='coerce')
+    
     # Sort by Mã ticket from largest to smallest
     final_df = final_df.sort_values(by='Mã ticket', ascending=False)
 
