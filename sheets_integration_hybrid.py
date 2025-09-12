@@ -1,5 +1,5 @@
-# COMPLETE FIXED VERSION - SharePoint + OneDrive Integration
-# Fixed all import issues and added proper error handling
+# FIXED VERSION - Handle Shared OneDrive Files
+# Fixed the issue with accessing shared OneDrive files
 
 import pandas as pd
 import re
@@ -45,7 +45,7 @@ SHAREPOINT_CONFIG = {
     'scopes': ['https://graph.microsoft.com/Files.ReadWrite.All', 'https://graph.microsoft.com/Sites.ReadWrite.All'],
     'site_name': 'MCH.MMB.QA',
     'base_url': 'masangroup.sharepoint.com',
-    'onedrive_user_email': 'hanpt@mml.masangroup.com',
+    'onedrive_user_email': 'hanpt@mml.masangroup.com',  # Owner of the shared file
     'onedrive_base_url': 'masangroup-my.sharepoint.com'
 }
 
@@ -308,13 +308,15 @@ class SharePointProcessor:
             return None
 
     def download_excel_file_by_id(self, file_id, description="", source_type="sharepoint"):
-        """Download Excel file from SharePoint or OneDrive by file ID"""
+        """Download Excel file from SharePoint or OneDrive by file ID with improved shared file handling"""
         try:
             self.log(f"📥 Downloading {description} from {source_type.upper()}...")
 
             if source_type == "onedrive":
-                url = f"{self.base_url}/me/drive/items/{file_id}"
-                self.log(f"Using OneDrive endpoint: /me/drive/items/{file_id}")
+                # Try multiple approaches for OneDrive files
+                file_info, download_url = self._get_onedrive_file_info(file_id, description)
+                if not file_info or not download_url:
+                    return None
             else:
                 site_id = self.get_site_id()
                 if not site_id:
@@ -323,58 +325,173 @@ class SharePointProcessor:
                 url = f"{self.base_url}/sites/{site_id}/drive/items/{file_id}"
                 self.log(f"Using SharePoint endpoint: /sites/{site_id}/drive/items/{file_id}")
 
-            response = requests.get(url, headers=self.get_headers(), timeout=30)
+                response = requests.get(url, headers=self.get_headers(), timeout=30)
 
-            if response.status_code == 200:
-                file_info = response.json()
-                download_url = file_info.get('@microsoft.graph.downloadUrl')
-                file_name = file_info.get('name', 'Unknown')
-                
-                self.log(f"✅ Found file: {file_name}")
-
-                if download_url:
-                    self.log(f"✅ Got download URL, downloading content...")
-                    file_response = requests.get(download_url, timeout=60)
-
-                    if file_response.status_code == 200:
-                        excel_data = io.BytesIO(file_response.content)
-                        self.log(f"✅ Downloaded {len(file_response.content)} bytes")
-                        
-                        try:
-                            excel_file = pd.ExcelFile(excel_data)
-                            sheets_data = {}
-                            
-                            self.log(f"Excel sheets found: {excel_file.sheet_names}")
-                            
-                            for sheet_name in excel_file.sheet_names:
-                                excel_data.seek(0)
-                                df = pd.read_excel(excel_data, sheet_name=sheet_name)
-                                sheets_data[sheet_name] = df
-                                self.log(f"✅ Sheet '{sheet_name}': {len(df)} rows, {len(df.columns)} columns")
-                            
-                            self.log(f"✅ Successfully downloaded {description}")
-                            return sheets_data
-                            
-                        except Exception as e:
-                            self.log(f"❌ Error reading Excel file: {str(e)}")
-                            return None
-                    else:
-                        self.log(f"❌ Error downloading file content: {file_response.status_code}")
+                if response.status_code == 200:
+                    file_info = response.json()
+                    download_url = file_info.get('@microsoft.graph.downloadUrl')
+                    if not download_url:
+                        self.log(f"❌ No download URL found for {description}")
+                        return None
                 else:
-                    self.log(f"❌ No download URL found for {description}")
+                    self.log(f"❌ Error getting file info: {response.status_code}")
+                    return None
+
+            # Download the file content
+            file_name = file_info.get('name', 'Unknown')
+            self.log(f"✅ Found file: {file_name}")
+            self.log(f"✅ Got download URL, downloading content...")
+            
+            file_response = requests.get(download_url, timeout=60)
+
+            if file_response.status_code == 200:
+                excel_data = io.BytesIO(file_response.content)
+                self.log(f"✅ Downloaded {len(file_response.content)} bytes")
+                
+                try:
+                    excel_file = pd.ExcelFile(excel_data)
+                    sheets_data = {}
+                    
+                    self.log(f"Excel sheets found: {excel_file.sheet_names}")
+                    
+                    for sheet_name in excel_file.sheet_names:
+                        excel_data.seek(0)
+                        df = pd.read_excel(excel_data, sheet_name=sheet_name)
+                        sheets_data[sheet_name] = df
+                        self.log(f"✅ Sheet '{sheet_name}': {len(df)} rows, {len(df.columns)} columns")
+                    
+                    self.log(f"✅ Successfully downloaded {description}")
+                    return sheets_data
+                    
+                except Exception as e:
+                    self.log(f"❌ Error reading Excel file: {str(e)}")
+                    return None
             else:
-                self.log(f"❌ Error getting file info: {response.status_code}")
-                if response.status_code == 404:
-                    if source_type == "onedrive":
-                        self.log("💡 Tip: Make sure the file is in the authenticated user's OneDrive")
-                    else:
-                        self.log("💡 Tip: Check if the file ID is correct and accessible")
-                self.log(f"Response: {response.text[:500] if response.text else 'Empty response'}")
+                self.log(f"❌ Error downloading file content: {file_response.status_code}")
 
         except Exception as e:
             self.log(f"❌ Error downloading {description}: {str(e)}")
 
         return None
+
+    def _get_onedrive_file_info(self, file_id, description):
+        """Try multiple approaches to access OneDrive file (personal, shared, owner's drive)"""
+        
+        # Approach 1: Try personal drive first
+        self.log(f"🔍 Approach 1: Trying personal drive access...")
+        url = f"{self.base_url}/me/drive/items/{file_id}"
+        response = requests.get(url, headers=self.get_headers(), timeout=30)
+        
+        if response.status_code == 200:
+            file_info = response.json()
+            download_url = file_info.get('@microsoft.graph.downloadUrl')
+            if download_url:
+                self.log(f"✅ Found in personal drive")
+                return file_info, download_url
+        else:
+            self.log(f"❌ Personal drive access failed: {response.status_code}")
+        
+        # Approach 2: Try shared files
+        self.log(f"🔍 Approach 2: Searching in shared files...")
+        try:
+            shared_url = f"{self.base_url}/me/drive/sharedWithMe"
+            shared_response = requests.get(shared_url, headers=self.get_headers(), timeout=30)
+            
+            if shared_response.status_code == 200:
+                shared_data = shared_response.json()
+                shared_items = shared_data.get('value', [])
+                self.log(f"Found {len(shared_items)} shared items")
+                
+                # Look for our file in shared items
+                for item in shared_items:
+                    if item.get('id') == file_id or file_id in str(item.get('id', '')):
+                        download_url = item.get('@microsoft.graph.downloadUrl')
+                        if download_url:
+                            self.log(f"✅ Found in shared files: {item.get('name')}")
+                            return item, download_url
+                
+                # Also search by name if we know it
+                target_names = ['BÁO CÁO KNKH.xlsx', 'BÁO CÁO KNKH', 'KNKH']
+                for item in shared_items:
+                    item_name = item.get('name', '').upper()
+                    if any(target in item_name for target in target_names):
+                        # Try to get download URL for this item
+                        item_id = item.get('id')
+                        if item_id:
+                            item_url = f"{self.base_url}/me/drive/items/{item_id}"
+                            item_response = requests.get(item_url, headers=self.get_headers(), timeout=30)
+                            if item_response.status_code == 200:
+                                item_info = item_response.json()
+                                download_url = item_info.get('@microsoft.graph.downloadUrl')
+                                if download_url:
+                                    self.log(f"✅ Found by name in shared files: {item_name}")
+                                    return item_info, download_url
+                
+            else:
+                self.log(f"❌ Shared files access failed: {shared_response.status_code}")
+        except Exception as e:
+            self.log(f"❌ Error accessing shared files: {str(e)}")
+        
+        # Approach 3: Try owner's drive (if configured)
+        if SHAREPOINT_CONFIG.get('onedrive_user_email'):
+            self.log(f"🔍 Approach 3: Trying owner's drive ({SHAREPOINT_CONFIG['onedrive_user_email']})...")
+            try:
+                owner_email = SHAREPOINT_CONFIG['onedrive_user_email']
+                owner_url = f"{self.base_url}/users/{owner_email}/drive/items/{file_id}"
+                owner_response = requests.get(owner_url, headers=self.get_headers(), timeout=30)
+                
+                if owner_response.status_code == 200:
+                    file_info = owner_response.json()
+                    download_url = file_info.get('@microsoft.graph.downloadUrl')
+                    if download_url:
+                        self.log(f"✅ Found in owner's drive")
+                        return file_info, download_url
+                else:
+                    self.log(f"❌ Owner's drive access failed: {owner_response.status_code}")
+                    
+            except Exception as e:
+                self.log(f"❌ Error accessing owner's drive: {str(e)}")
+        
+        # Approach 4: Search by Graph API search
+        self.log(f"🔍 Approach 4: Trying Graph search...")
+        try:
+            search_query = "BÁO CÁO KNKH.xlsx"
+            search_url = f"{self.base_url}/me/drive/search(q='{search_query}')"
+            search_response = requests.get(search_url, headers=self.get_headers(), timeout=30)
+            
+            if search_response.status_code == 200:
+                search_data = search_response.json()
+                search_items = search_data.get('value', [])
+                self.log(f"Search found {len(search_items)} items")
+                
+                for item in search_items:
+                    if 'KNKH' in item.get('name', '').upper():
+                        download_url = item.get('@microsoft.graph.downloadUrl')
+                        if download_url:
+                            self.log(f"✅ Found via search: {item.get('name')}")
+                            return item, download_url
+                        else:
+                            # Try to get download URL
+                            item_id = item.get('id')
+                            if item_id:
+                                item_url = f"{self.base_url}/me/drive/items/{item_id}"
+                                item_response = requests.get(item_url, headers=self.get_headers(), timeout=30)
+                                if item_response.status_code == 200:
+                                    item_info = item_response.json()
+                                    download_url = item_info.get('@microsoft.graph.downloadUrl')
+                                    if download_url:
+                                        self.log(f"✅ Found via search with item lookup: {item.get('name')}")
+                                        return item_info, download_url
+            else:
+                self.log(f"❌ Search failed: {search_response.status_code}")
+                
+        except Exception as e:
+            self.log(f"❌ Error in Graph search: {str(e)}")
+        
+        self.log(f"❌ All OneDrive access approaches failed for {description}")
+        self.log(f"💡 Make sure the file is accessible and the correct permissions are granted")
+        
+        return None, None
 
     def upload_excel_to_sharepoint(self, df, file_id, sheet_name="Sheet1"):
         """Upload processed data to SharePoint Excel file"""
@@ -416,7 +533,7 @@ class SharePointProcessor:
             return False
 
 # ========================================================================
-# DATA PROCESSING FUNCTIONS
+# DATA PROCESSING FUNCTIONS (unchanged)
 # ========================================================================
 
 def extract_phone_number(text):
@@ -1038,7 +1155,7 @@ def main():
         print(f"❌ Error loading AQL data from SharePoint: {str(e)}")
         sys.exit(1)
 
-    # 2. Get KNKH data from OneDrive Personal
+    # 2. Get KNKH data from OneDrive Personal (with improved shared file handling)
     print("📋 Loading KNKH data from OneDrive Personal...")
     try:
         knkh_sheets_data = sp_processor.download_excel_file_by_id(
@@ -1090,6 +1207,9 @@ def main():
         print(f"❌ Error loading KNKH data from OneDrive: {str(e)}")
         sys.exit(1)
 
+    # Rest of the processing remains the same...
+    # (Continue with the same data processing logic as before)
+    
     # 3. Apply MMB factory filter
     print("\n🏭 Applying MMB factory filter...")
     
@@ -1139,6 +1259,9 @@ def main():
             print(f"  Column {chr(65+i)} (index {i}): '{col}'")
         print("Proceeding without factory filter...")
 
+    # Continue with the rest of the data processing (dates, phone numbers, etc.)
+    # ... (rest of the main function remains the same)
+    
     # 4. Data processing
     print("\n🔄 Processing data...")
 
@@ -1401,7 +1524,7 @@ def main():
 
     print("\n" + "="*80)
     print("✅ SHAREPOINT + ONEDRIVE INTEGRATION COMPLETED SUCCESSFULLY!")
-    print("✅ KNKH DATA SOURCE: OneDrive Personal")
+    print("✅ KNKH DATA SOURCE: OneDrive Personal (Shared File)")
     print("✅ AQL DATA SOURCE: SharePoint Site") 
     print("✅ OUTPUT: SharePoint Site")
     print("✅ MMB FACTORY FILTER APPLIED!")
