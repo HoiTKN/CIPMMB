@@ -32,7 +32,7 @@ SHAREPOINT_CONFIG = {
 # SharePoint File IDs (updated with new KNKH source)
 SHAREPOINT_FILE_IDS = {
     'sample_id': '8220CAEA-0CD9-585B-D483-DE0A82A98564',  # Sample ID.xlsx
-    'knkh_data': '9939814E-64FC-433F-A856-AC08047851B4',  # BÁO CÁO KNKH.xlsx (NEW SOURCE)
+    'knkh_data': '7B69AE13C5-76D7-4061-90E2-CE48F965C33A',  # BÁO CÁO KNKH.xlsx (NEW SOURCE)
     'data_knkh_output': '3E86CA4D-3F41-5C10-666B-5A51F8D9C911'  # Data KNKH.xlsx output
 }
 
