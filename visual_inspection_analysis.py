@@ -522,51 +522,23 @@ def process_visual_inspection_data(visual_df):
     return pd.DataFrame(processed_data)
 
 def find_production_files_by_month(sp_processor, target_months):
-    """Find FS production files for specific months using search approach instead of path
-    
-    Search for '2025' folder first, then navigate to month folders
-    """
+    """Find FS production files for specific months using direct path"""
     production_files = {}
     
     try:
-        sp_processor.log(f"🔍 Searching for 2025 production folder...")
-        
-        # Search for 2025 folder using Graph API search
         user_email = SHAREPOINT_CONFIG.get('onedrive_user_email')
-        search_url = f"{sp_processor.base_url}/users/{user_email}/drive/search(q='2025')"
+        main_folder_path = SHAREPOINT_CONFIG['production_folder_path']
+        sp_processor.log(f"🔍 Getting 2025 folder by path: {main_folder_path}")
         
-        response = requests.get(search_url, headers=sp_processor.get_headers(), timeout=30)
-        
-        main_folder_id = None
-        if response.status_code == 200:
-            search_results = response.json().get('value', [])
-            sp_processor.log(f"Found {len(search_results)} items matching '2025'")
-            
-            # Look for the main 2025 folder in the production path
-            for item in search_results:
-                if (item.get('folder') and 
-                    item.get('name') == '2025' and 
-                    'BÁO CÁO THÁNG' in str(item.get('parentReference', {}).get('path', ''))):
-                    
-                    main_folder_id = item.get('id')
-                    sp_processor.log(f"✅ Found main 2025 folder: {item.get('id')}")
-                    sp_processor.log(f"   Path: {item.get('parentReference', {}).get('path', '')}")
-                    break
-            
-            # Fallback: just take the first folder named '2025'
-            if not main_folder_id:
-                for item in search_results:
-                    if item.get('folder') and item.get('name') == '2025':
-                        main_folder_id = item.get('id')
-                        sp_processor.log(f"✅ Using fallback 2025 folder: {item.get('id')}")
-                        break
-        else:
-            sp_processor.log(f"❌ Search failed: {response.status_code}")
+        main_folder_id = sp_processor.get_folder_id_by_path(
+            main_folder_path,
+            user_email=user_email
+        )
         
         if not main_folder_id:
-            sp_processor.log("❌ Could not find 2025 folder")
+            sp_processor.log("❌ Could not find 2025 folder by path")
             return production_files
-            
+        
         # List main folder contents to find month folders
         sp_processor.log(f"📂 Listing contents of 2025 folder...")
         main_contents = sp_processor.list_folder_contents(main_folder_id, "onedrive")
@@ -574,23 +546,26 @@ def find_production_files_by_month(sp_processor, target_months):
         month_folders = {}
         for item in main_contents:
             if item.get('folder') and item.get('name'):
-                folder_name = item.get('name', '').lower()
-                sp_processor.log(f"   Found folder: '{item.get('name')}'")
+                folder_name = item.get('name')
+                sp_processor.log(f"   Found folder: '{folder_name}'")
                 
-                # Match month folders with ALL possible patterns from your structure
+                # Match month folders with patterns
                 for month in target_months:
                     month_patterns = [
-                        f"tháng {month}.2025",      # tháng 3.2025
-                        f"thang {month}.2025",      # thang 1.2025
-                        f"tháng {month:02d}.2025",  # tháng 01.2025  
-                        f"thang {month:02d}.2025"   # thang 01.2025
+                        f"tháng {month}.2025",
+                        f"thang {month}.2025",
+                        f"tháng {month:02d}.2025",
+                        f"thang {month:02d}.2025",
+                        f"T{month:02d}.2025",
+                        f"t{month:02d}.2025",
+                        f"Tháng {month:02d}.2025",
+                        f"THÁNG {month:02d}.2025"
                     ]
                     
-                    # Check if any pattern matches (case insensitive)
                     for pattern in month_patterns:
                         if pattern.lower() in folder_name.lower():
                             month_folders[month] = item.get('id')
-                            sp_processor.log(f"✅ Matched month {month} folder: '{item.get('name')}'")
+                            sp_processor.log(f"✅ Matched month {month} folder: '{folder_name}'")
                             break
                     if month in month_folders:
                         break
@@ -609,12 +584,12 @@ def find_production_files_by_month(sp_processor, target_months):
                 item_name = item.get('name', '')
                 sp_processor.log(f"   Checking file: '{item_name}'")
                 
-                # Look for BC FS files with patterns matching your structure
+                # Look for BC FS files with patterns
                 fs_patterns = [
-                    f'BC FS T{month:02d}',  # BC FS T01, BC FS T02, etc.
+                    f'BC FS T{month:02d}',
                     f'BC_FS_T{month:02d}',
                     f'FS T{month:02d}',
-                    'BC FS'  # Generic fallback
+                    'BC FS'
                 ]
                 
                 item_name_upper = item_name.upper()
