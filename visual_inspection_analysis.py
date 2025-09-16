@@ -619,7 +619,8 @@ def find_production_files_by_month(sp_processor, target_months):
                 
                 item_name_upper = item_name.upper()
                 for pattern in fs_patterns:
-                    if pattern.upper() in item_name_upper and item_name.endswith('.xlsx'):
+                    if (pattern.upper() in item_name_upper and 
+                        (item_name.endswith('.xlsx') or item_name.endswith('.xlsb'))):
                         production_files[month] = item.get('id')
                         sp_processor.log(f"✅ Found BC FS file for month {month}: '{item_name}'")
                         break
@@ -833,6 +834,8 @@ def main():
 
     # 3. Determine which months we need production data for
     unique_months = visual_processed['Date'].dt.month.unique()
+    # Convert numpy int32 to regular Python int to avoid comparison issues
+    unique_months = [int(month) for month in unique_months]
     print(f"📅 Need production data for months: {sorted(unique_months)}")
 
     # 4. Find and download production files
