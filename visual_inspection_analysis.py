@@ -1,6 +1,5 @@
-# Enhanced Visual Inspection + Production Data Analysis
-# OPTION 3: Separated Production & Defect Tables for BI Analysis
-# VERSION: 3.0 - BI Optimized
+# BI-Optimized Production & Defect Analysis - Clean Version
+# Minimal logging, separated tables, 2025 data only
 
 import pandas as pd
 import re
@@ -19,17 +18,14 @@ import urllib.parse
 try:
     import msal
     MSAL_AVAILABLE = True
-    print("✅ MSAL library loaded successfully")
 except ImportError:
     MSAL_AVAILABLE = False
-    print("⚠️ MSAL library not available - using alternative authentication method")
 
 try:
     from nacl import encoding, public
     NACL_AVAILABLE = True
 except ImportError:
     NACL_AVAILABLE = False
-    print("⚠️ PyNaCl not available - GitHub Secrets update will be disabled")
 
 # SharePoint Configuration
 SHAREPOINT_CONFIG = {
@@ -44,11 +40,11 @@ SHAREPOINT_CONFIG = {
     'production_folder_path': '/Documents/HUYNH THI KIM CUC/ERP MMB/BÁO CÁO THÁNG/2025'
 }
 
-# SharePoint File IDs - UPDATED with September file
+# SharePoint File IDs
 SHAREPOINT_FILE_IDS = {
-    'visual_inspection': '77FDDE39-0853-46EC-8BFB-0546460A3266',  # Visual Inspection_16092025.xlsx
-    'fs_data_output': 'CDEBFC69-10BD-42F0-B777-3633405B072B',    # FS data.xlsx output
-    'september_production': '2E609D5D-6F45-4B7D-AB1C-C3B6FC3E2014'  # BC FS T09-2025.xlsb
+    'visual_inspection': '77FDDE39-0853-46EC-8BFB-0546460A3266',
+    'fs_data_output': 'CDEBFC69-10BD-42F0-B777-3633405B072B',
+    'september_production': '2E609D5D-6F45-4B7D-AB1C-C3B6FC3E2014'
 }
 
 class GitHubSecretsUpdater:
@@ -88,7 +84,6 @@ class GitHubSecretsUpdater:
         """Update a GitHub secret"""
         try:
             if not NACL_AVAILABLE:
-                print(f"⚠️ Cannot update {secret_name} - PyNaCl not available")
                 return False
                 
             key_data = self.get_public_key()
@@ -105,15 +100,9 @@ class GitHubSecretsUpdater:
             }
             
             response = requests.put(url, headers=headers, json=data, timeout=30)
-            if response.status_code in [201, 204]:
-                print(f"✅ Successfully updated {secret_name}")
-                return True
-            else:
-                print(f"❌ Failed to update {secret_name}: {response.status_code} - {response.text}")
-                return False
+            return response.status_code in [201, 204]
                 
         except Exception as e:
-            print(f"❌ Error updating secret {secret_name}: {str(e)}")
             return False
 
 class SharePointProcessor:
@@ -132,65 +121,44 @@ class SharePointProcessor:
                     SHAREPOINT_CONFIG['client_id'],
                     authority=SHAREPOINT_CONFIG['authority']
                 )
-                self.log("✅ MSAL app initialized successfully")
             except Exception as e:
-                self.log(f"⚠️ MSAL initialization warning: {str(e)}")
                 self.msal_app = None
-        else:
-            self.log("⚠️ MSAL not available - will use basic token authentication")
         
         if not self.authenticate():
             raise Exception("SharePoint authentication failed during initialization")
 
     def log(self, message):
-        """Log with timestamp"""
-        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        print(f"[{timestamp}] {message}")
-        try:
-            sys.stdout.flush()
-        except:
-            pass
+        """Log with timestamp - minimal"""
+        print(f"{message}")
 
     def authenticate(self):
         """Authenticate using delegation flow with pre-generated tokens"""
         try:
-            self.log("🔐 Authenticating with SharePoint/OneDrive...")
+            self.log("🔐 Authenticating...")
             access_token = os.environ.get('SHAREPOINT_ACCESS_TOKEN')
             refresh_token = os.environ.get('SHAREPOINT_REFRESH_TOKEN')
 
             if not access_token and not refresh_token:
-                self.log("❌ No SharePoint tokens found in environment variables")
                 return False
 
             self.access_token = access_token
             self.refresh_token = refresh_token
             
             if access_token:
-                self.log(f"✅ Found access token: {access_token[:30] if access_token else 'None'}...")
-                
                 if self.test_token_validity():
-                    self.log("✅ SharePoint/OneDrive access token is valid")
+                    self.log("✅ Authentication successful")
                     return True
-                else:
-                    self.log("⚠️ SharePoint/OneDrive access token expired, attempting refresh...")
                     
             if refresh_token and self.msal_app:
                 if self.refresh_access_token():
-                    self.log("✅ SharePoint/OneDrive token refreshed successfully")
                     self.update_github_secrets()
                     return True
                 else:
-                    self.log("❌ SharePoint/OneDrive token refresh failed")
                     return False
             else:
-                if not refresh_token:
-                    self.log("❌ No SharePoint/OneDrive refresh token available")
-                if not self.msal_app:
-                    self.log("❌ MSAL not available for token refresh")
                 return False
 
         except Exception as e:
-            self.log(f"❌ SharePoint/OneDrive authentication error: {str(e)}")
             return False
 
     def test_token_validity(self):
@@ -198,17 +166,8 @@ class SharePointProcessor:
         try:
             headers = self.get_headers()
             response = requests.get(f"{self.base_url}/me", headers=headers, timeout=30)
-            if response.status_code == 200:
-                user_info = response.json()
-                self.log(f"✅ Authenticated to Microsoft Graph as: {user_info.get('displayName', 'Unknown')}")
-                return True
-            elif response.status_code == 401:
-                return False
-            else:
-                self.log(f"Warning: Unexpected response code: {response.status_code} - {response.text}")
-                return False
+            return response.status_code == 200
         except Exception as e:
-            self.log(f"Error testing token validity: {str(e)}")
             return False
 
     def refresh_access_token(self):
@@ -216,7 +175,6 @@ class SharePointProcessor:
         try:
             if not self.refresh_token or not self.msal_app:
                 return False
-            self.log("🔄 Attempting to refresh token using MSAL...")
             result = self.msal_app.acquire_token_by_refresh_token(
                 self.refresh_token,
                 scopes=SHAREPOINT_CONFIG['scopes']
@@ -225,15 +183,10 @@ class SharePointProcessor:
                 self.access_token = result['access_token']
                 if 'refresh_token' in result:
                     self.refresh_token = result['refresh_token']
-                    self.log("✅ Got new refresh token")
-                self.log("✅ Token refreshed successfully")
                 return True
             else:
-                error = result.get('error_description', 'Unknown error') if result else 'No result'
-                self.log(f"❌ Token refresh failed: {error}")
                 return False
         except Exception as e:
-            self.log(f"❌ Error refreshing token: {str(e)}")
             return False
 
     def update_github_secrets(self):
@@ -241,12 +194,10 @@ class SharePointProcessor:
         try:
             github_token = os.environ.get('GITHUB_TOKEN')
             if not github_token:
-                self.log("⚠️ No GITHUB_TOKEN found, skipping secrets update")
                 return False
             
             repo = os.environ.get('GITHUB_REPOSITORY', '')
             if '/' not in repo:
-                self.log("⚠️ Invalid GITHUB_REPOSITORY format, skipping secrets update")
                 return False
             
             repo_owner, repo_name = repo.split('/')
@@ -260,14 +211,9 @@ class SharePointProcessor:
                 if not updater.update_secret('SHAREPOINT_REFRESH_TOKEN', self.refresh_token):
                     success = False
             
-            if success:
-                self.log("✅ Successfully updated GitHub secrets")
-            else:
-                self.log("⚠️ Some GitHub secrets updates failed, continuing execution")
             return success
             
         except Exception as e:
-            self.log(f"⚠️ Error updating GitHub Secrets: {str(e)}, continuing execution")
             return False
 
     def get_headers(self):
@@ -291,14 +237,11 @@ class SharePointProcessor:
             if response.status_code == 200:
                 folder_info = response.json()
                 folder_id = folder_info.get('id')
-                self.log(f"✅ Found folder ID for path '{folder_path}': {folder_id}")
                 return folder_id
             else:
-                self.log(f"❌ Failed to get folder by path '{folder_path}': {response.status_code} - {response.text}")
                 return None
                 
         except Exception as e:
-            self.log(f"❌ Error getting folder by path '{folder_path}': {str(e)}")
             return None
 
     def get_site_id(self):
@@ -311,19 +254,16 @@ class SharePointProcessor:
             if response.status_code == 200:
                 site_data = response.json()
                 self.site_id = site_data['id']
-                self.log(f"✅ Found SharePoint site ID: {self.site_id}")
                 return self.site_id
             else:
-                self.log(f"❌ Error getting SharePoint site ID: {response.status_code} - {response.text}")
                 return None
         except Exception as e:
-            self.log(f"❌ Error getting SharePoint site ID: {str(e)}")
             return None
 
     def download_excel_file_by_id(self, file_id, description="", source_type="sharepoint"):
         """Download Excel file from SharePoint or OneDrive by file ID"""
         try:
-            self.log(f"📥 Downloading {description} from {source_type.upper()}...")
+            self.log(f"📥 Downloading {description}...")
             if source_type == "onedrive":
                 owner_email = SHAREPOINT_CONFIG.get('onedrive_user_email')
                 if owner_email:
@@ -333,7 +273,6 @@ class SharePointProcessor:
             else:
                 site_id = self.get_site_id()
                 if not site_id:
-                    self.log("❌ Cannot get SharePoint site ID")
                     return None
                 url = f"{self.base_url}/sites/{site_id}/drive/items/{file_id}"
             response = requests.get(url, headers=self.get_headers(), timeout=30)
@@ -341,40 +280,29 @@ class SharePointProcessor:
                 file_info = response.json()
                 download_url = file_info.get('@microsoft.graph.downloadUrl')
                 if not download_url:
-                    self.log(f"❌ No download URL found for {description}")
                     return None
-                file_name = file_info.get('name', 'Unknown')
-                self.log(f"✅ Found file: {file_name}")
                 
                 file_response = requests.get(download_url, timeout=60)
                 if file_response.status_code == 200:
                     excel_data = io.BytesIO(file_response.content)
-                    self.log(f"✅ Downloaded {len(file_response.content)} bytes")
                     
                     try:
                         excel_file = pd.ExcelFile(excel_data)
                         sheets_data = {}
-                        self.log(f"Excel sheets found: {excel_file.sheet_names}")
                         
                         for sheet_name in excel_file.sheet_names:
                             excel_data.seek(0)
                             df = pd.read_excel(excel_data, sheet_name=sheet_name)
                             sheets_data[sheet_name] = df
-                            self.log(f"✅ Sheet '{sheet_name}': {len(df)} rows, {len(df.columns)} columns")
                         
-                        self.log(f"✅ Successfully downloaded {description}")
                         return sheets_data
                     except Exception as e:
-                        self.log(f"❌ Error reading Excel file: {str(e)}")
                         return None
                 else:
-                    self.log(f"❌ Error downloading file content: {file_response.status_code} - {file_response.text}")
                     return None
             else:
-                self.log(f"❌ Error getting file info: {response.status_code} - {response.text}")
                 return None
         except Exception as e:
-            self.log(f"❌ Error downloading {description}: {str(e)}")
             return None
 
     def list_folder_contents(self, folder_id, source_type="onedrive"):
@@ -396,30 +324,25 @@ class SharePointProcessor:
                 folder_data = response.json()
                 return folder_data.get('value', [])
             else:
-                self.log(f"❌ Error listing folder contents: {response.status_code} - {response.text}")
                 return []
         except Exception as e:
-            self.log(f"❌ Error listing folder contents: {str(e)}")
             return []
 
     def upload_multi_sheet_excel(self, sheets_dict, file_id):
         """Upload multi-sheet Excel file to SharePoint"""
         try:
-            self.log(f"📤 Uploading multi-sheet Excel to SharePoint...")
+            self.log(f"📤 Uploading to SharePoint...")
             excel_buffer = io.BytesIO()
             
             with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
                 for sheet_name, df in sheets_dict.items():
                     df.to_excel(writer, sheet_name=sheet_name, index=False)
-                    self.log(f"   ✅ Added sheet '{sheet_name}': {len(df)} rows")
             
             excel_buffer.seek(0)
             excel_content = excel_buffer.getvalue()
-            self.log(f"Created Excel file with {len(excel_content)} bytes")
             
             site_id = self.get_site_id()
             if not site_id:
-                self.log("❌ Cannot get SharePoint site ID for upload")
                 return False
                 
             upload_url = f"{self.base_url}/sites/{site_id}/drive/items/{file_id}/content"
@@ -430,14 +353,15 @@ class SharePointProcessor:
             
             response = requests.put(upload_url, headers=headers, data=excel_content, timeout=60)
             if response.status_code in [200, 201]:
-                total_rows = sum(len(df) for df in sheets_dict.values())
-                self.log(f"✅ Successfully uploaded {total_rows} total rows across {len(sheets_dict)} sheets")
+                self.log(f"✅ Upload successful")
                 return True
             else:
-                self.log(f"❌ Error uploading to SharePoint: {response.status_code} - {response.text}")
+                self.log(f"❌ Upload failed: {response.status_code}")
+                if "locked" in response.text.lower():
+                    self.log("⚠️ File is locked - close file in SharePoint/Excel")
                 return False
         except Exception as e:
-            self.log(f"❌ Error uploading to SharePoint: {str(e)}")
+            self.log(f"❌ Upload error: {str(e)}")
             return False
 
 def parse_lot_to_date(lot_code):
@@ -457,8 +381,7 @@ def process_visual_inspection_data_separated(visual_df):
     """Process visual inspection data for separated tables"""
     processed_data = []
     
-    print("Processing visual inspection data for separated analysis...")
-    print(f"Columns available: {list(visual_df.columns)}")
+    print("📋 Processing visual inspection data...")
     
     for _, row in visual_df.iterrows():
         item = row.get('Item', '')
@@ -513,18 +436,7 @@ def process_visual_inspection_data_separated(visual_df):
             })
     
     result_df = pd.DataFrame(processed_data)
-    
-    # Debug info
-    print(f"✅ Processed {len(result_df)} defect records (filtered for 2025 only)")
-    if not result_df.empty:
-        print(f"📊 Date range: {result_df['Date'].min().strftime('%Y-%m-%d')} to {result_df['Date'].max().strftime('%Y-%m-%d')}")
-        print(f"🔍 Unique defect names: {len(result_df['Defect_Name'].unique())}")
-        defect_summary = result_df[result_df['Defect_Name'] != ''].groupby('Defect_Name').agg({
-            'Hold_Qty': 'sum',
-            'Defect_Qty': 'sum'
-        }).sort_values('Hold_Qty', ascending=False)
-        print("Top defects:")
-        print(defect_summary.head())
+    print(f"✅ Processed {len(result_df)} defect records (2025 only)")
     
     return result_df
 
@@ -536,7 +448,7 @@ def find_production_files_enhanced(sp_processor, target_months):
     # Add September file directly using provided ID
     if 9 in target_months:
         production_files[9] = SHAREPOINT_FILE_IDS['september_production']
-        sp_processor.log(f"✅ Using provided September file ID: {SHAREPOINT_FILE_IDS['september_production']}")
+        print(f"✅ Using September file")
     
     # Find other months using existing logic
     other_months = [m for m in target_months if m != 9]
@@ -545,36 +457,29 @@ def find_production_files_enhanced(sp_processor, target_months):
         try:
             # Try direct path first
             main_folder_path = SHAREPOINT_CONFIG['production_folder_path']
-            sp_processor.log(f"🔍 Getting 2025 folder by path: {main_folder_path}")
             main_folder_id = sp_processor.get_folder_id_by_path(main_folder_path, user_email=user_email)
             
             if not main_folder_id:
-                sp_processor.log("⚠️ Direct path failed, attempting search for '2025' folder...")
+                # Search fallback
                 search_url = f"{sp_processor.base_url}/users/{user_email}/drive/search(q='2025')"
                 response = requests.get(search_url, headers=sp_processor.get_headers(), timeout=30)
                 
                 if response.status_code == 200:
                     search_results = response.json().get('value', [])
-                    sp_processor.log(f"Found {len(search_results)} items matching '2025'")
                     for item in search_results:
                         if (item.get('folder') and 
                             item.get('name') == '2025' and 
                             'BÁO CÁO THÁNG' in str(item.get('parentReference', {}).get('path', '')).upper()):
                             main_folder_id = item.get('id')
-                            sp_processor.log(f"✅ Found 2025 folder via search: {main_folder_id}")
                             break
                     if not main_folder_id:
                         for item in search_results:
                             if item.get('folder') and item.get('name') == '2025':
                                 main_folder_id = item.get('id')
-                                sp_processor.log(f"✅ Using fallback 2025 folder: {main_folder_id}")
                                 break
-                else:
-                    sp_processor.log(f"❌ Search failed: {response.status_code} - {response.text}")
             
             if main_folder_id:
                 # List main folder contents
-                sp_processor.log(f"📂 Listing contents of 2025 folder...")
                 main_contents = sp_processor.list_folder_contents(main_folder_id, "onedrive")
                 
                 month_folders = {}
@@ -595,12 +500,10 @@ def find_production_files_enhanced(sp_processor, target_months):
                             for pattern in month_patterns:
                                 if pattern.lower() in folder_name.lower():
                                     month_folders[month] = item.get('id')
-                                    sp_processor.log(f"✅ Matched month {month} folder: '{folder_name}'")
                                     break
                 
                 # Find BC FS files in each month folder
                 for month, folder_id in month_folders.items():
-                    sp_processor.log(f"🔍 Looking for BC FS file in month {month} folder...")
                     folder_contents = sp_processor.list_folder_contents(folder_id, "onedrive")
                     
                     for item in folder_contents:
@@ -618,15 +521,14 @@ def find_production_files_enhanced(sp_processor, target_months):
                             if (pattern.upper() in item_name_upper and 
                                 (item_name.endswith('.xlsx') or item_name.endswith('.xlsb'))):
                                 production_files[month] = item.get('id')
-                                sp_processor.log(f"✅ Found BC FS file for month {month}: '{item_name}'")
                                 break
                         if month in production_files:
                             break
         
         except Exception as e:
-            sp_processor.log(f"❌ Error finding production files: {str(e)}")
+            pass
     
-    sp_processor.log(f"🎯 Final result: Found BC FS files for months: {list(production_files.keys())}")
+    print(f"📊 Found production files for months: {list(production_files.keys())}")
     return production_files
 
 def extract_production_data(production_sheets, month):
@@ -634,25 +536,16 @@ def extract_production_data(production_sheets, month):
     try:
         sheet_name = 'OEE trừ DNP'
         if sheet_name not in production_sheets:
-            print(f"Sheet '{sheet_name}' not found in production file")
-            print(f"Available sheets: {list(production_sheets.keys())}")
             return pd.DataFrame()
         
         df = production_sheets[sheet_name]
         
-        if len(df) < 287:
-            print(f"Production file doesn't have enough rows (has {len(df)}, need at least 287)")
-            return pd.DataFrame()
-        
-        if len(df.columns) < 10:
-            print(f"Production file doesn't have enough columns (has {len(df.columns)}, need at least 10)")
+        if len(df) < 287 or len(df.columns) < 10:
             return pd.DataFrame()
         
         current_year = 2025
         production_data = []
         days_in_month = monthrange(current_year, month)[1]
-        
-        print(f"Extracting production data for {days_in_month} days in month {month}/{current_year}")
         
         # FIXED: Corrected row mapping
         base_row = 254  # Start from row 255 (index 254) for day 1
@@ -680,26 +573,19 @@ def extract_production_data(production_sheets, month):
                     'Day': day,
                     'Row_Index': row_index + 1
                 })
-                
-                # Debug for first few days
-                if day <= 5:
-                    print(f"✅ Day {day:02d} (Excel row {row_index+1}): {production_qty:,.0f}")
         
         result_df = pd.DataFrame(production_data)
-        print(f"✅ Extracted {len(result_df)} days of production data")
-        print(f"📊 Total production for month {month}: {result_df['Production_Qty'].sum():,.0f}")
+        print(f"✅ Month {month}: {result_df['Production_Qty'].sum():,.0f} total units")
         
         return result_df
         
     except Exception as e:
-        print(f"❌ Error extracting production data: {str(e)}")
-        traceback.print_exc()
         return pd.DataFrame()
 
 def create_separated_tables(visual_processed, production_data):
     """Create separated Production and Defect tables for BI analysis"""
     
-    print("\n🔄 Creating separated tables for BI analysis...")
+    print("📊 Creating separated tables...")
     
     # TABLE 1: Production Data (Daily totals only)
     production_daily = production_data.groupby('Date')['Production_Qty'].sum().reset_index()
@@ -713,7 +599,6 @@ def create_separated_tables(visual_processed, production_data):
     })[['Ngày', 'Item', 'Sản lượng']]
     
     production_table = production_table.sort_values('Ngày', ascending=False)
-    print(f"✅ Production table: {len(production_table)} daily records")
     
     # TABLE 2: Defect Data (Only records with actual defects)
     defect_records = []
@@ -755,18 +640,18 @@ def create_separated_tables(visual_processed, production_data):
             'Hold_Qty': 'Số lượng hold',
             'Defect_Qty': 'Số lượng lỗi',
             'Hold_Rate': 'Tỉ lệ hold (%)',
-            'Inspector': 'Người kiểm tra',
-            'Daily_Production': 'Sản lượng ngày'
+            'Inspector': 'Người kiểm tra'
         })[['Ngày', 'Item', 'Tên lỗi', 'Lot', 'Số lượng hold', 'Số lượng lỗi', 'Tỉ lệ hold (%)', 'Người kiểm tra']]
         
         defect_table = defect_table.sort_values(['Ngày', 'Tên lỗi'], ascending=[False, True])
-        print(f"✅ Defect table: {len(defect_table)} defect records")
     else:
         # Create empty defect table with proper columns
         defect_table = pd.DataFrame(columns=[
             'Ngày', 'Item', 'Tên lỗi', 'Lot', 'Số lượng hold', 'Số lượng lỗi', 'Tỉ lệ hold (%)', 'Người kiểm tra'
         ])
-        print("⚠️ No defect records found")
+    
+    print(f"✅ Production table: {len(production_table)} daily records")
+    print(f"✅ Defect table: {len(defect_table)} defect records")
     
     return production_table, defect_table
 
@@ -839,18 +724,15 @@ def generate_summary_analytics(production_table, defect_table):
     return analytics
 
 def main():
-    print("="*80)
-    print("🔄 BI-OPTIMIZED PRODUCTION & DEFECT ANALYSIS")
-    print("📊 SEPARATED TABLES FOR ACCURATE BI REPORTING")
-    print("🎯 NO DOUBLE-COUNTING, CLEAN DATA STRUCTURE")
-    print("="*80)
+    print("=" * 60)
+    print("🎯 BI-OPTIMIZED PRODUCTION & DEFECT ANALYSIS")
+    print("📊 SEPARATED TABLES | NO DOUBLE-COUNTING")
+    print("=" * 60)
 
     try:
-        print("\n🔗 Initializing SharePoint/OneDrive connection...")
         sp_processor = SharePointProcessor()
-        print("✅ SharePoint/OneDrive connection established")
         
-        print("\n📥 Loading Visual Inspection data...")
+        # Load Visual Inspection data
         visual_sheets = sp_processor.download_excel_file_by_id(
             SHAREPOINT_FILE_IDS['visual_inspection'],
             "Visual Inspection data",
@@ -859,76 +741,64 @@ def main():
         
         if not visual_sheets:
             print("❌ Failed to download Visual Inspection data")
-            sys.exit(1)
+            return
         
         visual_df = None
         for sheet_name, df in visual_sheets.items():
             if len(df) > 10:
                 visual_df = df
-                print(f"✅ Using sheet '{sheet_name}' with {len(df)} records")
                 break
         
         if visual_df is None or visual_df.empty:
             print("❌ No valid Visual Inspection data found")
-            sys.exit(1)
+            return
         
-        print("\n🔄 Processing Visual Inspection data (2025 only, defects only)...")
+        # Process visual inspection data
         visual_processed = process_visual_inspection_data_separated(visual_df)
         
         if visual_processed.empty:
             print("⚠️ No defect data found for 2025")
-            # Continue with production data only
         
-        # Get unique months from visual data (if any) and ensure we include current month
+        # Get unique months
         unique_months = []
         if not visual_processed.empty:
             unique_months = visual_processed['Date'].dt.month.unique().tolist()
         
-        # Add current month (September) to ensure we get recent production data
-        current_month = 9  # September
+        # Add current month (September)
+        current_month = 9
         if current_month not in unique_months:
             unique_months.append(current_month)
         
         unique_months = [int(month) for month in unique_months]
-        print(f"📅 Need production data for months: {sorted(unique_months)}")
+        print(f"📅 Processing months: {sorted(unique_months)}")
         
-        print("\n📥 Finding production files (including September)...")
+        # Find and process production files
         production_files = find_production_files_enhanced(sp_processor, unique_months)
         
         all_production_data = []
         if production_files:
-            print("\n📊 Processing production data...")
             for month, file_id in production_files.items():
-                print(f"📥 Processing month {month}...")
-                source_type = "onedrive" if month == 9 else "onedrive"  # All from OneDrive
-                
                 production_sheets = sp_processor.download_excel_file_by_id(
                     file_id,
-                    f"FS production data for month {month}",
-                    source_type=source_type
+                    f"Month {month}",
+                    source_type="onedrive"
                 )
                 
                 if production_sheets:
                     month_production = extract_production_data(production_sheets, month)
                     if not month_production.empty:
                         all_production_data.append(month_production)
-                        print(f"✅ Extracted {len(month_production)} production records for month {month}")
-                    else:
-                        print(f"⚠️ No production data extracted for month {month}")
-                else:
-                    print(f"❌ Failed to download production file for month {month}")
         
         if not all_production_data:
             print("❌ No production data found")
-            sys.exit(1)
+            return
         
         combined_production = pd.concat(all_production_data, ignore_index=True)
-        print(f"✅ Combined production data: {len(combined_production)} records")
         
-        print("\n🔄 Creating separated tables for BI analysis...")
+        # Create separated tables
         production_table, defect_table = create_separated_tables(visual_processed, combined_production)
         
-        print("\n📊 Generating summary analytics...")
+        # Generate analytics
         analytics = generate_summary_analytics(production_table, defect_table)
         
         # Prepare sheets for upload
@@ -942,64 +812,42 @@ def main():
         if not analytics['top_defects'].empty:
             sheets_to_upload['Top_Defects'] = analytics['top_defects']
         
+        # Summary
         print(f"\n📊 FINAL SUMMARY:")
-        print(f"   📈 Production table: {len(production_table)} daily records")
-        print(f"   🔍 Defect table: {len(defect_table)} defect records")
-        print(f"   📅 Date range: {production_table['Ngày'].min()} to {production_table['Ngày'].max()}")
+        print(f"   📈 Production records: {len(production_table)}")
+        print(f"   🔍 Defect records: {len(defect_table)}")
         print(f"   🏭 Total production: {production_table['Sản lượng'].sum():,.0f} units")
         if not defect_table.empty:
-            print(f"   ⚠️ Total hold quantity: {defect_table['Số lượng hold'].sum():,.0f} units")
-            print(f"   🎯 Unique defect types: {len(defect_table['Tên lỗi'].unique())}")
+            print(f"   ⚠️ Total holds: {defect_table['Số lượng hold'].sum():,.0f} units")
+            print(f"   🎯 Defect types: {len(defect_table['Tên lỗi'].unique())}")
         
-        print(f"\n📤 Uploading BI-optimized results to SharePoint...")
+        # Upload to SharePoint
         success = sp_processor.upload_multi_sheet_excel(
             sheets_to_upload,
             SHAREPOINT_FILE_IDS['fs_data_output']
         )
         
-        if success:
-            print("✅ BI-optimized results successfully uploaded to SharePoint!")
-        else:
-            print("❌ Failed to upload results to SharePoint")
-        
-        # Create local backup
-        print("💾 Creating local backup...")
-        backup_filename = f"BI_Optimized_Analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        # Always create backup
+        backup_filename = f"BI_Analysis_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
         
         try:
             with pd.ExcelWriter(backup_filename, engine='openpyxl') as writer:
                 for sheet_name, df in sheets_to_upload.items():
                     df.to_excel(writer, sheet_name=sheet_name, index=False)
             
-            print(f"✅ Backup saved: {backup_filename}")
+            print(f"💾 Backup saved: {backup_filename}")
         except Exception as e:
-            print(f"⚠️ Error creating backup: {str(e)}")
+            print(f"⚠️ Backup error: {str(e)}")
             
     except Exception as e:
         print(f"❌ Critical error: {str(e)}")
-        print(f"Full traceback: {traceback.format_exc()}")
-        sys.exit(1)
 
-    print("\n" + "="*80)
-    print("✅ BI-OPTIMIZED ANALYSIS COMPLETED!")
-    print("✅ KEY FEATURES:")
-    print("   📊 SEPARATED TABLES - No double counting in BI")
-    print("   🗓️ 2025 DATA ONLY - Filtered out 2024")
-    print("   📝 DEFECTS ONLY - No zero-value noise")
-    print("   🔧 FIXED DATE ALIGNMENT - Accurate production matching")
-    print("   📈 SEPTEMBER DATA - Latest production included")
-    print("   📋 MULTI-SHEET OUTPUT - Ready for dashboards")
-    print("✅ PERFECT FOR:")
-    print("   📊 Power BI / Tableau dashboards")
-    print("   📈 Accurate KPI calculation")
-    print("   🎯 Management reporting")
-    print("   🔍 Root cause analysis")
-    print("="*80)
+    print("\n" + "=" * 60)
+    print("✅ ANALYSIS COMPLETED!")
+    print("📊 Production table: Daily totals (no duplication)")
+    print("🔍 Defect table: Individual defects only")
+    print("📋 Ready for BI dashboards")
+    print("=" * 60)
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:
-        print(f"❌ Critical error: {str(e)}")
-        print(f"Full traceback: {traceback.format_exc()}")
-        sys.exit(1)
+    main()
