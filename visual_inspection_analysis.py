@@ -788,4 +788,39 @@ def main():
         print(f"   - Average hold rate: {final_report['Tỉ lệ hold (%)'].mean():.2f}%")
         
         print("\n📤 Uploading results to SharePoint...")
-        success = sp_processor.upload_excel_to_share Просмотреть полный код
+        success = sp_processor.upload_excel_to_sharepoint(
+            final_report,
+            SHAREPOINT_FILE_IDS['fs_data_output'],
+            'FS_Analysis'
+        )
+        
+        if success:
+            print("✅ Results successfully uploaded to SharePoint!")
+        else:
+            print("❌ Failed to upload results to SharePoint")
+            
+            print("💾 Saving results locally as backup...")
+            backup_filename = f"FS_Analysis_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+            final_report.to_excel(backup_filename, index=False)
+            print(f"Results saved to {backup_filename}")
+            
+    except Exception as e:
+        print(f"❌ Critical error: {str(e)}")
+        print(f"Full traceback: {traceback.format_exc()}")
+        sys.exit(1)
+
+    print("\n" + "="*80)
+    print("✅ VISUAL INSPECTION ANALYSIS COMPLETED SUCCESSFULLY!")
+    print("✅ DATA SOURCES:")
+    print("   - Visual Inspection: SharePoint")
+    print("   - Production Data: OneDrive (multiple months)")
+    print("✅ OUTPUT: SharePoint (FS data.xlsx)")
+    print("="*80)
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as e:
+        print(f"❌ Critical error: {str(e)}")
+        print(f"Full traceback: {traceback.format_exc()}")
+        sys.exit(1)
