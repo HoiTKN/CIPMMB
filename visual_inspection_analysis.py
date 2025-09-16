@@ -42,8 +42,8 @@ SHAREPOINT_CONFIG = {
     'production_folder_path': '/Documents/HUYNH THI KIM CUC/ERP MMB/BÁO CÁO THÁNG/2025'
 }
 
-# SharePoint File IDs
-SHAREPOINT_FILE_IDs = {
+# SharePoint File IDs  
+SHAREPOINT_FILE_IDS = {
     'visual_inspection': '77FDDE39-0853-46EC-8BFB-0546460A3266',  # Visual Inspection_16092025.xlsx
     'fs_data_output': 'CDEBFC69-10BD-42F0-B777-3633405B072B',    # FS data.xlsx output
     'production_folder_path': '/Documents/HUYNH THI KIM CUC/ERP MMB/BÁO CÁO THÁNG/2025'  # Folder path
@@ -302,6 +302,8 @@ class SharePointProcessor:
         except Exception as e:
             self.log(f"❌ Error getting folder by path: {str(e)}")
             return None
+
+    def get_site_id(self):
         """Get SharePoint site ID"""
         try:
             if self.site_id:
