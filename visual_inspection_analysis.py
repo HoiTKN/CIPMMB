@@ -521,34 +521,54 @@ def process_visual_inspection_data(visual_df):
     
     return pd.DataFrame(processed_data)
 
-def find_production_files_by_month(sp_processor, folder_path, target_months):
-    """Find FS production files for specific months using folder path
+def find_production_files_by_month(sp_processor, target_months):
+    """Find FS production files for specific months using search approach instead of path
     
-    Expected structure:
-    /Documents/HUYNH THI KIM CUC/ERP MMB/BÁO CÁO THÁNG/2025/
-        ├── tháng 1.2025/ 
-        │   ├── BC FS T01-2025.xlsx
-        │   └── ...
-        ├── tháng 2.2025/
-        │   ├── BC FS T02-2025.xlsx  
-        │   └── ...
-        └── ...
+    Search for '2025' folder first, then navigate to month folders
     """
     production_files = {}
     
     try:
-        sp_processor.log(f"🔍 Getting folder ID for path: {folder_path}")
+        sp_processor.log(f"🔍 Searching for 2025 production folder...")
         
-        # Get the main 2025 folder ID using the path
+        # Search for 2025 folder using Graph API search
         user_email = SHAREPOINT_CONFIG.get('onedrive_user_email')
-        main_folder_id = sp_processor.get_folder_id_by_path(folder_path, user_email)
+        search_url = f"{sp_processor.base_url}/users/{user_email}/drive/search(q='2025')"
+        
+        response = requests.get(search_url, headers=sp_processor.get_headers(), timeout=30)
+        
+        main_folder_id = None
+        if response.status_code == 200:
+            search_results = response.json().get('value', [])
+            sp_processor.log(f"Found {len(search_results)} items matching '2025'")
+            
+            # Look for the main 2025 folder in the production path
+            for item in search_results:
+                if (item.get('folder') and 
+                    item.get('name') == '2025' and 
+                    'BÁO CÁO THÁNG' in str(item.get('parentReference', {}).get('path', ''))):
+                    
+                    main_folder_id = item.get('id')
+                    sp_processor.log(f"✅ Found main 2025 folder: {item.get('id')}")
+                    sp_processor.log(f"   Path: {item.get('parentReference', {}).get('path', '')}")
+                    break
+            
+            # Fallback: just take the first folder named '2025'
+            if not main_folder_id:
+                for item in search_results:
+                    if item.get('folder') and item.get('name') == '2025':
+                        main_folder_id = item.get('id')
+                        sp_processor.log(f"✅ Using fallback 2025 folder: {item.get('id')}")
+                        break
+        else:
+            sp_processor.log(f"❌ Search failed: {response.status_code}")
         
         if not main_folder_id:
-            sp_processor.log("❌ Could not get main folder ID")
+            sp_processor.log("❌ Could not find 2025 folder")
             return production_files
             
         # List main folder contents to find month folders
-        sp_processor.log(f"📂 Listing contents of main folder...")
+        sp_processor.log(f"📂 Listing contents of 2025 folder...")
         main_contents = sp_processor.list_folder_contents(main_folder_id, "onedrive")
         
         month_folders = {}
@@ -814,10 +834,8 @@ def main():
 
     # 4. Find and download production files
     print("\n📥 Finding production files...")
-    production_folder_path = SHAREPOINT_CONFIG['production_folder_path']
     production_files = find_production_files_by_month(
         sp_processor, 
-        production_folder_path, 
         unique_months
     )
     
