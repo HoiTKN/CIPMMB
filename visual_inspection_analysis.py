@@ -542,8 +542,7 @@ def find_production_files_by_month(sp_processor, target_months):
                             month_folders[month] = item.get('id')
                             sp_processor.log(f"✅ Matched month {month} folder: '{folder_name}'")
                             break
-                    if month in month_folders:
-                        break
+                    # Removed the unnecessary break here to allow checking all months
         
         sp_processor.log(f"📊 Found {len(month_folders)} month folders for target months: {list(month_folders.keys())}")
         
@@ -643,7 +642,15 @@ def extract_production_data(production_sheets, month):
         return pd.DataFrame()
 
 def merge_data_and_calculate_rates(visual_processed, production_data):
-    """Merge visual inspection data with production data and calculate rates"""
+    """Merge visual inspection data with production data and calculate rates
+    
+    Logic:
+    - Use outer merge to include all production days
+    - For days without visual data, use 'All Items' as Item, with hold/defect = 0
+    - Production is total per day (shared across items on the same day)
+    - Hold rate = Hold Qty / Production Qty * 100
+    """
+    # Group visual inspection data by date and item
     visual_grouped = visual_processed.groupby(['Date', 'Item']).agg({
         'Hold_Qty': 'sum',
         'Defect_Qty': 'sum'
@@ -651,33 +658,47 @@ def merge_data_and_calculate_rates(visual_processed, production_data):
     
     print(f"Visual data grouped: {len(visual_grouped)} date-item combinations")
     
+    # Group production data by date (sum all production for the day)
     production_grouped = production_data.groupby('Date')['Production_Qty'].sum().reset_index()
     print(f"Production data grouped: {len(production_grouped)} dates")
     
-    merged_data = visual_grouped.merge(production_grouped, on='Date', how='left')
-    print(f"After merge: {len(merged_data)} records")
+    # Outer merge to include all dates from both datasets
+    merged_data = pd.merge(visual_grouped, production_grouped, on='Date', how='outer')
     
+    print(f"After outer merge: {len(merged_data)} records")
+    
+    # Fill missing values
     merged_data['Production_Qty'] = merged_data['Production_Qty'].fillna(0)
+    merged_data['Hold_Qty'] = merged_data['Hold_Qty'].fillna(0)
+    merged_data['Defect_Qty'] = merged_data['Defect_Qty'].fillna(0)
+    merged_data['Item'] = merged_data['Item'].fillna('All Items')
     
+    # Calculate hold rate
     merged_data['Hold_Rate'] = merged_data.apply(
-        lambda row: (row['Hold_Qty'] / row['Production_Qty'] * 100) if row['Production_Qty'] > 0 else 0, 
-        axis=1
+        lambda row: (row['Hold_Qty'] / row['Production_Qty'] * 100) if row['Production_Qty'] > 0 else 0, axis=1
     )
     
+    # Round hold rate to 2 decimal places
     merged_data['Hold_Rate'] = merged_data['Hold_Rate'].round(2)
+    
+    # Format date for output (MM/DD/YYYY for Power BI compatibility)
     merged_data['Date_Formatted'] = merged_data['Date'].dt.strftime('%m/%d/%Y')
     
+    # Rename columns for Vietnamese output
     final_df = merged_data.rename(columns={
         'Date_Formatted': 'Ngày',
-        'Item': 'Item',
+        'Item': 'Item', 
         'Production_Qty': 'Sản lượng',
         'Hold_Qty': 'Số lượng hold',
         'Defect_Qty': 'Số lượng lỗi',
         'Hold_Rate': 'Tỉ lệ hold (%)'
     })
     
+    # Select final columns in desired order
     final_columns = ['Ngày', 'Item', 'Sản lượng', 'Số lượng hold', 'Số lượng lỗi', 'Tỉ lệ hold (%)']
     result_df = final_df[final_columns]
+    
+    # Sort by date descending, then by item
     result_df = result_df.sort_values(['Ngày', 'Item'], ascending=[False, True])
     
     return result_df
