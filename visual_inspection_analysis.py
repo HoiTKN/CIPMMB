@@ -577,15 +577,18 @@ def find_production_files_by_month(sp_processor, target_months):
                 folder_name = item.get('name', '').lower()
                 sp_processor.log(f"   Found folder: '{item.get('name')}'")
                 
-                # Match month folders with exact patterns from your structure
+                # Match month folders with ALL possible patterns from your structure
                 for month in target_months:
                     month_patterns = [
-                        f"tháng {month}.2025",
-                        f"thang {month}.2025"
+                        f"tháng {month}.2025",      # tháng 3.2025
+                        f"thang {month}.2025",      # thang 1.2025
+                        f"tháng {month:02d}.2025",  # tháng 01.2025  
+                        f"thang {month:02d}.2025"   # thang 01.2025
                     ]
                     
+                    # Check if any pattern matches (case insensitive)
                     for pattern in month_patterns:
-                        if pattern in folder_name:
+                        if pattern.lower() in folder_name.lower():
                             month_folders[month] = item.get('id')
                             sp_processor.log(f"✅ Matched month {month} folder: '{item.get('name')}'")
                             break
