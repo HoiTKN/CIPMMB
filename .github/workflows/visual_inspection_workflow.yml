@@ -1,0 +1,87 @@
+name: Visual Inspection Analysis
+
+# Run twice weekly - Monday and Thursday at 8:00 AM Vietnam Time (1:00 AM UTC)
+on:
+  schedule:
+    - cron: '0 1 * * 1'  # Monday at 1:00 AM UTC (8:00 AM Vietnam)
+    - cron: '0 1 * * 4'  # Thursday at 1:00 AM UTC (8:00 AM Vietnam)
+  
+  # Allow manual trigger
+  workflow_dispatch:
+    inputs:
+      debug_mode:
+        description: 'Enable debug mode'
+        required: false
+        default: 'false'
+        type: boolean
+
+jobs:
+  visual-inspection-analysis:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pandas openpyxl xlsxwriter requests msal pynacl
+        
+    - name: Set timezone to Vietnam
+      run: |
+        sudo timedatectl set-timezone Asia/Ho_Chi_Minh
+        
+    - name: Display current time
+      run: |
+        echo "Current UTC time: $(date -u)"
+        echo "Current Vietnam time: $(TZ='Asia/Ho_Chi_Minh' date)"
+        
+    - name: Run Visual Inspection Analysis
+      env:
+        SHAREPOINT_ACCESS_TOKEN: ${{ secrets.SHAREPOINT_ACCESS_TOKEN }}
+        SHAREPOINT_REFRESH_TOKEN: ${{ secrets.SHAREPOINT_REFRESH_TOKEN }}
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        DEBUG_MODE: ${{ github.event.inputs.debug_mode || 'false' }}
+      run: |
+        echo "🚀 Starting Visual Inspection Analysis..."
+        echo "Repository: $GITHUB_REPOSITORY"
+        echo "Debug Mode: $DEBUG_MODE"
+        
+        if [ "$DEBUG_MODE" = "true" ]; then
+          echo "🐛 Debug mode enabled - showing additional logs"
+          python visual_inspection_analysis.py --debug
+        else
+          python visual_inspection_analysis.py
+        fi
+        
+    - name: Upload backup files (if any)
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: visual-inspection-backup-${{ github.run_number }}
+        path: |
+          FS_Analysis_backup_*.xlsx
+          debug_*.txt
+          error_*.log
+        retention-days: 30
+        if-no-files-found: ignore
+        
+    - name: Notify on failure
+      if: failure()
+      run: |
+        echo "❌ Visual Inspection Analysis failed!"
+        echo "Check the logs above for error details."
+        echo "Backup files (if any) have been uploaded as artifacts."
+        
+    - name: Notify on success  
+      if: success()
+      run: |
+        echo "✅ Visual Inspection Analysis completed successfully!"
+        echo "Results have been uploaded to SharePoint FS data.xlsx file."
